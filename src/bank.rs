@@ -5,16 +5,17 @@
 
 extern crate libc;
 
+use bincode::serialize;
 use chrono::prelude::*;
 use entry::Entry;
-use hash::Hash;
+use hash::{hash, Hash};
 use itertools::Itertools;
 use ledger::Block;
 use mint::Mint;
 use payment_plan::{Payment, PaymentPlan, Witness};
 use signature::{KeyPair, PublicKey, Signature};
-use std::collections::hash_map::Entry::Occupied;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::btree_map::Entry::Occupied;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::result;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
@@ -62,15 +63,58 @@ pub enum BankError {
 
 pub type Result<T> = result::Result<T, BankError>;
 
-/// The state of all accounts and contracts after processing its entries.
-pub struct Bank {
+pub struct ValidationRound {
+    entry_id: Hash,
+    /// Maps a validator's public key to what they voted for
+    votes: HashMap<PublicKey, Hash>,
+    total_staked_votes: f64,
+}
+
+impl ValidationRound {
+    pub fn has_supermajority() -> bool{
+        return false;
+    }
+}
+
+/// The subset of data from the Bank required to construct a vote
+#[derive(Serialize, Deserialize)]
+pub struct VoteData {
     /// A map of account public keys to the balance in that account.
-    balances: RwLock<HashMap<PublicKey, i64>>,
+    balances: BTreeMap<PublicKey, i64>,
 
     /// A map of smart contract transaction signatures to what remains of its payment
     /// plan. Each transaction that targets the plan should cause it to be reduced.
     /// Once it cannot be reduced, final payments are made and it is discarded.
-    pending: RwLock<HashMap<Signature, Plan>>,
+    pending: BTreeMap<Signature, Plan>,
+}
+
+impl VoteData {
+    fn new(bank: &Bank) -> Self {
+        let pending = *(bank.pending.read().unwrap());
+        let balances = *(bank.balances.read().unwrap());
+
+        VoteData{
+            balances,
+            pending,
+        }
+    }
+
+    fn calculate_hash(&self) -> Hash {
+        let serialized_data = serialize(&self).unwrap();
+        hash(&serialized_data)
+    }
+}
+
+
+/// The state of all accounts and contracts after processing its entries.
+pub struct Bank {
+    /// A map of account public keys to the balance in that account.
+    balances: RwLock<BTreeMap<PublicKey, i64>>,
+
+    /// A map of smart contract transaction signatures to what remains of its payment
+    /// plan. Each transaction that targets the plan should cause it to be reduced.
+    /// Once it cannot be reduced, final payments are made and it is discarded.
+    pending: RwLock<BTreeMap<Signature, Plan>>,
 
     /// A FIFO queue of `last_id` items, where each item is a set of signatures
     /// that have been processed using that `last_id`. Rejected `last_id`
@@ -94,13 +138,18 @@ pub struct Bank {
     /// The number of transactions the bank has processed without error since the
     /// start of the ledger.
     transaction_count: AtomicUsize,
+
+    /// Map from Entry id to metadata about the status of the validation round for
+    /// that entry
+    validation_rounds: RwLock<HashMap<Hash, ValidationRound>>,
 }
 
 impl Default for Bank {
     fn default() -> Self {
         Bank {
-            balances: RwLock::new(HashMap::new()),
-            pending: RwLock::new(HashMap::new()),
+            balances: RwLock::new(BTreeMap::new()),
+            pending: RwLock::new(BTreeMap::new()),
+            validation_rounds: RwLock::new(HashMap::new()),
             last_ids: RwLock::new(VecDeque::new()),
             last_ids_sigs: RwLock::new(HashMap::new()),
             time_sources: RwLock::new(HashSet::new()),
@@ -266,6 +315,14 @@ impl Bank {
             Instruction::ApplySignature(tx_sig) => {
                 let _ = self.apply_signature(tx.from, *tx_sig);
             }
+            Instruction::ValidationVote(entry_id, signature) => {
+                // Validate the pk belongs to a real validator
+                
+                // Add vote to list
+                obj.write().unwrap().votes.entry(entry_id).insert(entry_id, )
+
+                // If we're the leader, broadcast the vote
+            }
         }
     }
 
@@ -321,6 +378,46 @@ impl Bank {
         res
     }
 
+    pub fn hash_current_state(&self) -> Hash {
+        // Hash the `pending` and `balances`
+        let vote_data = VoteData::new(self);
+        vote_data.calculate_hash()
+    }
+
+    pub fn process_entry(&self, entry: Entry) -> Result<()> {
+        if !entry.transactions.is_empty() {
+            for result in self.process_transactions(entry.transactions) {
+                result?;
+            }
+        }
+        // TODO: verify this is ok in cases like:
+        //  1. an untrusted genesis or tx-<DATE>.log
+        //  2. a crazy leader..
+        if !entry.has_more {
+            self.register_entry_id(&entry.id);
+        }
+    }
+
+    /// Process an ordered list of entries. Return hash of the bank's state
+    /// every `VOTE_INTERVAL` entries.
+    pub fn process_entries_return_state<I>(&self, entries: I, start_height: u64)
+    -> Result<(Vec<(u64, Hash)>)>
+    where
+        I: IntoIterator<Item = Entry>,
+    {
+        let state_results = Vec::new();
+        let total_height = start_height;
+        for entry in entries {
+            total_height += 1;
+            self.process_entry(entry);
+            if total_height % VOTE_INTERVAL == 0 {
+                state_results.push((total_height, self.hash_current_state()));
+            }
+        }
+
+        state_results;
+    }
+
     /// Process an ordered list of entries.
     pub fn process_entries<I>(&self, entries: I) -> Result<u64>
     where
@@ -329,19 +426,9 @@ impl Bank {
         let mut entry_count = 0;
         for entry in entries {
             entry_count += 1;
-
-            if !entry.transactions.is_empty() {
-                for result in self.process_transactions(entry.transactions) {
-                    result?;
-                }
-            }
-            // TODO: verify this is ok in cases like:
-            //  1. an untrusted genesis or tx-<DATE>.log
-            //  2. a crazy leader..
-            if !entry.has_more {
-                self.register_entry_id(&entry.id);
-            }
+            self.process_entry(entry);
         }
+
         Ok(entry_count)
     }
 

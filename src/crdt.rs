@@ -35,6 +35,8 @@ use std::time::Duration;
 use streamer::{BlobReceiver, BlobSender, Window};
 use timing::timestamp;
 
+pub type EntryVote = (PublicKey, Signature);
+
 /// milliseconds we sleep for between gossip requests
 const GOSSIP_SLEEP_MILLIS: u64 = 100;
 //const GOSSIP_MIN_PURGE_MILLIS: u64 = 15000;
@@ -194,6 +196,7 @@ pub struct Crdt {
     pub me: PublicKey,
     external_liveness: HashMap<PublicKey, HashMap<PublicKey, u64>>,
 }
+
 // TODO These messages should be signed, and go through the gpu pipeline for spam filtering
 #[derive(Serialize, Deserialize, Debug)]
 enum Protocol {

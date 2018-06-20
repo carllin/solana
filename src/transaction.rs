@@ -11,6 +11,7 @@ pub const SIGNED_DATA_OFFSET: usize = 112;
 pub const SIG_OFFSET: usize = 8;
 pub const PUB_KEY_OFFSET: usize = 80;
 
+
 /// The type of payment plan. Each item must implement the PaymentPlan trait.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum Plan {
@@ -59,6 +60,10 @@ pub enum Instruction {
     /// Tell the payment plan that the `NewContract` with `Signature` has been
     /// signed by the containing transaction's `PublicKey`.
     ApplySignature(Signature),
+
+    /// Claim that state at entry with id equal to `Id` has signature `Signature`
+    /// after being signed by the containing transaction's `PublicKey`.
+    ValidationVote(Hash, Signature),
 }
 
 /// An instruction signed by a client with `PublicKey`.
@@ -132,6 +137,17 @@ impl Transaction {
     /// Create and sign a new Witness Signature. Used for unit-testing.
     pub fn new_signature(from_keypair: &KeyPair, tx_sig: Signature, last_id: Hash) -> Self {
         let instruction = Instruction::ApplySignature(tx_sig);
+        Self::new_from_instruction(from_keypair, instruction, last_id, 0)
+    }
+
+    pub fn new_validation_vote(
+        from_keypair: &KeyPair,
+        entry_id: Hash,
+        state_hash: Signature,
+        last_id: Hash,
+    ) -> Self 
+    {
+        let instruction = Instruction::ValidationVote(entry_id, state_hash);
         Self::new_from_instruction(from_keypair, instruction, last_id, 0)
     }
 

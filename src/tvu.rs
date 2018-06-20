@@ -82,7 +82,7 @@ impl Tvu {
         //the packets coming out of blob_receiver need to be sent to the GPU and verified
         //then sent to the window, which does the erasure coding reconstruction
         let (window_stage, blob_receiver) = WindowStage::new(
-            crdt,
+            crdt.clone(),
             window,
             entry_height,
             retransmit_socket,
@@ -91,11 +91,14 @@ impl Tvu {
             blob_receiver,
         );
 
-        let replicate_stage = ReplicateStage::new(bank, exit, blob_receiver);
+        let (replicate_stage, entry_receiver) = ReplicateStage::new(bank, exit, blob_receiver);
+
+        let vote_stage = VoteStage::new(crdt.clone(), entry_receiver, entry_height, exit.clone());
 
         let mut threads = vec![replicate_stage.thread_hdl];
         threads.extend(fetch_stage.thread_hdls.into_iter());
         threads.extend(window_stage.thread_hdls.into_iter());
+        threads.extend(vote_stage.thread_hdls.into_iter());
         Tvu {
             thread_hdls: threads,
         }
