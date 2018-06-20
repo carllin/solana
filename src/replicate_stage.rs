@@ -11,7 +11,12 @@ use std::time::Duration;
 use streamer::BlobReceiver;
 
 pub struct ReplicateStage {
+<<<<<<< 9c456b2fb04ea73a7dc9447f311daef1f977b2e4
     thread_hdl: JoinHandle<()>,
+=======
+    pub thread_hdl: JoinHandle<()>,
+    pub entry_height: u64,
+>>>>>>> add validation voting
 }
 
 impl ReplicateStage {
@@ -21,7 +26,7 @@ impl ReplicateStage {
         let blobs = blob_receiver.recv_timeout(timer)?;
         let blobs_len = blobs.len();
         let entries = ledger::reconstruct_entries_from_blobs(blobs)?;
-        let res = bank.process_entries(entries);
+        let res = bank.process_entries_return_state(entries);
         if res.is_err() {
             error!("process_entries {} {:?}", blobs_len, res);
         }
@@ -29,7 +34,13 @@ impl ReplicateStage {
         Ok(())
     }
 
-    pub fn new(bank: Arc<Bank>, exit: Arc<AtomicBool>, window_receiver: BlobReceiver) -> Self {
+    pub fn new(
+        bank: Arc<Bank>,
+        exit: Arc<AtomicBool>,
+        window_receiver: BlobReceiver,
+        entry_height: u64,
+    ) -> Self 
+    {
         let thread_hdl = Builder::new()
             .name("solana-replicate-stage".to_string())
             .spawn(move || loop {
