@@ -17,6 +17,7 @@ pub struct Ncp {
 
 impl Ncp {
     pub fn new(
+        keypair: KeyPair,
         crdt: Arc<RwLock<Crdt>>,
         window: Arc<RwLock<Vec<Option<SharedBlob>>>>,
         gossip_listen_socket: UdpSocket,

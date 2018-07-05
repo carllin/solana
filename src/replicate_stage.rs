@@ -1,50 +1,76 @@
 //! The `replicate_stage` replicates transactions broadcast by the leader.
 
 use bank::Bank;
+use entry::Entry;
 use ledger;
 use result::Result;
 use service::Service;
+use signature::KeyPair;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 use streamer::BlobReceiver;
+use transaction::Transaction;
+use vote_manager::VoteManager;
 
 pub struct ReplicateStage {
-<<<<<<< 9c456b2fb04ea73a7dc9447f311daef1f977b2e4
     thread_hdl: JoinHandle<()>,
-=======
-    pub thread_hdl: JoinHandle<()>,
-    pub entry_height: u64,
->>>>>>> add validation voting
 }
 
 impl ReplicateStage {
     /// Process entry blobs, already in order
-    fn replicate_requests(bank: &Arc<Bank>, blob_receiver: &BlobReceiver) -> Result<()> {
+    fn replicate_requests(
+        bank: &Arc<Bank>,
+        blob_receiver: &BlobReceiver,
+    ) -> Result<Vec<(u64, Entry)>>
+    {
         let timer = Duration::new(1, 0);
         let blobs = blob_receiver.recv_timeout(timer)?;
         let blobs_len = blobs.len();
         let entries = ledger::reconstruct_entries_from_blobs(blobs)?;
-        let res = bank.process_entries_return_state(entries);
+
+        let valid_entries = Vec::new();
+        let old_height = bank.entry_height();
+        let (num_valid_entries, res) = bank.process_entries(entries);
+        
         if res.is_err() {
             error!("process_entries {} {:?}", blobs_len, res);
         }
-        res?;
-        Ok(())
+
+        let result = Vec::new();
+
+        for i in 0..num_valid_entries {
+            result.push(old_height + i + 1, entries[i]);
+        }
+
+        Ok(result)
     }
 
     pub fn new(
+        keypair: KeyPair,
         bank: Arc<Bank>,
         exit: Arc<AtomicBool>,
         window_receiver: BlobReceiver,
-        entry_height: u64,
+        transaction_sender: Sender<Vec<Transaction>>,
     ) -> Self 
     {
+        let consistency_manager = ConsistencyManager::new(
+            bank,
+            keypair,
+            transaction_sender
+        );
+
         let thread_hdl = Builder::new()
             .name("solana-replicate-stage".to_string())
             .spawn(move || loop {
                 let e = Self::replicate_requests(&bank, &window_receiver);
+
+                if e.is_ok() {
+                    consistency_manager.process_entries(e.unwrap());
+                }
+                
                 if e.is_err() && exit.load(Ordering::Relaxed) {
                     break;
                 }

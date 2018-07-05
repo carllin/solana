@@ -40,11 +40,15 @@ use crdt::Crdt;
 use packet::BlobRecycler;
 use replicate_stage::ReplicateStage;
 use service::Service;
+use signature::KeyPair;
 use std::net::UdpSocket;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
+use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
 use streamer::Window;
+use transaction::Transaction;
+use vote_stage::VoteStage;
 use window_stage::WindowStage;
 
 pub struct Tvu {
@@ -57,6 +61,7 @@ impl Tvu {
     /// This service receives messages from a leader in the network and processes the transactions
     /// on the bank state.
     /// # Arguments
+    /// * `keypair` - The keypair for signing data sent from this node
     /// * `bank` - The bank state.
     /// * `entry_height` - Initial ledger height, passed to replicate stage
     /// * `crdt` - The crdt state.
@@ -66,6 +71,7 @@ impl Tvu {
     /// * `retransmit_socket` - my retransmit socket
     /// * `exit` - The exit signal.
     pub fn new(
+        keypair: KeyPair,
         bank: Arc<Bank>,
         entry_height: u64,
         crdt: Arc<RwLock<Crdt>>,
@@ -74,6 +80,7 @@ impl Tvu {
         repair_socket: UdpSocket,
         retransmit_socket: UdpSocket,
         exit: Arc<AtomicBool>,
+        transaction_sender: Sender<Vec<Transaction>>,
     ) -> Self {
         let blob_recycler = BlobRecycler::default();
         let (fetch_stage, blob_receiver) = BlobFetchStage::new_multi_socket(
@@ -94,7 +101,13 @@ impl Tvu {
             blob_receiver,
         );
 
-        let replicate_stage = ReplicateStage::new(bank, exit, blob_receiver);
+        let replicate_stage = ReplicateStage::new(
+            keypair,
+            bank,
+            exit,
+            blob_receiver,
+            transaction_sender,
+        );
 
         Tvu {
             replicate_stage,
@@ -205,7 +218,7 @@ pub mod tests {
         let mint = Mint::new(starting_balance);
         let replicate_addr = target1.data.replicate_addr;
         let bank = Arc::new(Bank::new(&mint));
-
+        let keypair = KeyPair::new();
         //start crdt1
         let mut crdt1 = Crdt::new(target1.data.clone());
         crdt1.insert(&leader.data);
@@ -213,7 +226,9 @@ pub mod tests {
         let cref1 = Arc::new(RwLock::new(crdt1));
         let dr_1 = new_ncp(cref1.clone(), target1.sockets.gossip, exit.clone()).unwrap();
 
+        let (transaction_sender, transaction_receiver) = channel();
         let tvu = Tvu::new(
+            keypair,
             bank.clone(),
             0,
             cref1,
@@ -222,6 +237,7 @@ pub mod tests {
             target1.sockets.repair,
             target1.sockets.retransmit,
             exit.clone(),
+            transaction_sender,
         );
 
         let mut alice_ref_balance = starting_balance;

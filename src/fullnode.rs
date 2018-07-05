@@ -17,6 +17,7 @@ use std::thread::{JoinHandle, Result};
 use std::time::Duration;
 use streamer;
 use tpu::Tpu;
+use transaction_sender::transaction_recv_and_send;
 use tvu::Tvu;
 
 //use std::time::Duration;
@@ -249,7 +250,10 @@ impl FullNode {
             exit.clone(),
         ).expect("Ncp::new");
 
+        let (t, transaction_sender) = transaction_recv_and_send();
+        // TODO: think about moving the node's keypair into the crdt, which is a bigger change
         let tvu = Tvu::new(
+            node.keypair,
             bank.clone(),
             entry_height,
             crdt.clone(),
@@ -258,7 +262,10 @@ impl FullNode {
             node.sockets.repair,
             node.sockets.retransmit,
             exit.clone(),
+            transaction_sender,
         );
+
+        thread_hdls.extend(t);
         thread_hdls.extend(tvu.thread_hdls());
         thread_hdls.extend(ncp.thread_hdls());
         FullNode { thread_hdls }

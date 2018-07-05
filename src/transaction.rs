@@ -105,6 +105,17 @@ impl Transaction {
         tx
     }
 
+    pub fn new_validation_vote(
+        from_keypair: &KeyPair,
+        entry_id: Hash,
+        state_hash: Signature,
+        last_id: Hash,
+    ) -> Self 
+    {
+        let instruction = Instruction::ValidationVote(entry_id, state_hash);
+        Self::new_from_instruction(from_keypair, instruction, last_id, 0)
+    }
+
     /// Create and sign a new Transaction. Used for unit-testing.
     pub fn new_taxed(
         from_keypair: &KeyPair,
@@ -137,17 +148,6 @@ impl Transaction {
     /// Create and sign a new Witness Signature. Used for unit-testing.
     pub fn new_signature(from_keypair: &KeyPair, tx_sig: Signature, last_id: Hash) -> Self {
         let instruction = Instruction::ApplySignature(tx_sig);
-        Self::new_from_instruction(from_keypair, instruction, last_id, 0)
-    }
-
-    pub fn new_validation_vote(
-        from_keypair: &KeyPair,
-        entry_id: Hash,
-        state_hash: Signature,
-        last_id: Hash,
-    ) -> Self 
-    {
-        let instruction = Instruction::ValidationVote(entry_id, state_hash);
         Self::new_from_instruction(from_keypair, instruction, last_id, 0)
     }
 

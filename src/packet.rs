@@ -244,7 +244,9 @@ pub fn to_packets_chunked<T: Serialize>(
     r: &PacketRecycler,
     xs: Vec<T>,
     chunks: usize,
-) -> Vec<SharedPackets> {
+    rsp_addr: SocketAddr,
+) -> Vec<SharedPackets> 
+{
     let mut out = vec![];
     for x in xs.chunks(chunks) {
         let p = r.allocate();
@@ -255,16 +257,23 @@ pub fn to_packets_chunked<T: Serialize>(
         for (i, o) in x.iter().zip(p.write().unwrap().packets.iter_mut()) {
             let v = serialize(&i).expect("serialize request");
             let len = v.len();
+            assert!(len < PACKET_DATA_SIZE);
             o.data[..len].copy_from_slice(&v);
             o.meta.size = len;
+            o.meta.set_addr(&rsp_addr);
         }
         out.push(p);
     }
     return out;
 }
 
-pub fn to_packets<T: Serialize>(r: &PacketRecycler, xs: Vec<T>) -> Vec<SharedPackets> {
-    to_packets_chunked(r, xs, NUM_PACKETS)
+pub fn to_packets<T: Serialize>(
+    r: &PacketRecycler,
+    xs: Vec<T>,
+    rsp_addr: SocketAddr,
+) -> Vec<SharedPackets>
+{
+    to_packets_chunked(r, xs, NUM_PACKETS, rsp_addr)
 }
 
 pub fn to_blob<T: Serialize>(
@@ -520,15 +529,16 @@ mod tests {
     fn test_to_packets() {
         let tx = Request::GetTransactionCount;
         let re = PacketRecycler::default();
-        let rv = to_packets(&re, vec![tx.clone(); 1]);
+        let dummy_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 8000);
+        let rv = to_packets(&re, vec![tx.clone(); 1], dummy_addr);
         assert_eq!(rv.len(), 1);
         assert_eq!(rv[0].read().unwrap().packets.len(), 1);
 
-        let rv = to_packets(&re, vec![tx.clone(); NUM_PACKETS]);
+        let rv = to_packets(&re, vec![tx.clone(); NUM_PACKETS], dummy_addr);
         assert_eq!(rv.len(), 1);
         assert_eq!(rv[0].read().unwrap().packets.len(), NUM_PACKETS);
 
-        let rv = to_packets(&re, vec![tx.clone(); NUM_PACKETS + 1]);
+        let rv = to_packets(&re, vec![tx.clone(); NUM_PACKETS + 1], dummy_addr);
         assert_eq!(rv.len(), 2);
         assert_eq!(rv[0].read().unwrap().packets.len(), NUM_PACKETS);
         assert_eq!(rv[1].read().unwrap().packets.len(), 1);

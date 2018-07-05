@@ -931,6 +931,7 @@ pub struct Sockets {
 pub struct TestNode {
     pub data: ReplicatedData,
     pub sockets: Sockets,
+    pub keypair: KeyPair,
 }
 
 impl TestNode {
@@ -944,6 +945,7 @@ impl TestNode {
         let respond = UdpSocket::bind("0.0.0.0:0").unwrap();
         let broadcast = UdpSocket::bind("0.0.0.0:0").unwrap();
         let retransmit = UdpSocket::bind("0.0.0.0:0").unwrap();
+        let keypair = KeyPair::new();
         let pubkey = KeyPair::new().pubkey();
         let data = ReplicatedData::new(
             pubkey,
@@ -966,6 +968,7 @@ impl TestNode {
                 repair,
                 retransmit,
             },
+            keypair,
         }
     }
     pub fn new_with_bind_addr(data: ReplicatedData, bind_addr: SocketAddr) -> TestNode {

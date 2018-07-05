@@ -2,20 +2,18 @@
 //! contracts. It offers a high-level API that signs transactions
 //! on behalf of the caller, and a low-level API for when they have
 //! already been signed and verified.
-
 extern crate libc;
 
-use bincode::serialize;
 use chrono::prelude::*;
 use entry::Entry;
-use hash::{hash, Hash};
+use hash::Hash;
 use itertools::Itertools;
 use ledger::Block;
 use mint::Mint;
 use payment_plan::{Payment, PaymentPlan, Witness};
 use signature::{KeyPair, PublicKey, Signature};
-use std::collections::btree_map::Entry::Occupied;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::hash_map::Entry::Occupied;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::result;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
@@ -34,8 +32,10 @@ pub const MAX_ENTRY_IDS: usize = 1024 * 16;
 pub const VERIFY_BLOCK_SIZE: usize = 16;
 
 /// The number of entries between submitting votes
-pub const VOTE_INTERVAL: u32 = 1000;
+const VOTE_INTERVAL: u64 = 1000;
 
+/// The number of entries waiting for supermajority, otherwise trigger rollback
+const ROLLBACK_INTERVAL: u64 = 5 * VOTE_INTERVAL;
 
 /// Reasons a transaction might be rejected.
 #[derive(Debug, PartialEq, Eq)]
@@ -69,6 +69,7 @@ pub type Result<T> = result::Result<T, BankError>;
 
 pub struct ValidationRound {
     entry_id: Hash,
+    entry_height: u64,
     /// Maps a validator's public key to what they voted for
     votes: HashMap<PublicKey, Hash>,
     total_staked_votes: f64,
@@ -80,45 +81,15 @@ impl ValidationRound {
     }
 }
 
-/// The subset of data from the Bank required to construct a vote
-#[derive(Serialize, Deserialize)]
-pub struct VoteData {
-    /// A map of account public keys to the balance in that account.
-    balances: BTreeMap<PublicKey, i64>,
-
-    /// A map of smart contract transaction signatures to what remains of its payment
-    /// plan. Each transaction that targets the plan should cause it to be reduced.
-    /// Once it cannot be reduced, final payments are made and it is discarded.
-    pending: BTreeMap<Signature, Plan>,
-}
-
-impl VoteData {
-    fn new(bank: &Bank) -> Self {
-        let pending = *(bank.pending.read().unwrap());
-        let balances = *(bank.balances.read().unwrap());
-
-        VoteData{
-            balances,
-            pending,
-        }
-    }
-
-    fn calculate_hash(&self) -> Hash {
-        let serialized_data = serialize(&self).unwrap();
-        hash(&serialized_data)
-    }
-}
-
-
 /// The state of all accounts and contracts after processing its entries.
 pub struct Bank {
     /// A map of account public keys to the balance in that account.
-    balances: RwLock<BTreeMap<PublicKey, i64>>,
+    balances: RwLock<HashMap<PublicKey, i64>>,
 
     /// A map of smart contract transaction signatures to what remains of its payment
     /// plan. Each transaction that targets the plan should cause it to be reduced.
     /// Once it cannot be reduced, final payments are made and it is discarded.
-    pending: RwLock<BTreeMap<Signature, Plan>>,
+    pending: RwLock<HashMap<Signature, Plan>>,
 
     /// A FIFO queue of `last_id` items, where each item is a set of signatures
     /// that have been processed using that `last_id`. Rejected `last_id`
@@ -139,25 +110,31 @@ pub struct Bank {
     /// timestamp witness before that timestamp, the bank will execute it immediately.
     last_time: RwLock<DateTime<Utc>>,
 
+    /// The number of entries the bank has processed without error since the
+    /// start of the ledger. Current assumption is this will only be touched by one thread 
+    /// at a time b/c only one thread should be running process_entries() at a time.
+    entry_height: u64,
+
     /// The number of transactions the bank has processed without error since the
     /// start of the ledger.
     transaction_count: AtomicUsize,
 
-    /// Map from Entry id to metadata about the status of the validation round for
-    /// that entry
-    validation_rounds: RwLock<HashMap<Hash, ValidationRound>>,
+    /// Sliding window of pending entries that have not yet been confirmed by the
+    /// network's voting protocol
+    validation_rounds: RwLock<Vec<ValidationRound>>,
 }
 
 impl Default for Bank {
     fn default() -> Self {
         Bank {
-            balances: RwLock::new(BTreeMap::new()),
-            pending: RwLock::new(BTreeMap::new()),
-            validation_rounds: RwLock::new(HashMap::new()),
+            balances: RwLock::new(HashMap::new()),
+            pending: RwLock::new(HashMap::new()),
+            validation_rounds: RwLock::new(Vec::new()),
             last_ids: RwLock::new(VecDeque::new()),
             last_ids_sigs: RwLock::new(HashMap::new()),
             time_sources: RwLock::new(HashSet::new()),
             last_time: RwLock::new(Utc.timestamp(0, 0)),
+            entry_height: 0,
             transaction_count: AtomicUsize::new(0),
         }
     }
@@ -183,7 +160,7 @@ impl Bank {
     }
 
     /// Commit funds to the `payment.to` party.
-    fn apply_payment(&self, payment: &Payment, balances: &mut BTreeMap<PublicKey, i64>) {
+    fn apply_payment(&self, payment: &Payment, balances: &mut HashMap<PublicKey, i64>) {
         if balances.contains_key(&payment.to) {
             *balances.get_mut(&payment.to).unwrap() += payment.tokens;
         } else {
@@ -294,7 +271,7 @@ impl Bank {
 
     /// Apply only a transaction's credits. Credits from multiple transactions
     /// may safely be applied in parallel.
-    fn apply_credits(&self, tx: &Transaction, balances: &mut BTreeMap<PublicKey, i64>) {
+    fn apply_credits(&mut self, tx: &Transaction, balances: &mut HashMap<PublicKey, i64>) {
         match &tx.instruction {
             Instruction::NewContract(contract) => {
                 let mut plan = contract.plan.clone();
@@ -317,11 +294,15 @@ impl Bank {
             Instruction::ApplySignature(tx_sig) => {
                 let _ = self.apply_signature(tx.from, *tx_sig);
             }
-            Instruction::ValidationVote(entry_id, signature) => {
+            Instruction::ValidationVote(entry_id, entry_height, signature) => {
                 // Validate the pk belongs to a real validator
                 
-                // Add vote to list
-                obj.write().unwrap().votes.entry(entry_id).insert(entry_id, )
+                // Add vote to window
+                if entry_height % VOTE_INTERVAL != 0 {
+                    return;
+                }
+
+                self.votes.entry(entry_id).insert(entry_id, )
 
                 // If we're the leader, broadcast the vote
             }
@@ -357,7 +338,7 @@ impl Bank {
             .map(|result| {
                 result.map(|tx| {
                     self.apply_credits(&tx, bals);
-                    *
+                    tx
                 })
             })
             .collect();
@@ -382,58 +363,33 @@ impl Bank {
         res
     }
 
-    pub fn hash_current_state(&self) -> Hash {
-        // Hash the `pending` and `balances`
-        let vote_data = VoteData::new(self);
-        vote_data.calculate_hash()
-    }
-
-    pub fn process_entry(&self, entry: Entry) {
-        if !entry.transactions.is_empty() {
-            for result in self.process_transactions(entry.transactions) {
-                result?;
-            }
-        }
-        // TODO: verify this is ok in cases like:
-        //  1. an untrusted genesis or tx-<DATE>.log
-        //  2. a crazy leader..
-        if !entry.has_more {
-            self.register_entry_id(&entry.id);
-        }
-    }
-
-    /// Process an ordered list of entries. Return hash of the bank's state
-    /// every `VOTE_INTERVAL` entries.
-    pub fn process_entries_return_state<I>(&self, entries: I, start_height: u64)
-    -> Result<(Vec<(u64, Hash)>)>
-    where
-        I: IntoIterator<Item = Entry>,
-    {
-        let state_results = Vec::new();
-        let total_height = start_height;
-        for entry in entries {
-            total_height += 1;
-            self.process_entry(entry);
-            if total_height % VOTE_INTERVAL == 0 {
-                state_results.push((total_height, self.hash_current_state()));
-            }
-        }
-
-        state_results;
-    }
-
     /// Process an ordered list of entries.
-    pub fn process_entries<I>(&self, entries: I) -> Result<u64>
+    pub fn process_entries<I>(&self, entries: I) -> (u64, Result<()>)
     where
         I: IntoIterator<Item = Entry>,
     {
         let mut entry_count = 0;
         for entry in entries {
-            entry_count += 1;
-            self.process_entry(entry);
+            if !entry.transactions.is_empty() {
+                for result in self.process_transactions(entry.transactions) {
+                    if result.is_err() {
+                        self.entry_height += entry_count;
+                        return (entry_count, result.map(|r|()));
+                    }
+                    entry_count += 1;
+                }
+            }
+            // TODO: verify this is ok in cases like:
+            //  1. an untrusted genesis or tx-<DATE>.log
+            //  2. a crazy leader..
+            if !entry.has_more {
+                self.register_entry_id(&entry.id);
+            }
         }
 
-        Ok(entry_count)
+        self.entry_height += entry_count;
+
+        (entry_count, Ok(()))
     }
 
     /// Append entry blocks to the ledger, verifying them along the way.
@@ -449,7 +405,9 @@ impl Bank {
             if !block.verify(&self.last_id()) {
                 return Err(BankError::LedgerVerificationFailed);
             }
-            entry_count += self.process_entries(block)?;
+            let (num_valid_entries, result) = self.process_entries(block);
+            result?;
+            entry_count += num_valid_entries;
         }
         Ok(entry_count)
     }
@@ -597,6 +555,10 @@ impl Bank {
 
     pub fn transaction_count(&self) -> usize {
         self.transaction_count.load(Ordering::Relaxed)
+    }
+
+    pub fn entry_height(&self) -> u64 {
+        self.entry_height
     }
 
     pub fn has_signature(&self, signature: &Signature) -> bool {
@@ -857,7 +819,7 @@ mod tests {
         );
 
         // Now ensure the TX is accepted despite pointing to the ID of an empty entry.
-        bank.process_entries(vec![entry]).unwrap();
+        bank.process_entries(vec![entry]).1.unwrap();
         assert!(bank.process_transaction(&tx).is_ok());
     }
 
