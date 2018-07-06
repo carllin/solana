@@ -1,6 +1,7 @@
 //! The `replicate_stage` replicates transactions broadcast by the leader.
 
 use bank::Bank;
+use consistency_manager::ConsistencyManager;
 use entry::Entry;
 use ledger;
 use result::Result;
@@ -13,7 +14,6 @@ use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 use streamer::BlobReceiver;
 use transaction::Transaction;
-use vote_manager::VoteManager;
 
 pub struct ReplicateStage {
     thread_hdl: JoinHandle<()>,
@@ -22,54 +22,32 @@ pub struct ReplicateStage {
 impl ReplicateStage {
     /// Process entry blobs, already in order
     fn replicate_requests(
-        bank: &Arc<Bank>,
+        consistency_manager: &ConsistencyManager,
         blob_receiver: &BlobReceiver,
-    ) -> Result<Vec<(u64, Entry)>>
-    {
+    ) -> Result<()> {
         let timer = Duration::new(1, 0);
         let blobs = blob_receiver.recv_timeout(timer)?;
         let blobs_len = blobs.len();
         let entries = ledger::reconstruct_entries_from_blobs(blobs)?;
-
-        let valid_entries = Vec::new();
-        let old_height = bank.entry_height();
-        let (num_valid_entries, res) = bank.process_entries(entries);
-        
+        let res = consistency_manager.process_entries(entries);
         if res.is_err() {
             error!("process_entries {} {:?}", blobs_len, res);
         }
-
-        let result = Vec::new();
-
-        for i in 0..num_valid_entries {
-            result.push(old_height + i + 1, entries[i]);
-        }
-
-        Ok(result)
+        res?;
+        Ok(())
     }
 
     pub fn new(
         keypair: KeyPair,
-        bank: Arc<Bank>,
+        consistency_manager: ConsistencyManager,
         exit: Arc<AtomicBool>,
         window_receiver: BlobReceiver,
-        transaction_sender: Sender<Vec<Transaction>>,
     ) -> Self 
     {
-        let consistency_manager = ConsistencyManager::new(
-            bank,
-            keypair,
-            transaction_sender
-        );
-
         let thread_hdl = Builder::new()
             .name("solana-replicate-stage".to_string())
             .spawn(move || loop {
-                let e = Self::replicate_requests(&bank, &window_receiver);
-
-                if e.is_ok() {
-                    consistency_manager.process_entries(e.unwrap());
-                }
+                let e = Self::replicate_requests(&consistency_manager, &window_receiver);
                 
                 if e.is_err() && exit.load(Ordering::Relaxed) {
                     break;

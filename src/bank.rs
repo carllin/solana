@@ -32,10 +32,10 @@ pub const MAX_ENTRY_IDS: usize = 1024 * 16;
 pub const VERIFY_BLOCK_SIZE: usize = 16;
 
 /// The number of entries between submitting votes
-const VOTE_INTERVAL: u64 = 1000;
+pub const VOTE_INTERVAL: u64 = 1000;
 
 /// The number of entries waiting for supermajority, otherwise trigger rollback
-const ROLLBACK_INTERVAL: u64 = 5 * VOTE_INTERVAL;
+pub const ROLLBACK_INTERVAL: u64 = 5 * VOTE_INTERVAL;
 
 /// Reasons a transaction might be rejected.
 #[derive(Debug, PartialEq, Eq)]
@@ -67,20 +67,6 @@ pub enum BankError {
 
 pub type Result<T> = result::Result<T, BankError>;
 
-pub struct ValidationRound {
-    entry_id: Hash,
-    entry_height: u64,
-    /// Maps a validator's public key to what they voted for
-    votes: HashMap<PublicKey, Hash>,
-    total_staked_votes: f64,
-}
-
-impl ValidationRound {
-    pub fn has_supermajority() -> bool{
-        return false;
-    }
-}
-
 /// The state of all accounts and contracts after processing its entries.
 pub struct Bank {
     /// A map of account public keys to the balance in that account.
@@ -110,18 +96,9 @@ pub struct Bank {
     /// timestamp witness before that timestamp, the bank will execute it immediately.
     last_time: RwLock<DateTime<Utc>>,
 
-    /// The number of entries the bank has processed without error since the
-    /// start of the ledger. Current assumption is this will only be touched by one thread 
-    /// at a time b/c only one thread should be running process_entries() at a time.
-    entry_height: u64,
-
     /// The number of transactions the bank has processed without error since the
     /// start of the ledger.
     transaction_count: AtomicUsize,
-
-    /// Sliding window of pending entries that have not yet been confirmed by the
-    /// network's voting protocol
-    validation_rounds: RwLock<Vec<ValidationRound>>,
 }
 
 impl Default for Bank {
@@ -134,7 +111,6 @@ impl Default for Bank {
             last_ids_sigs: RwLock::new(HashMap::new()),
             time_sources: RwLock::new(HashSet::new()),
             last_time: RwLock::new(Utc.timestamp(0, 0)),
-            entry_height: 0,
             transaction_count: AtomicUsize::new(0),
         }
     }
@@ -302,6 +278,7 @@ impl Bank {
                     return;
                 }
 
+                vec![None; WINDOW_SIZE as usize]
                 self.votes.entry(entry_id).insert(entry_id, )
 
                 // If we're the leader, broadcast the vote
@@ -363,33 +340,35 @@ impl Bank {
         res
     }
 
+    pub fn process_entry(&self, entry: Entry) -> Result<()>
+    {
+        if !entry.transactions.is_empty() {
+            for result in self.process_transactions(entry.transactions) {
+                result?;
+            }
+        }
+
+        // TODO: verify this is ok in cases like:
+        //  1. an untrusted genesis or tx-<DATE>.log
+        //  2. a crazy leader..
+        if !entry.has_more {
+            self.register_entry_id(&entry.id);
+        }
+
+        Ok(())
+    }
+
     /// Process an ordered list of entries.
-    pub fn process_entries<I>(&self, entries: I) -> (u64, Result<()>)
+    pub fn process_entries<I>(&self, entries: I) -> Result<u64>
     where
         I: IntoIterator<Item = Entry>,
     {
         let mut entry_count = 0;
         for entry in entries {
-            if !entry.transactions.is_empty() {
-                for result in self.process_transactions(entry.transactions) {
-                    if result.is_err() {
-                        self.entry_height += entry_count;
-                        return (entry_count, result.map(|r|()));
-                    }
-                    entry_count += 1;
-                }
-            }
-            // TODO: verify this is ok in cases like:
-            //  1. an untrusted genesis or tx-<DATE>.log
-            //  2. a crazy leader..
-            if !entry.has_more {
-                self.register_entry_id(&entry.id);
-            }
+            entry_count += 1;
+            self.process_entry(entry)?;
         }
-
-        self.entry_height += entry_count;
-
-        (entry_count, Ok(()))
+        Ok(entry_count)
     }
 
     /// Append entry blocks to the ledger, verifying them along the way.
@@ -405,9 +384,7 @@ impl Bank {
             if !block.verify(&self.last_id()) {
                 return Err(BankError::LedgerVerificationFailed);
             }
-            let (num_valid_entries, result) = self.process_entries(block);
-            result?;
-            entry_count += num_valid_entries;
+            entry_count += self.process_entries(block)?;
         }
         Ok(entry_count)
     }
@@ -555,10 +532,6 @@ impl Bank {
 
     pub fn transaction_count(&self) -> usize {
         self.transaction_count.load(Ordering::Relaxed)
-    }
-
-    pub fn entry_height(&self) -> u64 {
-        self.entry_height
     }
 
     pub fn has_signature(&self, signature: &Signature) -> bool {
@@ -819,7 +792,7 @@ mod tests {
         );
 
         // Now ensure the TX is accepted despite pointing to the ID of an empty entry.
-        bank.process_entries(vec![entry]).1.unwrap();
+        bank.process_entries(vec![entry]).unwrap();
         assert!(bank.process_transaction(&tx).is_ok());
     }
 

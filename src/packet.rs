@@ -450,7 +450,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::io;
     use std::io::Write;
-    use std::net::UdpSocket;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
     use std::sync::Arc;
 
     #[test]

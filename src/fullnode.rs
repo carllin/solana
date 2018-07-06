@@ -250,7 +250,6 @@ impl FullNode {
             exit.clone(),
         ).expect("Ncp::new");
 
-        let (t, transaction_sender) = transaction_recv_and_send();
         // TODO: think about moving the node's keypair into the crdt, which is a bigger change
         let tvu = Tvu::new(
             node.keypair,
@@ -261,11 +260,9 @@ impl FullNode {
             node.sockets.replicate,
             node.sockets.repair,
             node.sockets.retransmit,
-            exit.clone(),
-            transaction_sender,
+            exit.clone()
         );
 
-        thread_hdls.extend(t);
         thread_hdls.extend(tvu.thread_hdls());
         thread_hdls.extend(ncp.thread_hdls());
         FullNode { thread_hdls }

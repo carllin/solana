@@ -48,7 +48,6 @@ use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
 use streamer::Window;
 use transaction::Transaction;
-use vote_stage::VoteStage;
 use window_stage::WindowStage;
 
 pub struct Tvu {
@@ -80,7 +79,6 @@ impl Tvu {
         repair_socket: UdpSocket,
         retransmit_socket: UdpSocket,
         exit: Arc<AtomicBool>,
-        transaction_sender: Sender<Vec<Transaction>>,
     ) -> Self {
         let blob_recycler = BlobRecycler::default();
         let (fetch_stage, blob_receiver) = BlobFetchStage::new_multi_socket(
@@ -101,12 +99,17 @@ impl Tvu {
             blob_receiver,
         );
 
+        let consistency_manager = ConsistencyManager::new(
+            bank,
+            keypair,
+            entry_height,
+        );
+
         let replicate_stage = ReplicateStage::new(
             keypair,
-            bank,
+            consistency_manager,
             exit,
             blob_receiver,
-            transaction_sender,
         );
 
         Tvu {
