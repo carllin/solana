@@ -52,11 +52,11 @@ pub struct Tpu {
 
 impl Tpu {
     pub fn new(
-        keypair: Keypair,
+        keypair: &Arc<Keypair>,
         bank: &Arc<Bank>,
         crdt: &Arc<RwLock<Crdt>>,
         tick_duration: Option<Duration>,
-        transactions_socket: UdpSocket,
+        transactions_socket: Arc<UdpSocket>,
         blob_recycler: &BlobRecycler,
         exit: Arc<AtomicBool>,
         ledger_path: &str,
@@ -65,7 +65,7 @@ impl Tpu {
         let packet_recycler = PacketRecycler::default();
 
         let (fetch_stage, packet_receiver) =
-            FetchStage::new(Arc::new(transactions_socket), exit, &packet_recycler);
+            FetchStage::new(transactions_socket, exit, &packet_recycler);
 
         let (sigverify_stage, verified_receiver) =
             SigVerifyStage::new(packet_receiver, sigverify_disabled);
@@ -81,7 +81,7 @@ impl Tpu {
         };
 
         let (write_stage, blob_receiver) = WriteStage::new(
-            keypair,
+            keypair.clone(),
             bank.clone(),
             crdt.clone(),
             blob_recycler.clone(),

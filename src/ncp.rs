@@ -21,12 +21,11 @@ impl Ncp {
         crdt: &Arc<RwLock<Crdt>>,
         window: SharedWindow,
         ledger_path: Option<&str>,
-        gossip_socket: UdpSocket,
+        gossip_socket: Arc<UdpSocket>,
         exit: Arc<AtomicBool>,
     ) -> Self {
         let blob_recycler = BlobRecycler::default();
         let (request_sender, request_receiver) = channel();
-        let gossip_socket = Arc::new(gossip_socket);
         trace!(
             "Ncp: id: {:?}, listening on: {:?}",
             &crdt.read().unwrap().id.as_ref()[..4],

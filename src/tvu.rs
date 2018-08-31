@@ -70,21 +70,20 @@ impl Tvu {
     /// * `exit` - The exit signal.
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn new(
-        keypair: Keypair,
+        keypair: &Arc<Keypair>,
         bank: &Arc<Bank>,
         entry_height: u64,
         crdt: Arc<RwLock<Crdt>>,
         window: SharedWindow,
-        replicate_socket: UdpSocket,
-        repair_socket: UdpSocket,
-        retransmit_socket: UdpSocket,
+        replicate_socket: Arc<UdpSocket>,
+        repair_socket: Arc<UdpSocket>,
+        retransmit_socket: Arc<UdpSocket>,
         ledger_path: Option<&str>,
         exit: Arc<AtomicBool>,
     ) -> Self {
-        let repair_socket = Arc::new(repair_socket);
         let blob_recycler = BlobRecycler::default();
         let (fetch_stage, blob_fetch_receiver) = BlobFetchStage::new_multi_socket(
-            vec![Arc::new(replicate_socket), repair_socket.clone()],
+            vec![replicate_socket, repair_socket.clone()],
             exit.clone(),
             &blob_recycler,
         );
@@ -95,7 +94,7 @@ impl Tvu {
             &crdt,
             window,
             entry_height,
-            Arc::new(retransmit_socket),
+            retransmit_socket,
             repair_socket,
             &blob_recycler,
             blob_fetch_receiver,
@@ -166,7 +165,7 @@ pub mod tests {
 
     fn new_ncp(
         crdt: Arc<RwLock<Crdt>>,
-        gossip: UdpSocket,
+        gossip: Arc<UdpSocket>,
         exit: Arc<AtomicBool>,
     ) -> (Ncp, SharedWindow) {
         let window = window::default_window();
@@ -179,7 +178,7 @@ pub mod tests {
     fn test_replicate() {
         logger::setup();
         let leader = Node::new_localhost();
-        let target1_keypair = Keypair::new();
+        let target1_keypair = Arc::new(Keypair::new());
         let target1 = Node::new_localhost_with_pubkey(target1_keypair.pubkey());
         let target2 = Node::new_localhost();
         let exit = Arc::new(AtomicBool::new(false));
@@ -206,7 +205,7 @@ pub mod tests {
         let resp_recycler = BlobRecycler::default();
         let (s_reader, r_reader) = channel();
         let t_receiver = streamer::blob_receiver(
-            Arc::new(target2.sockets.replicate),
+            target2.sockets.replicate,
             exit.clone(),
             recv_recycler.clone(),
             s_reader,
@@ -216,7 +215,7 @@ pub mod tests {
         let (s_responder, r_responder) = channel();
         let t_responder = streamer::responder(
             "test_replicate",
-            Arc::new(leader.sockets.requests),
+            leader.sockets.requests,
             resp_recycler.clone(),
             r_responder,
         );
@@ -234,7 +233,7 @@ pub mod tests {
         let dr_1 = new_ncp(cref1.clone(), target1.sockets.gossip, exit.clone());
 
         let tvu = Tvu::new(
-            target1_keypair,
+            &target1_keypair,
             &bank,
             0,
             cref1,

@@ -168,13 +168,12 @@ impl BroadcastStage {
     /// See `crdt` for network layer definitions.
     /// # Arguments
     /// * `sock` - Socket to send from.
-    /// * `exit` - Boolean to signal system exit.
     /// * `crdt` - CRDT structure
     /// * `window` - Cache of blobs that we have broadcast
     /// * `recycler` - Blob recycler.
     /// * `receiver` - Receive channel for blobs to be retransmitted to all the layer 1 nodes.
     pub fn new(
-        sock: UdpSocket,
+        sock: Arc<UdpSocket>,
         crdt: Arc<RwLock<Crdt>>,
         window: SharedWindow,
         entry_height: u64,

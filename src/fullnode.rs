@@ -2,7 +2,7 @@
 
 use bank::Bank;
 use broadcast_stage::BroadcastStage;
-use crdt::{Crdt, Node, NodeInfo};
+use crdt::{Crdt, Node, NodeInfo, Sockets};
 use drone::DRONE_PORT;
 use entry::Entry;
 use ledger::read_ledger;
@@ -21,9 +21,211 @@ use tvu::Tvu;
 use untrusted::Input;
 use window;
 
-pub struct Fullnode {
-    exit: Arc<AtomicBool>,
+#[derive(Copy, Clone, Debug)]
+pub enum NodeEvent {
+    /// State Change from Validator to Leader
+    ValidatorToLeader,
+    /// State Change from Leader to Validator
+    LeaderToValidator,
+}
+
+pub struct CommonState {
+    keypair: Arc<Keypair>,
+    bank: Arc<Bank>,
+    blob_recycler: BlobRecycler,
+    window: window::SharedWindow,
+    crdt: Arc<RwLock<Crdt>>,
+    sockets: Sockets,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum NodeRole {
+    Leader,
+    Validator,
+}
+
+struct ServiceManager {
     thread_hdls: Vec<JoinHandle<()>>,
+    exit: Arc<AtomicBool>,
+}
+
+impl ServiceManager {
+    fn new() -> Self {
+        let exit = Arc::new(AtomicBool::new(false));
+        let thread_hdls = vec![];
+        ServiceManager { exit, thread_hdls }
+    }
+
+    fn thread_hdls(self) -> Vec<JoinHandle<()>> {
+        self.thread_hdls
+    }
+
+    fn exit(&self) -> () {
+        self.exit.store(true, Ordering::Relaxed);
+    }
+
+    fn join(self) -> Result<()> {
+        let mut results = vec![];
+        for thread_hdl in self.thread_hdls {
+            let result = thread_hdl.join();
+            if let Err(ref err) = &result {
+                println!("Thread panicked with error: {:?}", err);
+            }
+
+            results.push(result);
+        }
+
+        for r in results {
+            r?;
+        }
+
+        Ok(())
+    }
+
+    fn close(self) -> Result<()> {
+        self.exit();
+        self.join()
+    }
+}
+
+trait RoleServices {
+    fn close_services(self: Box<Self>) -> Result<()>;
+    fn service_manager_ref(&self) -> &ServiceManager;
+    fn service_manager_owned(self: Box<Self>) -> ServiceManager;
+}
+
+struct LeaderRole {
+    service_manager: ServiceManager,
+}
+
+impl LeaderRole {
+    fn new(
+        entry_height: u64,
+        common_state: &CommonState,
+        sigverify_disabled: bool,
+        ledger_path: &str,
+    ) -> Self {
+        let mut service_manager = ServiceManager::new();
+        let service_handles = Self::leader_services(
+            entry_height,
+            common_state,
+            sigverify_disabled,
+            ledger_path,
+            service_manager.exit.clone(),
+        );
+
+        service_manager.thread_hdls = service_handles;
+        LeaderRole { service_manager }
+    }
+
+    fn leader_services(
+        entry_height: u64,
+        common_state: &CommonState,
+        sigverify_disabled: bool,
+        ledger_path: &str,
+        exit: Arc<AtomicBool>,
+    ) -> Vec<JoinHandle<()>> {
+        let mut thread_hdls = vec![];
+        let tick_duration = None;
+        // TODO: To light up PoH, uncomment the following line:
+        //let tick_duration = Some(Duration::from_millis(1000));
+        let (tpu, blob_receiver) = Tpu::new(
+            &common_state.keypair,
+            &common_state.bank,
+            &common_state.crdt,
+            tick_duration,
+            common_state.sockets.transaction.clone(),
+            &common_state.blob_recycler,
+            exit,
+            ledger_path,
+            sigverify_disabled,
+        );
+
+        thread_hdls.extend(tpu.thread_hdls());
+
+        let broadcast_stage = BroadcastStage::new(
+            common_state.sockets.broadcast.clone(),
+            common_state.crdt.clone(),
+            common_state.window.clone(),
+            entry_height,
+            common_state.blob_recycler.clone(),
+            blob_receiver,
+        );
+
+        thread_hdls.extend(broadcast_stage.thread_hdls());
+        thread_hdls
+    }
+}
+
+impl RoleServices for LeaderRole {
+    fn close_services(self: Box<Self>) -> Result<()> {
+        self.service_manager_owned().close()
+    }
+
+    fn service_manager_ref(&self) -> &ServiceManager {
+        &self.service_manager
+    }
+
+    fn service_manager_owned(self: Box<Self>) -> ServiceManager {
+        self.service_manager
+    }
+}
+
+struct ValidatorRole {
+    service_manager: ServiceManager,
+}
+
+impl ValidatorRole {
+    fn new(entry_height: u64, common_state: &CommonState, ledger_path: Option<&str>) -> Self {
+        let mut service_manager = ServiceManager::new();
+        let service_handles = Self::validator_services(
+            entry_height,
+            common_state,
+            ledger_path,
+            service_manager.exit.clone(),
+        );
+
+        service_manager.thread_hdls = service_handles;
+        ValidatorRole { service_manager }
+    }
+
+    fn validator_services(
+        entry_height: u64,
+        common_state: &CommonState,
+        ledger_path: Option<&str>,
+        exit: Arc<AtomicBool>,
+    ) -> Vec<JoinHandle<()>> {
+        let mut thread_hdls = vec![];
+        let tvu = Tvu::new(
+            &common_state.keypair,
+            &common_state.bank,
+            entry_height,
+            common_state.crdt.clone(),
+            common_state.window.clone(),
+            common_state.sockets.replicate.clone(),
+            common_state.sockets.repair.clone(),
+            common_state.sockets.retransmit.clone(),
+            ledger_path,
+            exit,
+        );
+
+        thread_hdls.extend(tvu.thread_hdls());
+        thread_hdls
+    }
+}
+
+impl RoleServices for ValidatorRole {
+    fn close_services(self: Box<Self>) -> Result<()> {
+        self.service_manager_owned().close()
+    }
+
+    fn service_manager_ref(&self) -> &ServiceManager {
+        &self.service_manager
+    }
+
+    fn service_manager_owned(self: Box<Self>) -> ServiceManager {
+        self.service_manager
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -46,6 +248,16 @@ impl Config {
         Keypair::from_pkcs8(Input::from(&self.pkcs8))
             .expect("from_pkcs8 in fullnode::Config keypair")
     }
+}
+
+pub struct Fullnode {
+    exit: Arc<AtomicBool>,
+    thread_hdls: Vec<JoinHandle<()>>,
+    node_role: NodeRole,
+    role_services: Option<Box<RoleServices + Send>>,
+    common_state: CommonState,
+    ledger_path: Option<String>,
+    sigverify_disabled: bool,
 }
 
 impl Fullnode {
@@ -177,11 +389,10 @@ impl Fullnode {
 
         let bank = Arc::new(bank);
         let mut thread_hdls = vec![];
-
         let rpu = Rpu::new(
             &bank,
-            node.sockets.requests,
-            node.sockets.respond,
+            node.sockets.requests.clone(),
+            node.sockets.respond.clone(),
             exit.clone(),
         );
         thread_hdls.extend(rpu.thread_hdls());
@@ -209,69 +420,113 @@ impl Fullnode {
             &crdt,
             window.clone(),
             ledger_path,
-            node.sockets.gossip,
+            node.sockets.gossip.clone(),
             exit.clone(),
         );
         thread_hdls.extend(ncp.thread_hdls());
 
+        let keypair = Arc::new(keypair);
+        // Make the common state info
+        let common_state = CommonState {
+            keypair,
+            bank,
+            blob_recycler,
+            window,
+            crdt,
+            sockets: node.sockets,
+        };
+
+        let node_role;
+        let role_services: Box<RoleServices + Send>;
         match leader_info {
             Some(leader_info) => {
                 // Start in validator mode.
                 // TODO: let Crdt get that data from the network?
-                crdt.write().unwrap().insert(leader_info);
-                let tvu = Tvu::new(
-                    keypair,
-                    &bank,
-                    entry_height,
-                    crdt,
-                    window,
-                    node.sockets.replicate,
-                    node.sockets.repair,
-                    node.sockets.retransmit,
-                    ledger_path,
-                    exit.clone(),
-                );
-                thread_hdls.extend(tvu.thread_hdls());
+                common_state.crdt.write().unwrap().insert(leader_info);
+                let validator_role = ValidatorRole::new(entry_height, &common_state, ledger_path);
+
+                role_services = Box::new(validator_role);
+                node_role = NodeRole::Validator;
             }
             None => {
                 // Start in leader mode.
                 let ledger_path = ledger_path.expect("ledger path");
-                let tick_duration = None;
-                // TODO: To light up PoH, uncomment the following line:
-                //let tick_duration = Some(Duration::from_millis(1000));
-
-                let (tpu, blob_receiver) = Tpu::new(
-                    keypair,
-                    &bank,
-                    &crdt,
-                    tick_duration,
-                    node.sockets.transaction,
-                    &blob_recycler,
-                    exit.clone(),
-                    ledger_path,
-                    sigverify_disabled,
-                );
-                thread_hdls.extend(tpu.thread_hdls());
-
-                let broadcast_stage = BroadcastStage::new(
-                    node.sockets.broadcast,
-                    crdt,
-                    window,
-                    entry_height,
-                    blob_recycler.clone(),
-                    blob_receiver,
-                );
-                thread_hdls.extend(broadcast_stage.thread_hdls());
+                let leader_role =
+                    LeaderRole::new(entry_height, &common_state, sigverify_disabled, ledger_path);
+                role_services = Box::new(leader_role);
+                node_role = NodeRole::Leader;
             }
         }
 
-        Fullnode { exit, thread_hdls }
+        Fullnode {
+            exit,
+            thread_hdls,
+            node_role,
+            role_services: Some(role_services),
+            sigverify_disabled,
+            common_state,
+            // Take ownership of the ledger path passed in because we store the value
+            ledger_path: ledger_path.map(|path| path.to_string()),
+        }
+    }
+
+    pub fn handle_event(&mut self, event: NodeEvent) -> Result<()> {
+        let role_services_option = self.role_services.take();
+        let role_services = role_services_option.unwrap();
+        let ref_ledger_path = self.ledger_path.as_ref().map(String::as_ref);
+
+        match (self.node_role, event) {
+            (NodeRole::Leader, NodeEvent::LeaderToValidator) => {
+                // TODO (carlin): If error occurs on closing the other services we
+                // still try to continue opening the other services? Should we return
+                // Ok or Err? Right now on join failures, we still try to spin up the
+                // new services and return an Error after.
+                let close_result = role_services.close_services();
+                let validator_role = ValidatorRole::new(
+                    0, //TODO (carllin): fill in the actual entry_height
+                    &self.common_state,
+                    ref_ledger_path,
+                );
+
+                self.role_services = Some(Box::new(validator_role));
+                self.node_role = NodeRole::Validator;
+                close_result?
+            }
+
+            (NodeRole::Validator, NodeEvent::ValidatorToLeader) => {
+                let ledger_path =
+                    ref_ledger_path.expect("ledger path expected for transition to leader role");
+                let close_result = role_services.close_services();
+                let leader_role = LeaderRole::new(
+                    0, //TODO (carllin): fill in the actual entry_height
+                    &self.common_state,
+                    self.sigverify_disabled,
+                    ledger_path,
+                );
+                self.role_services = Some(Box::new(leader_role));
+                self.node_role = NodeRole::Leader;
+                close_result?
+            }
+
+            _ => panic!(
+                format!(
+                    "Invalid node role transition : {:#?} -> {:#?}",
+                    self.node_role, event,
+                ).to_string()
+            ),
+        }
+
+        Ok(())
     }
 
     //used for notifying many nodes in parallel to exit
     pub fn exit(&self) {
+        if let Some(ref role_services) = self.role_services {
+            role_services.service_manager_ref().exit();
+        }
         self.exit.store(true, Ordering::Relaxed);
     }
+
     pub fn close(self) -> Result<()> {
         self.exit();
         self.join()
@@ -280,13 +535,19 @@ impl Fullnode {
 
 impl Service for Fullnode {
     fn thread_hdls(self) -> Vec<JoinHandle<()>> {
-        self.thread_hdls
+        let mut thread_hdls = self.thread_hdls;
+        if let Some(role_services) = self.role_services {
+            thread_hdls.extend(role_services.service_manager_owned().thread_hdls())
+        }
+
+        thread_hdls
     }
 
     fn join(self) -> Result<()> {
         for thread_hdl in self.thread_hdls() {
             thread_hdl.join()?;
         }
+
         Ok(())
     }
 }

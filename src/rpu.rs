@@ -42,14 +42,14 @@ pub struct Rpu {
 impl Rpu {
     pub fn new(
         bank: &Arc<Bank>,
-        requests_socket: UdpSocket,
-        respond_socket: UdpSocket,
+        requests_socket: Arc<UdpSocket>,
+        respond_socket: Arc<UdpSocket>,
         exit: Arc<AtomicBool>,
     ) -> Self {
         let packet_recycler = PacketRecycler::default();
         let (packet_sender, packet_receiver) = channel();
         let t_receiver = streamer::receiver(
-            Arc::new(requests_socket),
+            requests_socket,
             exit,
             packet_recycler.clone(),
             packet_sender,
@@ -64,12 +64,8 @@ impl Rpu {
             blob_recycler.clone(),
         );
 
-        let t_responder = streamer::responder(
-            "rpu",
-            Arc::new(respond_socket),
-            blob_recycler.clone(),
-            blob_receiver,
-        );
+        let t_responder =
+            streamer::responder("rpu", respond_socket, blob_recycler.clone(), blob_receiver);
 
         let mut thread_hdls = vec![t_receiver, t_responder];
         thread_hdls.extend(request_stage.thread_hdls().into_iter());

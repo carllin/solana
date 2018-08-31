@@ -686,7 +686,7 @@ fn converge(
         &spy_ref,
         window.clone(),
         None,
-        gossip_socket,
+        Arc::new(gossip_socket),
         exit_signal.clone(),
     );
     let mut v: Vec<NodeInfo> = vec![];

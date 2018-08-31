@@ -82,7 +82,7 @@ fn calculate_highest_lost_blob_index(num_peers: u64, consumed: u64, received: u6
     let highest_lost = cmp::max(consumed, received.saturating_sub(num_peers));
 
     // This check prevents repairing a blob that will cause window to roll over. Even if
-    // the highes_lost blob is actually missing, asking to repair it might cause our
+    // the highest_lost blob is actually missing, asking to repair it might cause our
     // current window to move past other missing blobs
     cmp::min(consumed + WINDOW_SIZE - 1, highest_lost)
 }
@@ -789,7 +789,7 @@ mod test {
         let resp_recycler = BlobRecycler::default();
         let (s_reader, r_reader) = channel();
         let t_receiver = blob_receiver(
-            Arc::new(tn.sockets.gossip),
+            tn.sockets.gossip,
             exit.clone(),
             resp_recycler.clone(),
             s_reader,
@@ -805,13 +805,13 @@ mod test {
             r_reader,
             s_window,
             s_retransmit,
-            Arc::new(tn.sockets.repair),
+            tn.sockets.repair,
         );
         let t_responder = {
             let (s_responder, r_responder) = channel();
             let t_responder = responder(
                 "window_send_test",
-                Arc::new(tn.sockets.replicate),
+                tn.sockets.replicate,
                 resp_recycler.clone(),
                 r_responder,
             );
@@ -859,7 +859,7 @@ mod test {
         let resp_recycler = BlobRecycler::default();
         let (s_reader, r_reader) = channel();
         let t_receiver = blob_receiver(
-            Arc::new(tn.sockets.gossip),
+            tn.sockets.gossip,
             exit.clone(),
             resp_recycler.clone(),
             s_reader,
@@ -875,13 +875,13 @@ mod test {
             r_reader,
             s_window,
             s_retransmit,
-            Arc::new(tn.sockets.repair),
+            tn.sockets.repair,
         );
         let t_responder = {
             let (s_responder, r_responder) = channel();
             let t_responder = responder(
                 "window_send_test",
-                Arc::new(tn.sockets.replicate),
+                tn.sockets.replicate,
                 resp_recycler.clone(),
                 r_responder,
             );
@@ -922,7 +922,7 @@ mod test {
         let resp_recycler = BlobRecycler::default();
         let (s_reader, r_reader) = channel();
         let t_receiver = blob_receiver(
-            Arc::new(tn.sockets.gossip),
+            tn.sockets.gossip,
             exit.clone(),
             resp_recycler.clone(),
             s_reader,
@@ -938,13 +938,13 @@ mod test {
             r_reader,
             s_window,
             s_retransmit,
-            Arc::new(tn.sockets.repair),
+            tn.sockets.repair,
         );
         let t_responder = {
             let (s_responder, r_responder) = channel();
             let t_responder = responder(
                 "window_send_test",
-                Arc::new(tn.sockets.replicate),
+                tn.sockets.replicate,
                 resp_recycler.clone(),
                 r_responder,
             );

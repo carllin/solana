@@ -1261,14 +1261,14 @@ impl Crdt {
 }
 
 pub struct Sockets {
-    pub gossip: UdpSocket,
-    pub requests: UdpSocket,
-    pub replicate: UdpSocket,
-    pub transaction: UdpSocket,
-    pub respond: UdpSocket,
-    pub broadcast: UdpSocket,
-    pub repair: UdpSocket,
-    pub retransmit: UdpSocket,
+    pub gossip: Arc<UdpSocket>,
+    pub requests: Arc<UdpSocket>,
+    pub replicate: Arc<UdpSocket>,
+    pub transaction: Arc<UdpSocket>,
+    pub respond: Arc<UdpSocket>,
+    pub broadcast: Arc<UdpSocket>,
+    pub repair: Arc<UdpSocket>,
+    pub retransmit: Arc<UdpSocket>,
 }
 
 pub struct Node {
@@ -1301,14 +1301,14 @@ impl Node {
         Node {
             info,
             sockets: Sockets {
-                gossip,
-                requests,
-                replicate,
-                transaction,
-                respond,
-                broadcast,
-                repair,
-                retransmit,
+                gossip: Arc::new(gossip),
+                requests: Arc::new(requests),
+                replicate: Arc::new(replicate),
+                transaction: Arc::new(transaction),
+                respond: Arc::new(respond),
+                broadcast: Arc::new(broadcast),
+                repair: Arc::new(repair),
+                retransmit: Arc::new(retransmit),
             },
         }
     }
@@ -1362,14 +1362,14 @@ impl Node {
         Node {
             info,
             sockets: Sockets {
-                gossip,
-                requests,
-                replicate,
-                transaction,
-                respond,
-                broadcast,
-                repair,
-                retransmit,
+                gossip: Arc::new(gossip),
+                requests: Arc::new(requests),
+                replicate: Arc::new(replicate),
+                transaction: Arc::new(transaction),
+                respond: Arc::new(respond),
+                broadcast: Arc::new(broadcast),
+                repair: Arc::new(repair),
+                retransmit: Arc::new(retransmit),
             },
         }
     }

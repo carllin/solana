@@ -22,7 +22,8 @@ fn test_node(exit: Arc<AtomicBool>) -> (Arc<RwLock<Crdt>>, Ncp, UdpSocket) {
     let c = Arc::new(RwLock::new(crdt));
     let w = Arc::new(RwLock::new(vec![]));
     let d = Ncp::new(&c.clone(), w, None, tn.sockets.gossip, exit);
-    (c, d, tn.sockets.replicate)
+    let replicate = Arc::try_unwrap(tn.sockets.replicate).unwrap();
+    (c, d, replicate)
 }
 
 /// Test that the network converges.
