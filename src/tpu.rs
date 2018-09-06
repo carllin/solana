@@ -35,7 +35,7 @@ use service::Service;
 use signature::Keypair;
 use sigverify_stage::SigVerifyStage;
 use std::net::UdpSocket;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -48,11 +48,13 @@ pub struct Tpu {
     banking_stage: BankingStage,
     record_stage: RecordStage,
     write_stage: WriteStage,
+    block: Arc<AtomicBool>,
 }
 
 impl Tpu {
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn new(
-        keypair: Keypair,
+        keypair: Arc<Keypair>,
         bank: &Arc<Bank>,
         crdt: &Arc<RwLock<Crdt>>,
         tick_duration: Option<Duration>,
@@ -61,11 +63,17 @@ impl Tpu {
         exit: Arc<AtomicBool>,
         ledger_path: &str,
         sigverify_disabled: bool,
+        block: bool,
     ) -> (Self, BlobReceiver) {
+        let block = Arc::new(AtomicBool::new(block));
         let packet_recycler = PacketRecycler::default();
 
-        let (fetch_stage, packet_receiver) =
-            FetchStage::new(transactions_sockets, exit, &packet_recycler);
+        let (fetch_stage, packet_receiver) = FetchStage::new(
+            transactions_sockets,
+            exit,
+            &block,
+            &packet_recycler,
+        );
 
         let (sigverify_stage, verified_receiver) =
             SigVerifyStage::new(packet_receiver, sigverify_disabled);
@@ -95,8 +103,20 @@ impl Tpu {
             banking_stage,
             record_stage,
             write_stage,
+            block,
         };
         (tpu, blob_receiver)
+    }
+
+    pub fn block(&self) {
+        self.block.store(true, Ordering::Relaxed);
+    }
+
+    pub fn unblock(&self) {
+        self.block.store(false, Ordering::Relaxed);
+        for t in self.fetch_stage.ref_thread_hdls() {
+            t.thread().unpark();
+        }
     }
 
     pub fn close(self) -> thread::Result<()> {

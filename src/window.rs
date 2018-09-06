@@ -718,6 +718,7 @@ mod test {
         let t_receiver = receiver(
             Arc::new(read),
             exit.clone(),
+            None,
             pack_recycler.clone(),
             s_reader,
         );
@@ -785,6 +786,7 @@ mod test {
         let t_receiver = blob_receiver(
             Arc::new(tn.sockets.gossip),
             exit.clone(),
+            None,
             resp_recycler.clone(),
             s_reader,
         );
@@ -855,6 +857,7 @@ mod test {
         let t_receiver = blob_receiver(
             Arc::new(tn.sockets.gossip),
             exit.clone(),
+            None,
             resp_recycler.clone(),
             s_reader,
         );
@@ -918,6 +921,7 @@ mod test {
         let t_receiver = blob_receiver(
             Arc::new(tn.sockets.gossip),
             exit.clone(),
+            None,
             resp_recycler.clone(),
             s_reader,
         );

@@ -18,25 +18,36 @@ impl FetchStage {
     pub fn new(
         sockets: Vec<UdpSocket>,
         exit: Arc<AtomicBool>,
+        block: &Arc<AtomicBool>,
         recycler: &PacketRecycler,
     ) -> (Self, PacketReceiver) {
         let tx_sockets = sockets.into_iter().map(Arc::new).collect();
-        Self::new_multi_socket(tx_sockets, exit, recycler)
+        Self::new_multi_socket(tx_sockets, exit, block, recycler)
     }
     pub fn new_multi_socket(
         sockets: Vec<Arc<UdpSocket>>,
         exit: Arc<AtomicBool>,
+        block: &Arc<AtomicBool>,
         recycler: &PacketRecycler,
     ) -> (Self, PacketReceiver) {
         let (sender, receiver) = channel();
         let thread_hdls: Vec<_> = sockets
             .into_iter()
             .map(|socket| {
-                streamer::receiver(socket, exit.clone(), recycler.clone(), sender.clone())
-            })
-            .collect();
+                streamer::receiver(
+                    socket,
+                    exit.clone(),
+                    Some(block.clone()),
+                    recycler.clone(),
+                    sender.clone(),
+                )
+            }).collect();
 
         (FetchStage { exit, thread_hdls }, receiver)
+    }
+
+    pub fn ref_thread_hdls(&self) -> &Vec<JoinHandle<()>> {
+        &self.thread_hdls
     }
 
     pub fn close(&self) {

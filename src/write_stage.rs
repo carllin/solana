@@ -67,7 +67,7 @@ impl WriteStage {
 
     /// Create a new WriteStage for writing and broadcasting entries.
     pub fn new(
-        keypair: Keypair,
+        keypair: Arc<Keypair>,
         bank: Arc<Bank>,
         crdt: Arc<RwLock<Crdt>>,
         blob_recycler: BlobRecycler,

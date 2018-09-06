@@ -21,9 +21,18 @@ use tvu::Tvu;
 use untrusted::Input;
 use window;
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum NodeRole {
+    Leader,
+    Validator,
+}
+
 pub struct Fullnode {
     exit: Arc<AtomicBool>,
     thread_hdls: Vec<JoinHandle<()>>,
+    node_role: NodeRole,
+    tvu: Tvu,
+    tpu: Option<Tpu>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -213,59 +222,109 @@ impl Fullnode {
             exit.clone(),
         );
         thread_hdls.extend(ncp.thread_hdls());
-
+        let node_role;
         match leader_info {
             Some(leader_info) => {
                 // Start in validator mode.
                 // TODO: let Crdt get that data from the network?
                 crdt.write().unwrap().insert(leader_info);
-                let tvu = Tvu::new(
-                    keypair,
-                    &bank,
-                    entry_height,
-                    crdt,
-                    window,
-                    node.sockets.replicate,
-                    node.sockets.repair,
-                    node.sockets.retransmit,
-                    ledger_path,
-                    exit.clone(),
-                );
-                thread_hdls.extend(tvu.thread_hdls());
+                node_role = NodeRole::Validator;
             }
             None => {
-                // Start in leader mode.
-                let ledger_path = ledger_path.expect("ledger path");
-                let tick_duration = None;
-                // TODO: To light up PoH, uncomment the following line:
-                //let tick_duration = Some(Duration::from_millis(1000));
-
-                let (tpu, blob_receiver) = Tpu::new(
-                    keypair,
-                    &bank,
-                    &crdt,
-                    tick_duration,
-                    node.sockets.transaction,
-                    &blob_recycler,
-                    exit.clone(),
-                    ledger_path,
-                    sigverify_disabled,
-                );
-                thread_hdls.extend(tpu.thread_hdls());
-
-                let broadcast_stage = BroadcastStage::new(
-                    node.sockets.broadcast,
-                    crdt,
-                    window,
-                    entry_height,
-                    blob_recycler.clone(),
-                    blob_receiver,
-                );
-                thread_hdls.extend(broadcast_stage.thread_hdls());
+                node_role = NodeRole::Leader;
             }
         }
 
-        Fullnode { exit, thread_hdls }
+        let keypair = Arc::new(keypair);
+        let tvu = Tvu::new(
+            keypair.clone(),
+            &bank,
+            entry_height,
+            crdt.clone(),
+            window.clone(),
+            node.sockets.replicate,
+            node.sockets.repair,
+            node.sockets.retransmit,
+            ledger_path,
+            exit.clone(),
+            node_role == NodeRole::Leader,
+        );
+
+        let tick_duration = None;
+        // TODO: To light up PoH, uncomment the following line:
+        //let tick_duration = Some(Duration::from_millis(1000));
+
+        let tpu_option;
+        if let Some(ledger_path) = ledger_path {
+            let (tpu, blob_receiver) = Tpu::new(
+                keypair,
+                &bank,
+                &crdt,
+                tick_duration,
+                node.sockets.transaction,
+                &blob_recycler,
+                exit.clone(),
+                ledger_path,
+                sigverify_disabled,
+                node_role == NodeRole::Validator,
+            );
+
+            let broadcast_stage = BroadcastStage::new(
+                node.sockets.broadcast,
+                crdt,
+                window,
+                entry_height,
+                blob_recycler.clone(),
+                blob_receiver,
+            );
+
+            thread_hdls.extend(broadcast_stage.thread_hdls());
+            tpu_option = Some(tpu);
+        } else {
+            tpu_option = None;
+        }
+
+        Fullnode {
+            exit,
+            thread_hdls,
+            node_role,
+            tpu: tpu_option,
+            tvu,
+        }
+    }
+
+    pub fn transition_role(&mut self, new_role: NodeRole) {
+        match (self.node_role, new_role) {
+            (NodeRole::Leader, NodeRole::Validator) => {
+                self.start_validator();
+            }
+            (NodeRole::Validator, NodeRole::Leader) => {
+                // If this is a validator only node, don't transition
+                if self.tpu.is_none() {
+                    return;
+                }
+                self.start_leader();
+            }
+            _ => {
+                return;
+            }
+        }
+
+        self.node_role = new_role;
+    }
+
+    fn start_leader(&self) {
+        self.tvu.block();
+        if let Some(ref tpu) = self.tpu {
+            tpu.unblock();
+        }
+    }
+
+    fn start_validator(&self) {
+        if let Some(ref tpu) = self.tpu {
+            tpu.block();
+        }
+        self.tvu.unblock();
     }
 
     //used for notifying many nodes in parallel to exit
@@ -280,13 +339,19 @@ impl Fullnode {
 
 impl Service for Fullnode {
     fn thread_hdls(self) -> Vec<JoinHandle<()>> {
-        self.thread_hdls
+        let mut threads = self.thread_hdls;
+        threads.extend(self.tvu.thread_hdls());
+        if let Some(tpu) = self.tpu {
+            threads.extend(tpu.thread_hdls());
+        }
+        threads
     }
 
     fn join(self) -> Result<()> {
         for thread_hdl in self.thread_hdls() {
             thread_hdl.join()?;
         }
+
         Ok(())
     }
 }
@@ -325,8 +390,7 @@ mod tests {
                 let exit = Arc::new(AtomicBool::new(false));
                 let entry = tn.info.clone();
                 Fullnode::new_with_bank(keypair, bank, 0, &[], tn, Some(&entry), exit, None, false)
-            })
-            .collect();
+            }).collect();
         //each validator can exit in parallel to speed many sequential calls to `join`
         vals.iter().for_each(|v| v.exit());
         //while join is called sequentially, the above exit call notified all the

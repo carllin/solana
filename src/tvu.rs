@@ -45,7 +45,7 @@ use retransmit_stage::RetransmitStage;
 use service::Service;
 use signature::Keypair;
 use std::net::UdpSocket;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use window::SharedWindow;
@@ -54,6 +54,7 @@ pub struct Tvu {
     replicate_stage: ReplicateStage,
     fetch_stage: BlobFetchStage,
     retransmit_stage: RetransmitStage,
+    block: Arc<AtomicBool>,
 }
 
 impl Tvu {
@@ -70,7 +71,7 @@ impl Tvu {
     /// * `exit` - The exit signal.
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn new(
-        keypair: Keypair,
+        keypair: Arc<Keypair>,
         bank: &Arc<Bank>,
         entry_height: u64,
         crdt: Arc<RwLock<Crdt>>,
@@ -80,12 +81,15 @@ impl Tvu {
         retransmit_socket: UdpSocket,
         ledger_path: Option<&str>,
         exit: Arc<AtomicBool>,
+        block: bool,
     ) -> Self {
         let repair_socket = Arc::new(repair_socket);
         let blob_recycler = BlobRecycler::default();
+        let block = Arc::new(AtomicBool::new(block));
         let (fetch_stage, blob_fetch_receiver) = BlobFetchStage::new_multi_socket(
             vec![Arc::new(replicate_socket), repair_socket.clone()],
             exit.clone(),
+            &block,
             &blob_recycler,
         );
         //TODO
@@ -115,6 +119,18 @@ impl Tvu {
             replicate_stage,
             fetch_stage,
             retransmit_stage,
+            block,
+        }
+    }
+
+    pub fn block(&self) {
+        self.block.store(true, Ordering::Relaxed);
+    }
+
+    pub fn unblock(&self) {
+        self.block.store(false, Ordering::Relaxed);
+        for t in self.fetch_stage.ref_thread_hdls() {
+            t.thread().unpark();
         }
     }
 
@@ -208,6 +224,7 @@ pub mod tests {
         let t_receiver = streamer::blob_receiver(
             Arc::new(target2.sockets.replicate),
             exit.clone(),
+            None,
             recv_recycler.clone(),
             s_reader,
         );
@@ -234,7 +251,7 @@ pub mod tests {
         let dr_1 = new_ncp(cref1.clone(), target1.sockets.gossip, exit.clone());
 
         let tvu = Tvu::new(
-            target1_keypair,
+            Arc::new(target1_keypair),
             &bank,
             0,
             cref1,
@@ -244,6 +261,7 @@ pub mod tests {
             target1.sockets.retransmit,
             None,
             exit.clone(),
+            false,
         );
 
         let mut alice_ref_balance = starting_balance;

@@ -95,6 +95,7 @@ fn main() -> Result<()> {
         read_threads.push(receiver(
             Arc::new(read),
             exit.clone(),
+            None,
             pack_recycler.clone(),
             s_reader,
         ));

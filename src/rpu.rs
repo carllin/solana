@@ -51,6 +51,7 @@ impl Rpu {
         let t_receiver = streamer::receiver(
             Arc::new(requests_socket),
             exit,
+            None,
             packet_recycler.clone(),
             packet_sender,
         );

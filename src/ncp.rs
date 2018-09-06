@@ -35,6 +35,7 @@ impl Ncp {
         let t_receiver = streamer::blob_receiver(
             gossip_socket.clone(),
             exit.clone(),
+            None,
             blob_recycler.clone(),
             request_sender,
         );

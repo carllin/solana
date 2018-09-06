@@ -6,7 +6,7 @@ use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
-use std::thread::{Builder, JoinHandle};
+use std::thread::{park, Builder, JoinHandle};
 use std::time::Duration;
 
 pub type PacketReceiver = Receiver<SharedPackets>;
@@ -17,10 +17,16 @@ pub type BlobReceiver = Receiver<SharedBlobs>;
 fn recv_loop(
     sock: &UdpSocket,
     exit: &Arc<AtomicBool>,
+    block: &Option<Arc<AtomicBool>>,
     re: &PacketRecycler,
     channel: &PacketSender,
 ) -> Result<()> {
     loop {
+        if let Some(ref should_block) = block {
+            if should_block.load(Ordering::Relaxed) {
+                park();
+            }
+        }
         let msgs = re.allocate();
         loop {
             let result = msgs
@@ -46,6 +52,7 @@ fn recv_loop(
 pub fn receiver(
     sock: Arc<UdpSocket>,
     exit: Arc<AtomicBool>,
+    block: Option<Arc<AtomicBool>>,
     recycler: PacketRecycler,
     packet_sender: PacketSender,
 ) -> JoinHandle<()> {
@@ -56,10 +63,9 @@ pub fn receiver(
     Builder::new()
         .name("solana-receiver".to_string())
         .spawn(move || {
-            let _ = recv_loop(&sock, &exit, &recycler, &packet_sender);
+            let _ = recv_loop(&sock, &exit, &block, &recycler, &packet_sender);
             ()
-        })
-        .unwrap()
+        }).unwrap()
 }
 
 fn recv_send(sock: &UdpSocket, recycler: &BlobRecycler, r: &BlobReceiver) -> Result<()> {
@@ -104,8 +110,7 @@ pub fn responder(
                     _ => warn!("{} responder error: {:?}", name, e),
                 }
             }
-        })
-        .unwrap()
+        }).unwrap()
 }
 
 //TODO, we would need to stick block authentication before we create the
@@ -122,6 +127,7 @@ fn recv_blobs(recycler: &BlobRecycler, sock: &UdpSocket, s: &BlobSender) -> Resu
 pub fn blob_receiver(
     sock: Arc<UdpSocket>,
     exit: Arc<AtomicBool>,
+    block: Option<Arc<AtomicBool>>,
     recycler: BlobRecycler,
     s: BlobSender,
 ) -> JoinHandle<()> {
@@ -136,6 +142,13 @@ pub fn blob_receiver(
             if exit.load(Ordering::Relaxed) {
                 break;
             }
+
+            if let Some(ref should_block) = block {
+                if should_block.load(Ordering::Relaxed) {
+                    park();
+                }
+            }
+
             let _ = recv_blobs(&recycler, &sock, &s);
         })
         .unwrap()
@@ -186,6 +199,7 @@ mod test {
         let t_receiver = receiver(
             Arc::new(read),
             exit.clone(),
+            None,
             pack_recycler.clone(),
             s_reader,
         );
