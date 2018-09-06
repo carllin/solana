@@ -7,39 +7,63 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use streamer::{self, PacketReceiver};
+use streamer::{self, BooleanCondvar, PacketReceiver};
 
 pub struct FetchStage {
     exit: Arc<AtomicBool>,
     thread_hdls: Vec<JoinHandle<()>>,
+    block: Arc<BooleanCondvar>,
 }
 
 impl FetchStage {
     pub fn new(
         sockets: Vec<UdpSocket>,
         exit: Arc<AtomicBool>,
+        block: Arc<BooleanCondvar>,
         recycler: &PacketRecycler,
     ) -> (Self, PacketReceiver) {
         let tx_sockets = sockets.into_iter().map(Arc::new).collect();
-        Self::new_multi_socket(tx_sockets, exit, recycler)
+        Self::new_multi_socket(tx_sockets, exit, block, recycler)
     }
     pub fn new_multi_socket(
         sockets: Vec<Arc<UdpSocket>>,
         exit: Arc<AtomicBool>,
+        block: Arc<BooleanCondvar>,
         recycler: &PacketRecycler,
     ) -> (Self, PacketReceiver) {
         let (sender, receiver) = channel();
         let thread_hdls: Vec<_> = sockets
             .into_iter()
             .map(|socket| {
-                streamer::receiver(socket, exit.clone(), recycler.clone(), sender.clone())
-            })
-            .collect();
+                streamer::receiver(
+                    socket,
+                    exit.clone(),
+                    Some(block.clone()),
+                    recycler.clone(),
+                    sender.clone(),
+                )
+            }).collect();
 
-        (FetchStage { exit, thread_hdls }, receiver)
+        (
+            FetchStage {
+                exit,
+                thread_hdls,
+                block,
+            },
+            receiver,
+        )
+    }
+
+    pub fn block(&self) {
+        self.block.set_no_signal(true);
+    }
+
+    pub fn unblock(&self) {
+        self.block.set_signal_all(false);
     }
 
     pub fn close(&self) {
+        self.block.set_signal_all(false);
         self.exit.store(true, Ordering::Relaxed);
     }
 }

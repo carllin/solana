@@ -11,7 +11,7 @@ use packet::BlobRecycler;
 use rpc::{JsonRpcService, RPC_PORT};
 use rpu::Rpu;
 use service::Service;
-use signature::{Keypair, KeypairUtil};
+use signature::{Keypair, KeypairUtil, Pubkey};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -21,9 +21,21 @@ use tvu::Tvu;
 use untrusted::Input;
 use window;
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum NodeRole {
+    Leader,
+    Validator,
+}
+
 pub struct Fullnode {
+    pub id: Pubkey,
     exit: Arc<AtomicBool>,
     thread_hdls: Vec<JoinHandle<()>>,
+    node_role: NodeRole,
+    crdt: Arc<RwLock<Crdt>>,
+    bank: Arc<Bank>,
+    tvu: Tvu,
+    tpu: Option<Tpu>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -213,65 +225,146 @@ impl Fullnode {
             exit.clone(),
         );
         thread_hdls.extend(ncp.thread_hdls());
-
+        let node_role;
         match leader_info {
             Some(leader_info) => {
                 // Start in validator mode.
                 // TODO: let Crdt get that data from the network?
                 crdt.write().unwrap().insert(leader_info);
-                let tvu = Tvu::new(
-                    keypair,
-                    &bank,
-                    entry_height,
-                    crdt,
-                    window,
-                    node.sockets.replicate,
-                    node.sockets.repair,
-                    node.sockets.retransmit,
-                    ledger_path,
-                    exit.clone(),
-                );
-                thread_hdls.extend(tvu.thread_hdls());
+                node_role = NodeRole::Validator;
             }
             None => {
-                // Start in leader mode.
-                let ledger_path = ledger_path.expect("ledger path");
-                let tick_duration = None;
-                // TODO: To light up PoH, uncomment the following line:
-                //let tick_duration = Some(Duration::from_millis(1000));
-
-                let (tpu, blob_receiver) = Tpu::new(
-                    keypair,
-                    &bank,
-                    &crdt,
-                    tick_duration,
-                    node.sockets.transaction,
-                    &blob_recycler,
-                    exit.clone(),
-                    ledger_path,
-                    sigverify_disabled,
-                );
-                thread_hdls.extend(tpu.thread_hdls());
-
-                let broadcast_stage = BroadcastStage::new(
-                    node.sockets.broadcast,
-                    crdt,
-                    window,
-                    entry_height,
-                    blob_recycler.clone(),
-                    blob_receiver,
-                );
-                thread_hdls.extend(broadcast_stage.thread_hdls());
+                node_role = NodeRole::Leader;
             }
         }
 
-        Fullnode { exit, thread_hdls }
+        let keypair = Arc::new(keypair);
+        let tvu = Tvu::new(
+            keypair.clone(),
+            &bank,
+            entry_height,
+            crdt.clone(),
+            window.clone(),
+            node.sockets.replicate,
+            node.sockets.repair,
+            node.sockets.retransmit,
+            ledger_path,
+            exit.clone(),
+            node_role == NodeRole::Leader,
+        );
+
+        let tick_duration = None;
+        // TODO: To light up PoH, uncomment the following line:
+        //let tick_duration = Some(Duration::from_millis(1000));
+
+        let tpu_option;
+        if let Some(ledger_path) = ledger_path {
+            let (tpu, blob_receiver) = Tpu::new(
+                keypair.clone(),
+                &bank,
+                &crdt,
+                tick_duration,
+                node.sockets.transaction,
+                &blob_recycler,
+                exit.clone(),
+                ledger_path,
+                sigverify_disabled,
+                node_role == NodeRole::Validator,
+            );
+
+            let broadcast_stage = BroadcastStage::new(
+                node.sockets.broadcast,
+                crdt.clone(),
+                window,
+                entry_height,
+                blob_recycler.clone(),
+                blob_receiver,
+            );
+
+            thread_hdls.extend(broadcast_stage.thread_hdls());
+            tpu_option = Some(tpu);
+        } else {
+            tpu_option = None;
+        }
+
+        Fullnode {
+            exit,
+            thread_hdls,
+            node_role,
+            id: keypair.pubkey(),
+            crdt,
+            tpu: tpu_option,
+            tvu,
+            bank,
+        }
+    }
+
+    pub fn handle_new_leader(&mut self, new_leader_id: Pubkey) {
+        self.crdt
+            .write()
+            .unwrap()
+            .update_leader(Some(new_leader_id));
+        if self.node_role == NodeRole::Leader && new_leader_id != self.id {
+            self.transition_role(NodeRole::Validator)
+        }
+
+        if self.node_role == NodeRole::Validator && new_leader_id == self.id {
+            self.transition_role(NodeRole::Leader)
+        }
+    }
+
+    fn transition_role(&mut self, new_role: NodeRole) {
+        match (self.node_role, new_role) {
+            (NodeRole::Leader, NodeRole::Validator) => {
+                self.bank.is_leader.store(false, Ordering::Relaxed);
+                self.start_validator();
+                self.node_role = NodeRole::Validator;
+            }
+            (NodeRole::Validator, NodeRole::Leader) => {
+                // If this is a validator only node (didn't supply a ledger path), 
+                // don't transition
+                if self.tpu.is_none() {
+                    return;
+                }
+
+                self.bank.is_leader.store(true, Ordering::Relaxed);
+                self.start_leader();
+                self.node_role = NodeRole::Leader;
+            }
+            _ => {
+                panic!(format!(
+                    "Invalid role transition from {:?} to {:?}",
+                    self.node_role, new_role
+                ));
+            }
+        }
+
+        self.node_role = new_role;
+    }
+
+    fn start_leader(&self) {
+        self.tvu.block();
+        if let Some(ref tpu) = self.tpu {
+            tpu.unblock();
+        }
+    }
+
+    fn start_validator(&self) {
+        if let Some(ref tpu) = self.tpu {
+            tpu.block();
+        }
+        self.tvu.unblock();
     }
 
     //used for notifying many nodes in parallel to exit
     pub fn exit(&self) {
         self.exit.store(true, Ordering::Relaxed);
+        self.tvu.unblock();
+        if let Some(ref tpu) = self.tpu {
+            tpu.unblock();
+        }
     }
+
     pub fn close(self) -> Result<()> {
         self.exit();
         self.join()
@@ -280,13 +373,19 @@ impl Fullnode {
 
 impl Service for Fullnode {
     fn thread_hdls(self) -> Vec<JoinHandle<()>> {
-        self.thread_hdls
+        let mut threads = self.thread_hdls;
+        threads.extend(self.tvu.thread_hdls());
+        if let Some(tpu) = self.tpu {
+            threads.extend(tpu.thread_hdls());
+        }
+        threads
     }
 
     fn join(self) -> Result<()> {
         for thread_hdl in self.thread_hdls() {
             thread_hdl.join()?;
         }
+
         Ok(())
     }
 }
@@ -295,7 +394,7 @@ impl Service for Fullnode {
 mod tests {
     use bank::Bank;
     use crdt::Node;
-    use fullnode::Fullnode;
+    use fullnode::{Fullnode, NodeRole};
     use mint::Mint;
     use service::Service;
     use signature::{Keypair, KeypairUtil};

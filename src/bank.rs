@@ -18,7 +18,7 @@ use std;
 use std::collections::hash_map::Entry::Occupied;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::result;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::RwLock;
 use std::time::Instant;
 use timing::{duration_as_us, timestamp};
@@ -103,7 +103,7 @@ pub struct Bank {
 
     /// This bool allows us to submit metrics that are specific for leaders or validators
     /// It is set to `true` by fullnode before creating the bank.
-    pub is_leader: bool,
+    pub is_leader: AtomicBool,
 
     // The latest finality time for the network
     finality_time: AtomicUsize,
@@ -116,7 +116,7 @@ impl Default for Bank {
             last_ids: RwLock::new(VecDeque::new()),
             last_ids_sigs: RwLock::new(HashMap::new()),
             transaction_count: AtomicUsize::new(0),
-            is_leader: true,
+            is_leader: AtomicBool::new(true),
             finality_time: AtomicUsize::new(std::usize::MAX),
         }
     }
@@ -126,7 +126,7 @@ impl Bank {
     /// Create a default Bank
     pub fn new_default(is_leader: bool) -> Self {
         let mut bank = Bank::default();
-        bank.is_leader = is_leader;
+        bank.is_leader = AtomicBool::new(is_leader);
         bank
     }
     /// Create an Bank using a deposit.
@@ -345,7 +345,7 @@ impl Bank {
     ) -> Result<Vec<Account>> {
         // Copy all the accounts
         if accounts.get(&tx.keys[0]).is_none() {
-            if !self.is_leader {
+            if !self.is_leader.load(Ordering::Relaxed) {
                 error_counters.account_not_found_validator += 1;
             } else {
                 error_counters.account_not_found_leader += 1;
@@ -473,7 +473,7 @@ impl Bank {
         }
         if err_count > 0 {
             info!("{} errors of {} txs", err_count, err_count + tx_count);
-            if !self.is_leader {
+            if !self.is_leader.load(Ordering::Relaxed) {
                 inc_new_counter_info!("bank-process_transactions_err-validator", err_count);
                 inc_new_counter_info!(
                     "bank-appy_debits-account_not_found-validator",
@@ -1205,11 +1205,11 @@ mod tests {
     #[test]
     fn test_new_default() {
         let def_bank = Bank::default();
-        assert!(def_bank.is_leader);
+        assert!(def_bank.is_leader.load(Ordering::Relaxed));
         let leader_bank = Bank::new_default(true);
-        assert!(leader_bank.is_leader);
+        assert!(leader_bank.is_leader.load(Ordering::Relaxed));
         let validator_bank = Bank::new_default(false);
-        assert!(!validator_bank.is_leader);
+        assert!(!validator_bank.is_leader.load(Ordering::Relaxed));
     }
     #[test]
     fn test_hash_internal_state() {

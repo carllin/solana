@@ -39,7 +39,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use streamer::BlobReceiver;
+use streamer::{BlobReceiver, BooleanCondvar};
 use write_stage::WriteStage;
 
 pub struct Tpu {
@@ -51,8 +51,9 @@ pub struct Tpu {
 }
 
 impl Tpu {
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn new(
-        keypair: Keypair,
+        keypair: Arc<Keypair>,
         bank: &Arc<Bank>,
         crdt: &Arc<RwLock<Crdt>>,
         tick_duration: Option<Duration>,
@@ -61,11 +62,13 @@ impl Tpu {
         exit: Arc<AtomicBool>,
         ledger_path: &str,
         sigverify_disabled: bool,
+        block: bool,
     ) -> (Self, BlobReceiver) {
+        let block = Arc::new(BooleanCondvar::new(block));
         let packet_recycler = PacketRecycler::default();
 
         let (fetch_stage, packet_receiver) =
-            FetchStage::new(transactions_sockets, exit, &packet_recycler);
+            FetchStage::new(transactions_sockets, exit, block, &packet_recycler);
 
         let (sigverify_stage, verified_receiver) =
             SigVerifyStage::new(packet_receiver, sigverify_disabled);
@@ -97,6 +100,14 @@ impl Tpu {
             write_stage,
         };
         (tpu, blob_receiver)
+    }
+
+    pub fn block(&self) {
+        self.fetch_stage.block();
+    }
+
+    pub fn unblock(&self) {
+        self.fetch_stage.unblock();
     }
 
     pub fn close(self) -> thread::Result<()> {

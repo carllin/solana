@@ -750,8 +750,8 @@ impl Crdt {
 
     /// TODO: This is obviously the wrong way to do this. Need to implement leader selection
     /// A t-shirt for the first person to actually use this bad behavior to attack the alpha testnet
-    fn update_leader(&mut self) {
-        if let Some(leader_id) = self.top_leader() {
+      pub fn update_leader(&mut self, maybe_leader_id: Option<Pubkey>) {
+        if let Some(leader_id) = maybe_leader_id {
             if self.my_data().leader_id != leader_id && self.table.get(&leader_id).is_some() {
                 self.set_leader(leader_id);
             }
@@ -825,7 +825,7 @@ impl Crdt {
                 obj.write().unwrap().purge(timestamp());
                 //TODO: possibly tune this parameter
                 //we saw a deadlock passing an obj.read().unwrap().timeout into sleep
-                obj.write().unwrap().update_leader();
+                //obj.write().unwrap().update_leader();
                 let elapsed = timestamp() - start;
                 if GOSSIP_SLEEP_MILLIS > elapsed {
                     let time_left = GOSSIP_SLEEP_MILLIS - elapsed;
@@ -1835,10 +1835,12 @@ mod tests {
             crdt.insert(&dum);
         }
         assert_eq!(crdt.top_leader().unwrap(), leader1.id);
-        crdt.update_leader();
+        let mut maybe_leader_id = crdt.top_leader();
+        crdt.update_leader(maybe_leader_id);
         assert_eq!(crdt.my_data().leader_id, leader0.id);
         crdt.insert(&leader1);
-        crdt.update_leader();
+        maybe_leader_id = crdt.top_leader();
+        crdt.update_leader(maybe_leader_id);;
         assert_eq!(crdt.my_data().leader_id, leader1.id);
     }
 

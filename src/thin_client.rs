@@ -162,8 +162,7 @@ impl ThinClient {
                 .add_field(
                     "duration_ms",
                     influxdb::Value::Integer(timing::duration_as_ms(&now.elapsed()) as i64),
-                )
-                .to_owned(),
+                ).to_owned(),
         );
         result
     }
@@ -284,8 +283,7 @@ impl ThinClient {
                 .add_field(
                     "duration_ms",
                     influxdb::Value::Integer(timing::duration_as_ms(elapsed) as i64),
-                )
-                .to_owned(),
+                ).to_owned(),
         );
     }
 
@@ -358,8 +356,7 @@ impl ThinClient {
                 .add_field(
                     "duration_ms",
                     influxdb::Value::Integer(timing::duration_as_ms(&now.elapsed()) as i64),
-                )
-                .to_owned(),
+                ).to_owned(),
         );
         self.signature_status
     }
@@ -536,8 +533,7 @@ mod tests {
         client.poll_for_signature(&signature).unwrap();
         let balance = client.get_balance(&bob_pubkey);
         assert_eq!(balance.unwrap(), 500);
-        exit.store(true, Ordering::Relaxed);
-        server.join().unwrap();
+        server.close().unwrap();
         remove_dir_all(ledger_path).unwrap();
     }
 
@@ -649,8 +645,7 @@ mod tests {
 
         assert!(client.check_signature(&signature));
 
-        exit.store(true, Ordering::Relaxed);
-        server.join().unwrap();
+        server.close().unwrap();
         remove_dir_all(ledger_path).unwrap();
     }
 
@@ -726,8 +721,7 @@ mod tests {
         let balance = client.poll_get_balance(&bob_keypair.pubkey());
         assert!(balance.is_err());
 
-        exit.store(true, Ordering::Relaxed);
-        server.join().unwrap();
+        server.close().unwrap();
         remove_dir_all(ledger_path).unwrap();
     }
 }

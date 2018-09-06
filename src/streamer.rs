@@ -5,7 +5,7 @@ use result::{Error, Result};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 
@@ -14,9 +14,42 @@ pub type PacketSender = Sender<SharedPackets>;
 pub type BlobSender = Sender<SharedBlobs>;
 pub type BlobReceiver = Receiver<SharedBlobs>;
 
+pub struct BooleanCondvar {
+    pub cond: Condvar,
+    pub guard: Mutex<bool>,
+}
+
+impl BooleanCondvar {
+    pub fn new(flag: bool) -> Self {
+        let cond = Condvar::new();
+        let guard = Mutex::new(flag);
+        BooleanCondvar { cond, guard }
+    }
+
+    pub fn cond_wait(&self, condition: bool) {
+        let mut flag = self.guard.lock().unwrap();
+        // Check for spurious wakeups
+        while *flag != condition {
+            flag = self.cond.wait(flag).unwrap();
+        }
+    }
+
+    pub fn set_no_signal(&self, new_flag: bool) {
+        let mut flag = self.guard.lock().unwrap();
+        *flag = new_flag;
+    }
+
+    pub fn set_signal_all(&self, new_flag: bool) {
+        let mut flag = self.guard.lock().unwrap();
+        *flag = new_flag;
+        self.cond.notify_all();
+    }
+}
+
 fn recv_loop(
     sock: &UdpSocket,
     exit: &Arc<AtomicBool>,
+    block: &Option<Arc<BooleanCondvar>>,
     re: &PacketRecycler,
     channel: &PacketSender,
 ) -> Result<()> {
@@ -33,6 +66,10 @@ fn recv_loop(
                     break;
                 }
                 Err(_) => {
+                    if let Some(ref block_cond) = block {
+                        block_cond.cond_wait(false);
+                    }
+
                     if exit.load(Ordering::Relaxed) {
                         re.recycle(msgs, "recv_loop");
                         return Ok(());
@@ -46,6 +83,7 @@ fn recv_loop(
 pub fn receiver(
     sock: Arc<UdpSocket>,
     exit: Arc<AtomicBool>,
+    block: Option<Arc<BooleanCondvar>>,
     recycler: PacketRecycler,
     packet_sender: PacketSender,
 ) -> JoinHandle<()> {
@@ -56,10 +94,9 @@ pub fn receiver(
     Builder::new()
         .name("solana-receiver".to_string())
         .spawn(move || {
-            let _ = recv_loop(&sock, &exit, &recycler, &packet_sender);
+            let _ = recv_loop(&sock, &exit, &block, &recycler, &packet_sender);
             ()
-        })
-        .unwrap()
+        }).unwrap()
 }
 
 fn recv_send(sock: &UdpSocket, recycler: &BlobRecycler, r: &BlobReceiver) -> Result<()> {
@@ -104,8 +141,7 @@ pub fn responder(
                     _ => warn!("{} responder error: {:?}", name, e),
                 }
             }
-        })
-        .unwrap()
+        }).unwrap()
 }
 
 //TODO, we would need to stick block authentication before we create the
@@ -122,6 +158,7 @@ fn recv_blobs(recycler: &BlobRecycler, sock: &UdpSocket, s: &BlobSender) -> Resu
 pub fn blob_receiver(
     sock: Arc<UdpSocket>,
     exit: Arc<AtomicBool>,
+    block: Option<Arc<BooleanCondvar>>,
     recycler: BlobRecycler,
     s: BlobSender,
 ) -> JoinHandle<()> {
@@ -133,12 +170,16 @@ pub fn blob_receiver(
     Builder::new()
         .name("solana-blob_receiver".to_string())
         .spawn(move || loop {
+            if let Some(ref block_cond) = block {
+                block_cond.cond_wait(false);
+            }
+
             if exit.load(Ordering::Relaxed) {
                 break;
             }
+
             let _ = recv_blobs(&recycler, &sock, &s);
-        })
-        .unwrap()
+        }).unwrap()
 }
 
 #[cfg(test)]
@@ -186,6 +227,7 @@ mod test {
         let t_receiver = receiver(
             Arc::new(read),
             exit.clone(),
+            None,
             pack_recycler.clone(),
             s_reader,
         );
