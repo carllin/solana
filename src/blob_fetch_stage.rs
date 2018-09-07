@@ -41,7 +41,8 @@ impl BlobFetchStage {
                     recycler.clone(),
                     sender.clone(),
                 )
-            }).collect();
+            })
+            .collect();
 
         (
             BlobFetchStage {

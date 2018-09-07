@@ -8,7 +8,7 @@ extern crate utilities;
 
 use solana::crdt::{Crdt, Node, NodeInfo};
 use solana::entry::Entry;
-use solana::fullnode::{Fullnode};
+use solana::fullnode::Fullnode;
 use solana::hash::Hash;
 use solana::ledger::LedgerWriter;
 use solana::logger;
@@ -710,7 +710,13 @@ fn test_multi_transition_exit() {
     let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let mut new_leader_info = leader_info.info.clone();
     let leader_data = leader_info.info.clone();
-    let leader_node = Fullnode::new(leader_info, &leader_ledger_path, leader_keypair, None, false);
+    let leader_node = Fullnode::new(
+        leader_info,
+        &leader_ledger_path,
+        leader_keypair,
+        None,
+        false,
+    );
 
     // Send leader some tokens to vote
     send_tx_and_retry_get_balance(&leader_data, &mint, &leader_pubkey, None).unwrap();
@@ -739,12 +745,12 @@ fn test_multi_transition_exit() {
     // Wait for all the nodes to discover each other through gossip
     let servers = converge(&leader_data, N + 1);
 
-    // Demote the leader to a validator, promote a validator. 
+    // Demote the leader to a validator, promote a validator.
     // Tell all the other validators about the new leader
     for node in nodes.iter_mut() {
         node.handle_new_leader(new_leader_info.id);
     }
-    
+
     assert_eq!(servers.len(), N + 1);
 
     for node in nodes {
@@ -775,10 +781,16 @@ fn test_role_transitions() {
     let leader_keypair = Keypair::new();
     let leader_pubkey = leader_keypair.pubkey().clone();
     let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
- 
+
     let mut new_leader_info = leader_info.info.clone();
     let leader_data = leader_info.info.clone();
-    let leader_node = Fullnode::new(leader_info, &leader_ledger_path, leader_keypair, None, false);
+    let leader_node = Fullnode::new(
+        leader_info,
+        &leader_ledger_path,
+        leader_keypair,
+        None,
+        false,
+    );
 
     // Send leader some tokens to vote
     let leader_balance =
@@ -811,7 +823,7 @@ fn test_role_transitions() {
 
     assert_eq!(servers.len(), N + 1);
 
-    // Demote the leader to a validator, promote a validator. 
+    // Demote the leader to a validator, promote a validator.
     // Tell all the other validators about the new leader
     for node in nodes.iter_mut() {
         node.handle_new_leader(new_leader_info.id);

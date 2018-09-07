@@ -364,7 +364,7 @@ impl Fullnode {
             tpu.unblock();
         }
     }
-    
+
     pub fn close(self) -> Result<()> {
         self.exit();
         self.join()
@@ -393,6 +393,7 @@ impl Service for Fullnode {
 #[cfg(test)]
 mod tests {
     extern crate utilities;
+    use self::utilities::node_test_helpers::genesis;
     use bank::Bank;
     use crdt::Node;
     use fullnode::{Fullnode, NodeRole};
@@ -401,7 +402,6 @@ mod tests {
     use signature::{Keypair, KeypairUtil};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
-    use self::utilities::node_test_helpers::genesis;
 
     #[test]
     fn validator_exit() {
@@ -449,7 +449,13 @@ mod tests {
         // Start the leader node
         let leader_keypair = Keypair::new();
         let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
-        let mut leader_node = Fullnode::new(leader_info, &leader_ledger_path, leader_keypair, None, false);
+        let mut leader_node = Fullnode::new(
+            leader_info,
+            &leader_ledger_path,
+            leader_keypair,
+            None,
+            false,
+        );
 
         // Demote the leader to a validator, promote back to leader, then test exit
         leader_node.transition_role(NodeRole::Validator);

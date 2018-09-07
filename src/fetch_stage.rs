@@ -42,7 +42,8 @@ impl FetchStage {
                     recycler.clone(),
                     sender.clone(),
                 )
-            }).collect();
+            })
+            .collect();
 
         (
             FetchStage {

@@ -72,7 +72,8 @@ fn clear_window_slots(
             }
             window[i].clear_data(recycler);
             Some(pix)
-        }).collect()
+        })
+        .collect()
 }
 
 fn calculate_highest_lost_blob_index(num_peers: u64, consumed: u64, received: u64) -> u64 {
@@ -168,8 +169,7 @@ fn add_block_to_retransmit_queue(
         leader_id
     );
     if p.get_id()
-        .expect("get_id in fn add_block_to_retransmit_queue")
-        == leader_id
+        .expect("get_id in fn add_block_to_retransmit_queue") == leader_id
     {
         //TODO
         //need to copy the retransmitted blob
@@ -492,7 +492,8 @@ pub fn print_window(window: &Window, id: &Pubkey, consumed: u64) -> String {
             } else {
                 " "
             }
-        }).collect();
+        })
+        .collect();
 
     let buf: Vec<_> = window
         .iter()
@@ -508,7 +509,8 @@ pub fn print_window(window: &Window, id: &Pubkey, consumed: u64) -> String {
                 // data.is_none()
                 "c"
             }
-        }).collect();
+        })
+        .collect();
     format!(
         "\n{}: WINDOW ({}): {}\n{}: WINDOW ({}): {}",
         id,
@@ -668,7 +670,8 @@ pub fn window_service(
                     });
                 }
             }
-        }).unwrap()
+        })
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -1058,7 +1061,8 @@ mod test {
                         let rv = repair_backoff(&mut last, &mut times, 1) as usize;
                         assert_eq!(times, x + 2);
                         rv
-                    }).sum();
+                    })
+                    .sum();
                 assert_eq!(times, 128);
                 assert_eq!(last, 1);
                 repair_backoff(&mut last, &mut times, 1);
@@ -1067,7 +1071,8 @@ mod test {
                 assert_eq!(times, 2);
                 assert_eq!(last, 2);
                 total
-            }).sum();
+            })
+            .sum();
         let avg = res / num_tests;
         assert!(avg >= 3);
         assert!(avg <= 5);
