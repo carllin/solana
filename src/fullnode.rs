@@ -392,6 +392,7 @@ impl Service for Fullnode {
 
 #[cfg(test)]
 mod tests {
+    extern crate utilities;
     use bank::Bank;
     use crdt::Node;
     use fullnode::{Fullnode, NodeRole};
@@ -400,6 +401,7 @@ mod tests {
     use signature::{Keypair, KeypairUtil};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use self::utilities::node_test_helpers::genesis;
 
     #[test]
     fn validator_exit() {
@@ -433,5 +435,25 @@ mod tests {
         vals.into_iter().for_each(|v| {
             v.join().unwrap();
         });
+    }
+
+    #[test]
+    fn test_transition_exit() {
+        // Make a mint and a genesis entry in the leader ledger
+        let (_, leader_ledger_path) = genesis("test_transition_exit", 10_000);
+
+        // Initialize the leader ledger
+        let mut ledger_paths = Vec::new();
+        ledger_paths.push(leader_ledger_path.clone());
+
+        // Start the leader node
+        let leader_keypair = Keypair::new();
+        let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
+        let mut leader_node = Fullnode::new(leader_info, &leader_ledger_path, leader_keypair, None, false);
+
+        // Demote the leader to a validator, promote back to leader, then test exit
+        leader_node.transition_role(NodeRole::Validator);
+        leader_node.transition_role(NodeRole::Leader);
+        leader_node.close().unwrap();
     }
 }

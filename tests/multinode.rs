@@ -4,6 +4,7 @@ extern crate bincode;
 extern crate chrono;
 extern crate serde_json;
 extern crate solana;
+extern crate utilities;
 
 use solana::crdt::{Crdt, Node, NodeInfo};
 use solana::entry::Entry;
@@ -28,6 +29,7 @@ use std::sync::{Arc, RwLock};
 use std::thread::sleep;
 use std::thread::Builder;
 use std::time::{Duration, Instant};
+use utilities::node_test_helpers::{genesis, tmp_ledger_path};
 
 fn converge(leader: &NodeInfo, num_nodes: usize) -> Vec<NodeInfo> {
     //lets spy on the network
@@ -68,23 +70,6 @@ fn converge(leader: &NodeInfo, num_nodes: usize) -> Vec<NodeInfo> {
     assert!(converged);
     ncp.close().unwrap();
     rv
-}
-
-fn tmp_ledger_path(name: &str) -> String {
-    let keypair = Keypair::new();
-
-    format!("/tmp/tmp-ledger-{}-{}", name, keypair.pubkey())
-}
-
-fn genesis(name: &str, num: i64) -> (Mint, String) {
-    let mint = Mint::new(num);
-
-    let path = tmp_ledger_path(name);
-    let mut writer = LedgerWriter::open(&path, true).unwrap();
-
-    writer.write_entries(mint.create_entries()).unwrap();
-
-    (mint, path)
 }
 
 fn tmp_copy_ledger(from: &str, name: &str) -> String {
@@ -701,6 +686,155 @@ fn test_multi_node_dynamic_network() {
     }
     server.join().unwrap();
 
+    for path in ledger_paths {
+        remove_dir_all(path).unwrap();
+    }
+}
+
+#[test]
+fn test_multi_transition_exit() {
+    // Number of nodes to test with
+    const N: usize = 3;
+    assert!(N >= 2);
+
+    // Make a mint and a genesis entry in the leader ledger
+    let (mint, leader_ledger_path) = genesis("test_multi_transition_exit", 10_000);
+
+    // Initialize the leader ledger
+    let mut ledger_paths = Vec::new();
+    ledger_paths.push(leader_ledger_path.clone());
+
+    // Start the leader node
+    let leader_keypair = Keypair::new();
+    let leader_pubkey = leader_keypair.pubkey().clone();
+    let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
+    let mut new_leader_info = leader_info.info.clone();
+    let leader_data = leader_info.info.clone();
+    let leader_node = Fullnode::new(leader_info, &leader_ledger_path, leader_keypair, None, false);
+
+    // Send leader some tokens to vote
+    let leader_balance =
+        send_tx_and_retry_get_balance(&leader_data, &mint, &leader_pubkey, None).unwrap();
+    info!("leader balance {}", leader_balance);
+
+    let mut nodes = vec![leader_node];
+    // Make N nodes that will be the validators
+    for i in 0..N {
+        let keypair = Keypair::new();
+        let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
+        if i == 1 {
+            // Save one validator to promote later
+            new_leader_info = validator.info.clone();
+        }
+        let ledger_path = tmp_copy_ledger(&leader_ledger_path, "test_multi_transition_exit");
+        ledger_paths.push(ledger_path.clone());
+        let val = Fullnode::new(
+            validator,
+            &ledger_path,
+            keypair,
+            Some(leader_data.contact_info.ncp),
+            false,
+        );
+        nodes.push(val);
+    }
+
+    // Wait for all the nodes to discover each other through gossip
+    let servers = converge(&leader_data, N + 1);
+
+    assert_eq!(servers.len(), N + 1);
+
+    // Demote the leader to a validator, promote a validator. 
+    // Tell all the other validators about the new leader
+    for node in nodes.iter_mut() {
+        node.handle_new_leader(new_leader_info.id);
+    }
+
+    for node in nodes {
+        node.close().unwrap();
+    }
+}
+
+#[test]
+fn test_role_transitions() {
+    // Number of nodes to test with
+    const N: usize = 5;
+    assert!(N >= 2);
+    // Make a dummy address to be the sink for this test's mock transactions
+    let bob_pubkey = Keypair::new().pubkey();
+
+    // Make a mint and a genesis entry in the leader ledger
+    let (mint, leader_ledger_path) = genesis("test_role_transitions", 10_000);
+
+    // Initialize the leader ledger
+    let mut ledger_paths = Vec::new();
+    ledger_paths.push(leader_ledger_path.clone());
+
+    // Start the leader node
+    let leader_keypair = Keypair::new();
+    let leader_pubkey = leader_keypair.pubkey().clone();
+    let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
+    let mut new_leader_info = leader_info.info.clone();
+    let leader_data = leader_info.info.clone();
+    let leader_node = Fullnode::new(leader_info, &leader_ledger_path, leader_keypair, None, false);
+
+    // Send leader some tokens to vote
+    let leader_balance =
+        send_tx_and_retry_get_balance(&leader_data, &mint, &leader_pubkey, None).unwrap();
+    info!("leader balance {}", leader_balance);
+
+    let mut nodes = vec![leader_node];
+    // Make N nodes that will be the validators
+    for i in 0..N {
+        let keypair = Keypair::new();
+        let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
+        if i == 1 {
+            // Save one validator to promote later
+            new_leader_info = validator.info.clone();
+        }
+        let ledger_path = tmp_copy_ledger(&leader_ledger_path, "test_role_transitions");
+        ledger_paths.push(ledger_path.clone());
+        let val = Fullnode::new(
+            validator,
+            &ledger_path,
+            keypair,
+            Some(leader_data.contact_info.ncp),
+            false,
+        );
+        nodes.push(val);
+    }
+
+    // Wait for all the nodes to discover each other through gossip
+    let servers = converge(&leader_data, N + 1);
+
+    assert_eq!(servers.len(), N + 1);
+
+    // Demote the leader to a validator, promote a validator. 
+    // Tell all the other validators about the new leader
+    for node in nodes.iter_mut() {
+        node.handle_new_leader(new_leader_info.id);
+    }
+
+    // Verify leader can do transfer
+    let leader_balance =
+        send_tx_and_retry_get_balance(&new_leader_info, &mint, &bob_pubkey, None).unwrap();
+    assert_eq!(leader_balance, 500);
+
+    // Verify validator has the same balance
+    let mut success = 0usize;
+    for server in servers.iter() {
+        let mut client = mk_client(server);
+        if let Ok(bal) = client.poll_get_balance(&bob_pubkey) {
+            trace!("validator balance {}", bal);
+            if bal == leader_balance {
+                success += 1;
+            }
+        }
+    }
+    assert_eq!(success, servers.len());
+
+    for node in nodes {
+        node.close().unwrap();
+    }
     for path in ledger_paths {
         remove_dir_all(path).unwrap();
     }

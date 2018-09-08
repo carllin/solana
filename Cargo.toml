@@ -98,6 +98,9 @@ tokio = "0.1"
 tokio-codec = "0.1"
 untrusted = "0.6.2"
 
+[dev-dependencies]
+utilities = { path = "utilities" }
+
 [[bench]]
 name = "bank"
 
