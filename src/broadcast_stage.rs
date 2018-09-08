@@ -155,7 +155,9 @@ impl BroadcastStage {
                 &mut receive_index,
             ) {
                 match e {
-                    Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
+                    Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
+                        break;
+                    }
                     Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
                     Error::CrdtError(CrdtError::NoPeers) => (), // TODO: Why are the unit-tests throwing hundreds of these?
                     _ => {

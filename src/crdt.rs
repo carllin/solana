@@ -1840,7 +1840,11 @@ mod tests {
         assert_eq!(crdt.my_data().leader_id, leader0.id);
         crdt.insert(&leader1);
         maybe_leader_id = crdt.top_leader();
+<<<<<<< HEAD
         crdt.update_leader(maybe_leader_id);;
+=======
+        crdt.update_leader(maybe_leader_id);
+>>>>>>> 43541ab... Adjust fullnode to modify crdt during leader rotation, update tests
         assert_eq!(crdt.my_data().leader_id, leader1.id);
     }
 

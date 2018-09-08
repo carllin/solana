@@ -364,7 +364,7 @@ impl Fullnode {
             tpu.unblock();
         }
     }
-
+    
     pub fn close(self) -> Result<()> {
         self.exit();
         self.join()

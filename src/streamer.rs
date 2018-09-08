@@ -31,6 +31,8 @@ impl BooleanCondvar {
         // Check for spurious wakeups
         while *flag != condition {
             flag = self.cond.wait(flag).unwrap();
+            // When we wake up, we have the mutex again, so we can safely decrement
+            // the num_blocked count
         }
     }
 
@@ -56,6 +58,15 @@ fn recv_loop(
     loop {
         let msgs = re.allocate();
         loop {
+            if let Some(ref block_cond) = block {
+                block_cond.cond_wait(false);
+            }
+
+            if exit.load(Ordering::Relaxed) {
+                re.recycle(msgs, "recv_loop");
+                return Ok(());
+            }
+            
             let result = msgs
                 .write()
                 .expect("write lock in fn recv_loop")
@@ -65,16 +76,7 @@ fn recv_loop(
                     channel.send(msgs)?;
                     break;
                 }
-                Err(_) => {
-                    if let Some(ref block_cond) = block {
-                        block_cond.cond_wait(false);
-                    }
-
-                    if exit.load(Ordering::Relaxed) {
-                        re.recycle(msgs, "recv_loop");
-                        return Ok(());
-                    }
-                }
+                Err(_) => {}
             }
         }
     }

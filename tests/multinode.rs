@@ -8,7 +8,7 @@ extern crate utilities;
 
 use solana::crdt::{Crdt, Node, NodeInfo};
 use solana::entry::Entry;
-use solana::fullnode::Fullnode;
+use solana::fullnode::{Fullnode};
 use solana::hash::Hash;
 use solana::ledger::LedgerWriter;
 use solana::logger;
@@ -713,9 +713,7 @@ fn test_multi_transition_exit() {
     let leader_node = Fullnode::new(leader_info, &leader_ledger_path, leader_keypair, None, false);
 
     // Send leader some tokens to vote
-    let leader_balance =
-        send_tx_and_retry_get_balance(&leader_data, &mint, &leader_pubkey, None).unwrap();
-    info!("leader balance {}", leader_balance);
+    send_tx_and_retry_get_balance(&leader_data, &mint, &leader_pubkey, None).unwrap();
 
     let mut nodes = vec![leader_node];
     // Make N nodes that will be the validators
@@ -741,16 +739,20 @@ fn test_multi_transition_exit() {
     // Wait for all the nodes to discover each other through gossip
     let servers = converge(&leader_data, N + 1);
 
-    assert_eq!(servers.len(), N + 1);
-
     // Demote the leader to a validator, promote a validator. 
     // Tell all the other validators about the new leader
     for node in nodes.iter_mut() {
         node.handle_new_leader(new_leader_info.id);
     }
+    
+    assert_eq!(servers.len(), N + 1);
 
     for node in nodes {
         node.close().unwrap();
+    }
+
+    for path in ledger_paths {
+        remove_dir_all(path).unwrap();
     }
 }
 
@@ -773,6 +775,7 @@ fn test_role_transitions() {
     let leader_keypair = Keypair::new();
     let leader_pubkey = leader_keypair.pubkey().clone();
     let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
+ 
     let mut new_leader_info = leader_info.info.clone();
     let leader_data = leader_info.info.clone();
     let leader_node = Fullnode::new(leader_info, &leader_ledger_path, leader_keypair, None, false);
@@ -813,7 +816,6 @@ fn test_role_transitions() {
     for node in nodes.iter_mut() {
         node.handle_new_leader(new_leader_info.id);
     }
-
     // Verify leader can do transfer
     let leader_balance =
         send_tx_and_retry_get_balance(&new_leader_info, &mint, &bob_pubkey, None).unwrap();
@@ -824,7 +826,6 @@ fn test_role_transitions() {
     for server in servers.iter() {
         let mut client = mk_client(server);
         if let Ok(bal) = client.poll_get_balance(&bob_pubkey) {
-            trace!("validator balance {}", bal);
             if bal == leader_balance {
                 success += 1;
             }
