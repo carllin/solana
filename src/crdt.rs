@@ -25,8 +25,9 @@ use rayon::prelude::*;
 use result::{Error, Result};
 use signature::{Keypair, KeypairUtil, Pubkey};
 use std;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::ops::Bound::{Included, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::{sleep, Builder, JoinHandle};
@@ -43,6 +44,9 @@ const GOSSIP_PURGE_MILLIS: u64 = 15000;
 
 /// minimum membership table size before we start purging dead nodes
 const MIN_TABLE_SIZE: usize = 2;
+
+// maximum number of entries in the leader schedule
+const MAX_LEADER_SCHEDULE_SIZE: usize = 10;
 
 #[macro_export]
 macro_rules! socketaddr {
@@ -176,6 +180,41 @@ impl NodeInfo {
     }
 }
 
+pub struct LeaderScheduleEntry {
+    // Entry height at which leader_id the leader
+    pub entry_height: u64,
+    pub leader_id: Pubkey,
+}
+
+impl LeaderScheduleEntry {
+    fn new(entry_height: u64, leader_id: Pubkey) -> Self {
+        LeaderScheduleEntry {
+            entry_height: entry_height,
+            leader_id: leader_id,
+        }
+    }
+}
+
+impl PartialOrd for LeaderScheduleEntry {
+    fn partial_cmp(&self, other: &LeaderScheduleEntry) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for LeaderScheduleEntry {
+    fn eq(&self, other: &LeaderScheduleEntry) -> bool {
+        self.entry_height == other.entry_height
+    }
+}
+
+impl Ord for LeaderScheduleEntry {
+    fn cmp(&self, other: &LeaderScheduleEntry) -> std::cmp::Ordering {
+        self.entry_height.cmp(&other.entry_height)
+    }
+}
+
+impl Eq for LeaderScheduleEntry {}
+
 /// `Crdt` structure keeps a table of `NodeInfo` structs
 /// # Properties
 /// * `table` - map of public id's to versioned and signed NodeInfo structs
@@ -205,6 +244,8 @@ pub struct Crdt {
     /// last time we heard from anyone getting a message fro this public key
     /// these are rumers and shouldn't be trusted directly
     external_liveness: HashMap<Pubkey, HashMap<Pubkey, u64>>,
+    /// Schedule of PoH entries at which leader rotation will occur
+    leader_schedule: BTreeSet<LeaderScheduleEntry>
 }
 // TODO These messages should be signed, and go through the gpu pipeline for spam filtering
 #[derive(Serialize, Deserialize, Debug)]
@@ -235,6 +276,7 @@ impl Crdt {
             external_liveness: HashMap::new(),
             id: node_info.id,
             update_index: 1,
+            leader_schedule: BTreeSet::new(),
         };
         me.local.insert(node_info.id, me.update_index);
         me.table.insert(node_info.id, node_info);
@@ -573,7 +615,7 @@ impl Crdt {
                 }
             })
             .collect();
-        trace!("retransmit orders {}", orders.len());
+        println!("Node: {} retransmit orders {}", me.id, orders.len());
         let errs: Vec<_> = orders
             .par_iter()
             .map(|v| {
@@ -756,6 +798,33 @@ impl Crdt {
                 self.set_leader(leader_id);
             }
         }
+    }
+
+    pub fn insert_leader_schedule(&mut self, schedule_entry: LeaderScheduleEntry) {
+        // If the immediately preceding entry is for the same leader id,
+        // then there's no need to insert this one
+        if let Some(se) = self.find_scheduled_leader(schedule_entry.entry_height)
+        {
+            if se.leader_id == schedule_entry.leader_id {
+                return;
+            }
+        }
+
+        if self.leader_schedule.insert(schedule_entry) {
+            if self.leader_schedule.len() > MAX_LEADER_SCHEDULE_SIZE {
+                // Pop off the minimum element
+                self.leader_schedule.remove(self.leader_schedule.iter().next().unwrap());
+            }
+        }
+    }
+
+    pub fn find_scheduled_leader(&self, entry_height: u64) -> Option<&LeaderScheduleEntry> {
+        // Find the range of all scheduled transition points from the earliest up to
+        // and including the input entry_height. We use an inclusive range b/c the 
+        // LeaderScheduleEntry.entry_height is when the next leader "starts".
+        let mut before = self.leader_schedule.range((Unbounded, Included(entry_height)));
+        // Take the last item in this range
+        before.next_back()
     }
 
     /// Apply updates that we received from the identity `from`
@@ -1840,11 +1909,7 @@ mod tests {
         assert_eq!(crdt.my_data().leader_id, leader0.id);
         crdt.insert(&leader1);
         maybe_leader_id = crdt.top_leader();
-<<<<<<< HEAD
-        crdt.update_leader(maybe_leader_id);;
-=======
         crdt.update_leader(maybe_leader_id);
->>>>>>> 43541ab... Adjust fullnode to modify crdt during leader rotation, update tests
         assert_eq!(crdt.my_data().leader_id, leader1.id);
     }
 

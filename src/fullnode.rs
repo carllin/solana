@@ -461,5 +461,8 @@ mod tests {
         leader_node.transition_role(NodeRole::Validator);
         leader_node.transition_role(NodeRole::Leader);
         leader_node.close().unwrap();
+        for path in ledger_paths {
+            remove_dir_all(path).unwrap();
+        }
     }
 }
