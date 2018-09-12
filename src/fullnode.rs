@@ -297,6 +297,7 @@ pub fn new_with_bank(
                     exit.clone(),
                     ledger_path,
                     sigverify_disabled,
+                    entry_height,
                 );
 
                 let broadcast_stage = BroadcastStage::new(

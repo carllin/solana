@@ -61,6 +61,7 @@ impl Tpu {
         exit: Arc<AtomicBool>,
         ledger_path: &str,
         sigverify_disabled: bool,
+        entry_height: u64,
     ) -> (Self, BlobReceiver) {
         let mut packet_recycler = PacketRecycler::default();
         packet_recycler.set_name("tpu::Packet");
@@ -88,6 +89,7 @@ impl Tpu {
             blob_recycler.clone(),
             ledger_path,
             entry_receiver,
+            entry_height,
         );
 
         let tpu = Tpu {
