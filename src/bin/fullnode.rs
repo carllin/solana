@@ -11,7 +11,7 @@ use clap::{App, Arg};
 use solana::client::mk_client;
 use solana::crdt::Node;
 use solana::drone::DRONE_PORT;
-use solana::fullnode::{Config, Fullnode};
+use solana::fullnode::{Config, Fullnode, NodeRole};
 use solana::logger;
 use solana::metrics::set_panic_hook;
 use solana::service::Service;
@@ -124,5 +124,18 @@ fn main() -> () {
         }
     }
 
-    fullnode.join().expect("to never happen");
+    /*loop {
+        match fullnode.node_role {
+            NodeRole::Leader(leader_services) => {
+                // TODO: return an exit code that signals we should do a role switch
+                leader_services.join();
+                //fullnode.start_tvu();
+            },
+            NodeRole::Validator(validator_services) => {
+                validator_services.join();
+            }
+        }
+    }*/
+
+    let _ = fullnode.join();
 }

@@ -14,16 +14,13 @@ use service::Service;
 use signature::Keypair;
 use std::cmp;
 use std::net::UdpSocket;
-use std::process::exit;
 use std::sync::atomic::AtomicUsize;
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{channel, Receiver, Sender, RecvTimeoutError};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 use streamer::{responder, BlobReceiver, BlobSender};
 use vote_stage::send_leader_vote;
-
-const LEADER_SWITCH_EXIT_CODE: i32 = 3;
 
 pub struct WriteStage {
     thread_hdls: Vec<JoinHandle<()>>,
@@ -41,21 +38,6 @@ impl WriteStage {
         entry_receiver: &Receiver<Vec<Entry>>,
         entry_height: &mut u64,
     ) -> Result<()> {
-        // Note that entry height is not zero indexed, it starts at 1, so the
-        // old leader is in power up to and including entry height
-        // n * LEADER_ROTATION_INTERVAL, so once we've forwarded that last block,
-        // check for the next leader. 
-        if *entry_height % (LEADER_ROTATION_INTERVAL as u64) == 0 {
-            let rcrdt = crdt.read().unwrap();
-            let my_id = rcrdt.my_data().id;
-            match rcrdt.get_scheduled_leader(*entry_height) {
-                Some(id) if id == my_id => {}
-            // If the leader stays in power for the next 
-            // round as well, then we don't exit. Otherwise, exit.
-                _ => exit(LEADER_SWITCH_EXIT_CODE),
-            }
-        }
-
         let mut entries = entry_receiver.recv_timeout(Duration::new(1, 0))?;
 
         // Find out how many more entries we can squeeze in. Note if the leader stays in power 
@@ -108,7 +90,7 @@ impl WriteStage {
         ledger_path: &str,
         entry_receiver: Receiver<Vec<Entry>>,
         entry_height: u64,
-    ) -> (Self, BlobReceiver) {
+    ) -> (Self, BlobReceiver, Sender<bool>) {
         let (vote_blob_sender, vote_blob_receiver) = channel();
         let send = UdpSocket::bind("0.0.0.0:0").expect("bind");
         let t_responder = responder(
@@ -118,6 +100,7 @@ impl WriteStage {
             vote_blob_receiver,
         );
         let (blob_sender, blob_receiver) = channel();
+        let (exit_sender, exit_receiver) = channel();
         let mut ledger_writer = LedgerWriter::recover(ledger_path).unwrap();
 
         let thread_hdl = Builder::new()
@@ -128,6 +111,29 @@ impl WriteStage {
                 let id = crdt.read().unwrap().id;
                 let mut entry_height = entry_height;
                 loop {
+                    // Note that entry height is not zero indexed, it starts at 1, so the
+                    // old leader is in power up to and including entry height
+                    // n * LEADER_ROTATION_INTERVAL, so once we've forwarded that last block,
+                    // check for the next leader. If we happen to exit due to leader rotation
+                    // before the send_leader_vote() below, the next leader will have to 
+                    // take care of voting
+                    if entry_height % (LEADER_ROTATION_INTERVAL as u64) == 0 {
+                        let rcrdt = crdt.read().unwrap();
+                        let my_id = rcrdt.my_data().id;
+                        let a = rcrdt.get_scheduled_leader(entry_height);
+                        match a {
+                            Some(id) if id == my_id => (),
+                            // If the leader stays in power for the next 
+                            // round as well, then we don't exit. Otherwise, exit.
+                            _ => {
+                                // Make sure broadcast stage has received the last blob sent
+                                // before we exit and shut down the channel
+                                let _ = exit_receiver.recv();
+                                return;
+                            }
+                        }
+                    }
+
                     if let Err(e) = Self::write_and_send_entries(
                         &crdt,
                         &bank,
@@ -138,7 +144,9 @@ impl WriteStage {
                         &mut entry_height,
                     ) {
                         match e {
-                            Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
+                            Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
+                                break;
+                            }
                             Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
                             _ => {
                                 inc_new_counter_info!(
@@ -166,7 +174,7 @@ impl WriteStage {
             }).unwrap();
 
         let thread_hdls = vec![t_responder, thread_hdl];
-        (WriteStage { thread_hdls }, blob_receiver)
+        (WriteStage { thread_hdls }, blob_receiver, exit_sender)
     }
 }
 
@@ -178,5 +186,156 @@ impl Service for WriteStage {
             thread_hdl.join()?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bank::Bank;
+    use crdt::{Crdt, LEADER_ROTATION_INTERVAL, Node};
+    use entry::Entry;
+    use ledger::{genesis, read_ledger};
+    use packet::BlobRecycler;
+    use recorder::Recorder;
+    use service::Service;
+    use signature::{Keypair, KeypairUtil, Pubkey};
+    use std::fs::remove_dir_all;
+    use std::sync::{Arc, RwLock};
+    use std::sync::mpsc::{channel, Sender};
+    use std::thread::sleep;
+    use std::time::Duration;
+    use write_stage::WriteStage;
+
+    fn process_ledger(ledger_path: &str, bank: &Bank) -> (u64, Vec<Entry>)
+    {
+        let entries = read_ledger(ledger_path, true).expect("opening ledger");
+
+        let entries = entries
+            .map(|e| e.unwrap_or_else(|err| panic!("failed to parse entry. error: {}", err)));
+
+        info!("processing ledger...");
+        bank.process_ledger(entries).expect("process_ledger")
+    }
+
+    fn setup_dummy_write_stage() -> 
+        (Pubkey, WriteStage, Sender<bool>, Sender<Vec<Entry>>, Arc<RwLock<Crdt>>, Arc<Bank>, String, Vec<Entry>) 
+    {
+        // Setup leader info
+        let leader_keypair = Keypair::new();
+        let id = leader_keypair.pubkey();
+        let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
+
+        let crdt = Arc::new(RwLock::new(Crdt::new(leader_info.info).expect("Crdt::new")));
+        let bank = Bank::new_default(true);
+        let bank = Arc::new(bank);
+        let blob_recycler = BlobRecycler::default();
+
+        // Make a ledger
+        let (_, leader_ledger_path) = genesis("test_leader_rotation_exit", 10_000);
+
+        let (entry_height, ledger_tail) = process_ledger(&leader_ledger_path, &bank);
+
+        // Make a dummy pipe
+        let (entry_sender, entry_receiver) = channel();
+
+        // Start up the write stage
+        let (write_stage, _, exit_sender) = WriteStage::new(
+            leader_keypair,
+            bank.clone(),
+            crdt.clone(),
+            blob_recycler,
+            &leader_ledger_path,
+            entry_receiver,
+            entry_height,
+        );
+
+        (
+            id,
+            write_stage,
+            exit_sender,
+            entry_sender,
+            crdt,
+            bank,
+            leader_ledger_path,
+            ledger_tail,
+        )
+    }
+
+    #[test]
+    fn test_write_stage_leader_rotation_exit() {
+        let (
+            id,
+            write_stage, 
+            exit_sender,
+            entry_sender,
+            crdt,
+            bank,
+            leader_ledger_path,
+            ledger_tail
+        ) = setup_dummy_write_stage();
+
+        crdt.write().unwrap().set_scheduled_leader(
+            LEADER_ROTATION_INTERVAL,
+            id,
+        );
+
+        let last_entry_hash = 
+            ledger_tail.last().expect("Ledger should not be empty").id;
+
+        let genesis_entry_height = ledger_tail.len() as u64;
+
+        // Input enough entries to make exactly LEADER_ROTATION_INTERVAL entries, which will
+        // trigger a check for leader rotation. Because the next scheduled leader
+        // is ourselves, we won't exit
+        let mut recorder = Recorder::new(last_entry_hash);
+        let mut new_entries = vec![];
+        for _ in genesis_entry_height..LEADER_ROTATION_INTERVAL {
+            let new_entry = recorder.record(vec![]);
+            new_entries.extend(new_entry);
+        }
+
+        entry_sender.send(new_entries).unwrap();
+
+        // Wait until at least LEADER_ROTATION_INTERVAL have been written to the ledger
+        loop {
+            sleep(Duration::from_secs(1));
+            let (current_entry_height, _) = 
+                process_ledger(&leader_ledger_path, &bank);
+            
+            if current_entry_height == LEADER_ROTATION_INTERVAL {
+                break;
+            }
+        }
+
+        // Set the scheduled next leader in the crdt with to some other node
+        let leader2_keypair = Keypair::new();
+        let leader2_info = Node::new_localhost_with_pubkey(leader2_keypair.pubkey());
+    
+        {
+            let mut wcrdt = crdt.write().unwrap();
+            wcrdt.insert(&leader2_info.info);
+            wcrdt.set_scheduled_leader(
+                2 * LEADER_ROTATION_INTERVAL,
+                leader2_keypair.pubkey(),
+            );
+        }
+
+        // Input another LEADER_ROTATION_INTERVAL dummy entries one at a time,
+        // which will take us past the point of the leader rotation.
+        // The write_stage will see that it's no longer the leader after
+        // checking the crdt, and exit
+        for _ in 0..LEADER_ROTATION_INTERVAL {
+            let new_entry = recorder.record(vec![]);
+            entry_sender.send(new_entry).unwrap();
+        }
+
+        // Make sure the threads closed cleanly
+        exit_sender.send(true).unwrap();
+        write_stage.join().unwrap();
+
+        // Make sure the ledger contains exactly LEADER_ROTATION_INTERVAL entries
+        let (entry_height, _) = process_ledger(&leader_ledger_path, &bank);
+        remove_dir_all(leader_ledger_path).unwrap();
+        assert_eq!(entry_height, 2 * LEADER_ROTATION_INTERVAL);
     }
 }

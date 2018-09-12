@@ -37,7 +37,7 @@ use transaction::Vote;
 use window::{SharedWindow, WindowIndex};
 
 pub const FULLNODE_PORT_RANGE: (u16, u16) = (8000, 10_000);
-pub const LEADER_ROTATION_INTERVAL: u64 = 1000;
+pub const LEADER_ROTATION_INTERVAL: u64 = 100;
 
 /// milliseconds we sleep for between gossip requests
 const GOSSIP_SLEEP_MILLIS: u64 = 100;
@@ -306,6 +306,17 @@ impl Crdt {
         } else {
             Some(self.leader_data().unwrap().id)
         }
+    }
+
+    // TODO: For now this is a dummy method that sets the scheduled leader
+    // starting at a given entry_height
+    pub fn set_scheduled_leader(
+        &mut self,
+        _entry_height: u64,
+        new_leader_id: Pubkey
+    ) -> ()
+    {
+        self.set_leader(new_leader_id);
     }
 
     pub fn get_external_liveness_entry(&self, key: &Pubkey) -> Option<&HashMap<Pubkey, u64>> {

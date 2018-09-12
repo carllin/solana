@@ -36,6 +36,7 @@ use signature::Keypair;
 use sigverify_stage::SigVerifyStage;
 use std::net::UdpSocket;
 use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -62,7 +63,7 @@ impl Tpu {
         ledger_path: &str,
         sigverify_disabled: bool,
         entry_height: u64,
-    ) -> (Self, BlobReceiver) {
+    ) -> (Self, BlobReceiver, Sender<bool>) {
         let mut packet_recycler = PacketRecycler::default();
         packet_recycler.set_name("tpu::Packet");
 
@@ -82,7 +83,7 @@ impl Tpu {
             None => RecordStage::new(signal_receiver, &bank.last_id()),
         };
 
-        let (write_stage, blob_receiver) = WriteStage::new(
+        let (write_stage, blob_receiver, exit_sender) = WriteStage::new(
             keypair,
             bank.clone(),
             crdt.clone(),
@@ -99,7 +100,7 @@ impl Tpu {
             record_stage,
             write_stage,
         };
-        (tpu, blob_receiver)
+        (tpu, blob_receiver, exit_sender)
     }
 
     pub fn close(self) -> thread::Result<()> {

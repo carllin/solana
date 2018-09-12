@@ -39,7 +39,7 @@ impl LeaderServices {
         }
     }
 
-    fn join(self) -> Result<()> {
+    pub fn join(self) -> Result<()> {
         self.tpu.join()?;
         self.broadcast_stage.join()
     }
@@ -54,7 +54,7 @@ impl ValidatorServices {
         ValidatorServices { tvu }
     }
 
-    fn join(self) -> Result<()> {
+    pub fn join(self) -> Result<()> {
         self.tvu.join()
     }
 }
@@ -68,7 +68,7 @@ pub struct Fullnode {
     rpu: Rpu,
     rpc_service: JsonRpcService,
     ncp: Ncp,
-    pub node_role: NodeRole,
+    pub node_role: Option<NodeRole>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -140,9 +140,9 @@ impl Fullnode {
         match leader_addr {
             Some(leader_addr) => {
                 info!(
-                "validator ready... local request address: {} (advertising {}) connected to: {}",
-                local_requests_addr, requests_addr, leader_addr
-            );
+                    "validator ready... local request address: {} (advertising {}) connected to: {}",
+                    local_requests_addr, requests_addr, leader_addr
+                );
             }
             None => {
                 info!(
@@ -278,7 +278,7 @@ pub fn new_with_bank(
                     exit.clone(),
                 );
                 let validator_state = ValidatorServices::new(tvu);
-                node_role = NodeRole::Validator(validator_state);
+                node_role = Some(NodeRole::Validator(validator_state));
             }
             None => {
                 // Start in leader mode.
@@ -287,7 +287,7 @@ pub fn new_with_bank(
                 // TODO: To light up PoH, uncomment the following line:
                 //let tick_duration = Some(Duration::from_millis(1000));
 
-                let (tpu, blob_receiver) = Tpu::new(
+                let (tpu, blob_receiver, exit_sender) = Tpu::new(
                     keypair,
                     &bank,
                     &crdt,
@@ -307,9 +307,10 @@ pub fn new_with_bank(
                     entry_height,
                     blob_recycler.clone(),
                     blob_receiver,
+                    exit_sender,
                 );
                 let leader_state = LeaderServices::new(tpu, broadcast_stage);
-                node_role = NodeRole::Leader(leader_state);
+                node_role = Some(NodeRole::Leader(leader_state));
             }
         }
 
@@ -340,13 +341,15 @@ impl Service for Fullnode {
         self.rpu.join()?;
         self.ncp.join()?;
         self.rpc_service.join()?;
+
         match self.node_role {
-            NodeRole::Validator(validator_service) => {
+            Some(NodeRole::Validator(validator_service)) => {
                 validator_service.join()?;
-            }
-            NodeRole::Leader(leader_service) => {
+            },
+            Some(NodeRole::Leader(leader_service)) => {
                 leader_service.join()?;
-            }
+            },
+            _ => (),
         }
 
         // TODO: Case on join values above to determine if
@@ -360,10 +363,12 @@ impl Service for Fullnode {
 mod tests {
     use bank::Bank;
     use crdt::Node;
-    use fullnode::Fullnode;
+    use fullnode::{Fullnode, NodeRole};
+    use ledger::genesis;
     use mint::Mint;
     use service::Service;
     use signature::{Keypair, KeypairUtil};
+    use std::fs::remove_dir_all;
 
     #[test]
     fn validator_exit() {
@@ -393,5 +398,40 @@ mod tests {
         vals.into_iter().for_each(|v| {
             v.join().unwrap();
         });
+    }
+
+    #[test]
+    #[ignore]
+    fn test_leader_transition_exit() {
+        // Make a mint and a genesis entry in the leader ledger
+        let (_, leader_ledger_path) = genesis("test_leader_transition_exit", 10_000);
+         // Start the leader node
+        let leader_keypair = Keypair::new();
+        let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
+        let mut leader_node = Fullnode::new(
+            leader_info,
+            &leader_ledger_path,
+            leader_keypair,
+            None,
+            false,
+        );
+
+        // Set the leader to somebody else
+
+        // Make a bunch of transactions until we trigger leader rotation
+
+        // Check to make sure the node exited cleanly
+        let node_role = leader_node.node_role.take();
+
+        if let NodeRole::Leader(leader_services) = node_role.unwrap() {
+            //TODO: assert that the reason for exit is equal to leader rotation
+            let _ = leader_services.join();
+        } else {
+            panic!("Expected node to be leader");
+        }
+
+        // Clean up the rest of the service
+        leader_node.close().unwrap();
+        remove_dir_all(leader_ledger_path).unwrap();
     }
 }
