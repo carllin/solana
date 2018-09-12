@@ -192,6 +192,7 @@ impl Service for BroadcastStage {
     type JoinReturnType = ();
 
     fn join(self) -> thread::Result<()> {
-        self.thread_hdl.join()
+        self.thread_hdl.join()?;
+        Ok(())
     }
 }
