@@ -22,8 +22,15 @@ use std::time::Duration;
 use streamer::{responder, BlobReceiver, BlobSender};
 use vote_stage::send_leader_vote;
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum WriteStageReturnType {
+    LeaderRotation,
+    ChannelDisconnected,
+}
+
 pub struct WriteStage {
     thread_hdls: Vec<JoinHandle<()>>,
+    write_thread: JoinHandle<WriteStageReturnType>,
 }
 
 impl WriteStage {
@@ -103,7 +110,7 @@ impl WriteStage {
         let (exit_sender, exit_receiver) = channel();
         let mut ledger_writer = LedgerWriter::recover(ledger_path).unwrap();
 
-        let thread_hdl = Builder::new()
+        let write_thread = Builder::new()
             .name("solana-writer".to_string())
             .spawn(move || {
                 let mut last_vote = 0;
@@ -129,7 +136,7 @@ impl WriteStage {
                                 // Make sure broadcast stage has received the last blob sent
                                 // before we exit and shut down the channel
                                 let _ = exit_receiver.recv();
-                                return;
+                                return WriteStageReturnType::LeaderRotation;
                             }
                         }
                     }
@@ -145,7 +152,7 @@ impl WriteStage {
                     ) {
                         match e {
                             Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
-                                break;
+                                return WriteStageReturnType::ChannelDisconnected;
                             }
                             Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
                             _ => {
@@ -173,19 +180,27 @@ impl WriteStage {
                 }
             }).unwrap();
 
-        let thread_hdls = vec![t_responder, thread_hdl];
-        (WriteStage { thread_hdls }, blob_receiver, exit_sender)
+        let thread_hdls = vec![t_responder];
+        (
+            WriteStage {
+                write_thread,
+                thread_hdls,
+            },
+            blob_receiver,
+            exit_sender,
+        )
     }
 }
 
 impl Service for WriteStage {
-    type JoinReturnType = ();
+    type JoinReturnType = WriteStageReturnType;
 
-    fn join(self) -> thread::Result<()> {
+    fn join(self) -> thread::Result<WriteStageReturnType> {
         for thread_hdl in self.thread_hdls {
             thread_hdl.join()?;
         }
-        Ok(())
+
+        self.write_thread.join()
     }
 }
 
@@ -204,7 +219,7 @@ mod tests {
     use std::sync::{Arc, RwLock};
     use std::thread::sleep;
     use std::time::Duration;
-    use write_stage::WriteStage;
+    use write_stage::{WriteStage, WriteStageReturnType};
 
     fn process_ledger(ledger_path: &str, bank: &Bank) -> (u64, Vec<Entry>) {
         let entries = read_ledger(ledger_path, true).expect("opening ledger");
@@ -292,13 +307,10 @@ mod tests {
         // trigger a check for leader rotation. Because the next scheduled leader
         // is ourselves, we won't exit
         let mut recorder = Recorder::new(last_entry_hash);
-        let mut new_entries = vec![];
         for _ in genesis_entry_height..LEADER_ROTATION_INTERVAL {
             let new_entry = recorder.record(vec![]);
-            new_entries.extend(new_entry);
+            entry_sender.send(new_entry).unwrap();
         }
-
-        entry_sender.send(new_entries).unwrap();
 
         // Wait until at least LEADER_ROTATION_INTERVAL have been written to the ledger
         loop {
@@ -310,7 +322,7 @@ mod tests {
             }
         }
 
-        // Set the scheduled next leader in the crdt with to some other node
+        // Set the scheduled next leader in the crdt to some other node
         let leader2_keypair = Keypair::new();
         let leader2_info = Node::new_localhost_with_pubkey(leader2_keypair.pubkey());
 
@@ -331,7 +343,10 @@ mod tests {
 
         // Make sure the threads closed cleanly
         exit_sender.send(true).unwrap();
-        write_stage.join().unwrap();
+        assert_eq!(
+            write_stage.join().unwrap(),
+            WriteStageReturnType::LeaderRotation
+        );
 
         // Make sure the ledger contains exactly LEADER_ROTATION_INTERVAL entries
         let (entry_height, _) = process_ledger(&leader_ledger_path, &bank);

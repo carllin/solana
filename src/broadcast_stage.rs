@@ -17,6 +17,12 @@ use std::time::Duration;
 use streamer::BlobReceiver;
 use window::{self, SharedWindow, WindowIndex, WindowUtil, WINDOW_SIZE};
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum BroadcastStageReturnType {
+    LeaderRotation,
+    ChannelDisconnected,
+}
+
 fn broadcast(
     node_info: &NodeInfo,
     broadcast_table: &[NodeInfo],
@@ -118,7 +124,7 @@ fn broadcast(
 }
 
 pub struct BroadcastStage {
-    thread_hdl: JoinHandle<()>,
+    thread_hdl: JoinHandle<BroadcastStageReturnType>,
 }
 
 impl BroadcastStage {
@@ -130,7 +136,7 @@ impl BroadcastStage {
         recycler: &BlobRecycler,
         receiver: &BlobReceiver,
         exit_sender: Sender<bool>,
-    ) {
+    ) -> BroadcastStageReturnType {
         let mut transmit_index = WindowIndex {
             data: entry_height,
             coding: entry_height,
@@ -147,7 +153,7 @@ impl BroadcastStage {
                     // round as well, then we don't exit. Otherwise, exit.
                     _ => {
                         let _ = exit_sender.send(true);
-                        return;
+                        return BroadcastStageReturnType::LeaderRotation;
                     }
                 }
             }
@@ -164,7 +170,9 @@ impl BroadcastStage {
                 &mut receive_index,
             ) {
                 match e {
-                    Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
+                    Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
+                        return BroadcastStageReturnType::ChannelDisconnected
+                    }
                     Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
                     Error::CrdtError(CrdtError::NoPeers) => (), // TODO: Why are the unit-tests throwing hundreds of these?
                     _ => {
@@ -205,7 +213,7 @@ impl BroadcastStage {
                     &recycler,
                     &receiver,
                     exit_sender,
-                );
+                )
             })
             .unwrap();
 
@@ -214,20 +222,18 @@ impl BroadcastStage {
 }
 
 impl Service for BroadcastStage {
-    type JoinReturnType = ();
+    type JoinReturnType = BroadcastStageReturnType;
 
-    fn join(self) -> thread::Result<()> {
-        self.thread_hdl.join()?;
-        Ok(())
+    fn join(self) -> thread::Result<BroadcastStageReturnType> {
+        self.thread_hdl.join()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use broadcast_stage::BroadcastStage;
+    use broadcast_stage::{BroadcastStage, BroadcastStageReturnType};
     use crdt::{Crdt, Node, LEADER_ROTATION_INTERVAL};
     use entry::Entry;
-    use hash::Hash;
     use ledger::Block;
     use mint::Mint;
     use packet::BlobRecycler;
@@ -385,8 +391,13 @@ mod tests {
 
         let highest_index = find_highest_window_index(&shared_window);
 
+        // TODO: 2 * LEADER_ROTATION_INTERVAL - 1 due to the same bug in
+        // index_blobs() as mentioned above
         assert_eq!(highest_index, 2 * LEADER_ROTATION_INTERVAL - 1);
         // Make sure the threads closed cleanly
-        broadcast_stage.join().unwrap();
+        assert_eq!(
+            broadcast_stage.join().unwrap(),
+            BroadcastStageReturnType::LeaderRotation
+        );
     }
 }

@@ -41,7 +41,11 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 use streamer::BlobReceiver;
-use write_stage::WriteStage;
+use write_stage::{WriteStage, WriteStageReturnType};
+
+pub enum TpuReturnType {
+    LeaderRotation,
+}
 
 pub struct Tpu {
     fetch_stage: FetchStage,
@@ -103,22 +107,23 @@ impl Tpu {
         (tpu, blob_receiver, exit_sender)
     }
 
-    pub fn close(self) -> thread::Result<()> {
+    pub fn close(self) -> thread::Result<Option<TpuReturnType>> {
         self.fetch_stage.close();
         self.join()
     }
 }
 
 impl Service for Tpu {
-    type JoinReturnType = ();
+    type JoinReturnType = Option<TpuReturnType>;
 
-    fn join(self) -> thread::Result<()> {
+    fn join(self) -> thread::Result<(Option<TpuReturnType>)> {
         self.fetch_stage.join()?;
         self.sigverify_stage.join()?;
         self.banking_stage.join()?;
         self.record_stage.join()?;
-        self.write_stage.join()?;
-
-        Ok(())
+        match self.write_stage.join()? {
+            WriteStageReturnType::LeaderRotation => Ok(Some(TpuReturnType::LeaderRotation)),
+            _ => Ok(None),
+        }
     }
 }
