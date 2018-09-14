@@ -471,7 +471,7 @@ mod tests {
             &[],
             leader,
             None,
-            Some(&ledger_path),
+            &ledger_path,
             false,
         );
         sleep(Duration::from_millis(900));
@@ -516,7 +516,7 @@ mod tests {
             &[],
             leader,
             None,
-            Some(&ledger_path),
+            &ledger_path,
             false,
         );
         //TODO: remove this sleep, or add a retry so CI is stable
@@ -575,7 +575,7 @@ mod tests {
             &[],
             leader,
             None,
-            Some(&ledger_path),
+            &ledger_path,
             false,
         );
         sleep(Duration::from_millis(300));
@@ -635,7 +635,7 @@ mod tests {
             &[],
             leader,
             None,
-            Some(&ledger_path),
+            &ledger_path,
             false,
         );
         sleep(Duration::from_millis(900));

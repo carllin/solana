@@ -359,7 +359,7 @@ mod tests {
         loop {
             sleep(Duration::from_secs(1));
             let index = find_highest_window_index(&shared_window);
-            // The window is one behind the entry height b/c the window 
+            // The window is one behind the entry height b/c the window
             // index is zero indexed, while the entry height starts at one.
             if index == LEADER_ROTATION_INTERVAL - 1 {
                 break;
