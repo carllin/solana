@@ -9,8 +9,8 @@ use packet::BlobRecycler;
 use result::{Error, Result};
 use service::Service;
 use std::net::UdpSocket;
-use std::sync::atomic::AtomicUsize;
-use std::sync::mpsc::{RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
@@ -123,6 +123,24 @@ fn broadcast(
     Ok(())
 }
 
+// Implement a destructor for the BroadcastStage thread to signal it exited
+// even on panics
+struct Finalizer {
+    exit_sender: Arc<AtomicBool>,
+}
+
+impl Finalizer {
+    fn new(exit_sender: Arc<AtomicBool>) -> Self {
+        Finalizer { exit_sender }
+    }
+}
+// Implement a destructor for Finalizer.
+impl Drop for Finalizer {
+    fn drop(&mut self) {
+        self.exit_sender.clone().store(true, Ordering::Relaxed);
+    }
+}
+
 pub struct BroadcastStage {
     thread_hdl: JoinHandle<BroadcastStageReturnType>,
 }
@@ -135,7 +153,6 @@ impl BroadcastStage {
         entry_height: u64,
         recycler: &BlobRecycler,
         receiver: &BlobReceiver,
-        exit_sender: Sender<bool>,
     ) -> BroadcastStageReturnType {
         let mut transmit_index = WindowIndex {
             data: entry_height,
@@ -147,12 +164,12 @@ impl BroadcastStage {
             if transmit_index.data % (LEADER_ROTATION_INTERVAL as u64) == 0 {
                 let rcrdt = crdt.read().unwrap();
                 let my_id = rcrdt.my_data().id;
-                match rcrdt.get_scheduled_leader(entry_height) {
+                let scheduled_leader = rcrdt.get_scheduled_leader(entry_height);
+                match scheduled_leader {
                     Some(id) if id == my_id => (),
                     // If the leader stays in power for the next
                     // round as well, then we don't exit. Otherwise, exit.
                     _ => {
-                        let _ = exit_sender.send(true);
                         return BroadcastStageReturnType::LeaderRotation;
                     }
                 }
@@ -193,6 +210,13 @@ impl BroadcastStage {
     /// * `window` - Cache of blobs that we have broadcast
     /// * `recycler` - Blob recycler.
     /// * `receiver` - Receive channel for blobs to be retransmitted to all the layer 1 nodes.
+    /// * `exit_sender` - Set to true when this stage exits, allows rest of Tpu to exit cleanly. Otherwise,
+    /// when a Tpu stage closes, it only closes the stages that come after it. The stages
+    /// that come before could be blocked on a receive, and never notice that they need to
+    /// exit. Now, if any stage of the Tpu closes, it will lead to closing the WriteStage (b/c
+    /// WriteStage is the last stage in the pipeline), which will then close Broadcast stage,
+    /// which will then close FetchStage in the Tpu, and then the rest of the Tpu,
+    /// completing the cycle.
     pub fn new(
         sock: UdpSocket,
         crdt: Arc<RwLock<Crdt>>,
@@ -200,24 +224,17 @@ impl BroadcastStage {
         entry_height: u64,
         recycler: BlobRecycler,
         receiver: BlobReceiver,
-        exit_sender: Sender<bool>,
+        exit_sender: Arc<AtomicBool>,
     ) -> Self {
         let thread_hdl = Builder::new()
             .name("solana-broadcaster".to_string())
             .spawn(move || {
-                Self::run(
-                    &sock,
-                    &crdt,
-                    &window,
-                    entry_height,
-                    &recycler,
-                    &receiver,
-                    exit_sender,
-                )
+                let _exit = Finalizer::new(exit_sender);
+                Self::run(&sock, &crdt, &window, entry_height, &recycler, &receiver)
             })
             .unwrap();
 
-        BroadcastStage { thread_hdl }
+        (BroadcastStage { thread_hdl })
     }
 }
 
@@ -241,6 +258,7 @@ mod tests {
     use service::Service;
     use signature::{Keypair, KeypairUtil, Pubkey};
     use std::cmp;
+    use std::sync::atomic::AtomicBool;
     use std::sync::mpsc::{channel, Receiver};
     use std::sync::{Arc, RwLock};
     use std::thread::sleep;
@@ -257,7 +275,6 @@ mod tests {
         BlobRecycler,
         Arc<RwLock<Crdt>>,
         Vec<Entry>,
-        Receiver<bool>,
     ) {
         // Setup dummy leader info
         let leader_keypair = Keypair::new();
@@ -287,8 +304,7 @@ mod tests {
         let shared_window = Arc::new(RwLock::new(window));
 
         let (blob_sender, blob_receiver) = channel();
-        let (exit_sender, exit_receiver) = channel();
-
+        let exit_sender = Arc::new(AtomicBool::new(false));
         // Start up the broadcast stage
         let broadcast_stage = BroadcastStage::new(
             leader_info.sockets.broadcast,
@@ -309,7 +325,6 @@ mod tests {
             blob_recycler,
             crdt,
             entries,
-            exit_receiver,
         )
     }
 
@@ -335,7 +350,6 @@ mod tests {
             blob_recycler,
             crdt,
             entries,
-            exit_receiver,
         ) = setup_dummy_broadcast_stage();
 
         crdt.write()
@@ -384,20 +398,13 @@ mod tests {
             };
         }
 
-        match exit_receiver.recv() {
-            Ok(x) if x == false => panic!("Unexpected value on exit channel for Broadcast stage"),
-            _ => (),
-        }
-
-        let highest_index = find_highest_window_index(&shared_window);
-
-        // TODO: 2 * LEADER_ROTATION_INTERVAL - 1 due to the same bug in
-        // index_blobs() as mentioned above
-        assert_eq!(highest_index, 2 * LEADER_ROTATION_INTERVAL - 1);
         // Make sure the threads closed cleanly
         assert_eq!(
             broadcast_stage.join().unwrap(),
             BroadcastStageReturnType::LeaderRotation
         );
+
+        let highest_index = find_highest_window_index(&shared_window);
+        assert_eq!(highest_index, 2 * LEADER_ROTATION_INTERVAL - 1);
     }
 }

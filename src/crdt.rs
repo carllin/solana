@@ -37,7 +37,10 @@ use transaction::Vote;
 use window::{SharedWindow, WindowIndex};
 
 pub const FULLNODE_PORT_RANGE: (u16, u16) = (8000, 10_000);
-pub const LEADER_ROTATION_INTERVAL: u64 = 100;
+#[cfg(not(test))]
+pub const LEADER_ROTATION_INTERVAL: u64 = 10;
+#[cfg(test)]
+pub const LEADER_ROTATION_INTERVAL: u64 = 1000;
 
 /// milliseconds we sleep for between gossip requests
 const GOSSIP_SLEEP_MILLIS: u64 = 100;
@@ -207,6 +210,7 @@ pub struct Crdt {
     /// last time we heard from anyone getting a message fro this public key
     /// these are rumers and shouldn't be trusted directly
     external_liveness: HashMap<Pubkey, HashMap<Pubkey, u64>>,
+    pub scheduled_leader: Option<Pubkey>,
 }
 // TODO These messages should be signed, and go through the gpu pipeline for spam filtering
 #[derive(Serialize, Deserialize, Debug)]
@@ -237,6 +241,7 @@ impl Crdt {
             external_liveness: HashMap::new(),
             id: node_info.id,
             update_index: 1,
+            scheduled_leader: Some(node_info.leader_id),
         };
         me.local.insert(node_info.id, me.update_index);
         me.table.insert(node_info.id, node_info);
@@ -301,17 +306,13 @@ impl Crdt {
 
     // TODO: Dummy leader scheduler, need to implement actual leader scheduling.
     pub fn get_scheduled_leader(&self, _entry_height: u64) -> Option<Pubkey> {
-        if self.leader_data().is_none() {
-            None
-        } else {
-            Some(self.leader_data().unwrap().id)
-        }
+        self.scheduled_leader
     }
 
     // Method to set the schedule for leader rotation
     // TODO: For now this is a dummy method that immediately sets the leader
     pub fn set_scheduled_leader(&mut self, _entry_height: u64, new_leader_id: Pubkey) -> () {
-        self.set_leader(new_leader_id);
+        self.scheduled_leader = Some(new_leader_id);
     }
 
     pub fn get_external_liveness_entry(&self, key: &Pubkey) -> Option<&HashMap<Pubkey, u64>> {

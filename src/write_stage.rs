@@ -15,7 +15,7 @@ use signature::Keypair;
 use std::cmp;
 use std::net::UdpSocket;
 use std::sync::atomic::AtomicUsize;
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
@@ -97,7 +97,7 @@ impl WriteStage {
         ledger_path: &str,
         entry_receiver: Receiver<Vec<Entry>>,
         entry_height: u64,
-    ) -> (Self, BlobReceiver, Sender<bool>) {
+    ) -> (Self, BlobReceiver) {
         let (vote_blob_sender, vote_blob_receiver) = channel();
         let send = UdpSocket::bind("0.0.0.0:0").expect("bind");
         let t_responder = responder(
@@ -107,7 +107,6 @@ impl WriteStage {
             vote_blob_receiver,
         );
         let (blob_sender, blob_receiver) = channel();
-        let (exit_sender, exit_receiver) = channel();
         let mut ledger_writer = LedgerWriter::recover(ledger_path).unwrap();
 
         let write_thread = Builder::new()
@@ -127,15 +126,16 @@ impl WriteStage {
                     if entry_height % (LEADER_ROTATION_INTERVAL as u64) == 0 {
                         let rcrdt = crdt.read().unwrap();
                         let my_id = rcrdt.my_data().id;
-                        let a = rcrdt.get_scheduled_leader(entry_height);
-                        match a {
+                        let scheduled_leader = rcrdt.get_scheduled_leader(entry_height);
+                        drop(rcrdt);
+                        match scheduled_leader {
                             Some(id) if id == my_id => (),
                             // If the leader stays in power for the next
                             // round as well, then we don't exit. Otherwise, exit.
                             _ => {
-                                // Make sure broadcast stage has received the last blob sent
-                                // before we exit and shut down the channel
-                                let _ = exit_receiver.recv();
+                                // When the broadcast stage has received the last blob, it
+                                // will signal to close the fetch stage, which will in turn
+                                // close down this write stage
                                 return WriteStageReturnType::LeaderRotation;
                             }
                         }
@@ -187,7 +187,6 @@ impl WriteStage {
                 thread_hdls,
             },
             blob_receiver,
-            exit_sender,
         )
     }
 }
@@ -215,6 +214,7 @@ mod tests {
     use service::Service;
     use signature::{Keypair, KeypairUtil, Pubkey};
     use std::fs::remove_dir_all;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{channel, Sender};
     use std::sync::{Arc, RwLock};
     use std::thread::sleep;
@@ -234,7 +234,7 @@ mod tests {
     fn setup_dummy_write_stage() -> (
         Pubkey,
         WriteStage,
-        Sender<bool>,
+        Arc<AtomicBool>,
         Sender<Vec<Entry>>,
         Arc<RwLock<Crdt>>,
         Arc<Bank>,
@@ -260,7 +260,7 @@ mod tests {
         let (entry_sender, entry_receiver) = channel();
 
         // Start up the write stage
-        let (write_stage, _, exit_sender) = WriteStage::new(
+        let (write_stage, _) = WriteStage::new(
             leader_keypair,
             bank.clone(),
             crdt.clone(),
@@ -270,6 +270,7 @@ mod tests {
             entry_height,
         );
 
+        let exit_sender = Arc::new(AtomicBool::new(false));
         (
             id,
             write_stage,
@@ -342,7 +343,7 @@ mod tests {
         }
 
         // Make sure the threads closed cleanly
-        exit_sender.send(true).unwrap();
+        exit_sender.store(true, Ordering::Relaxed);
         assert_eq!(
             write_stage.join().unwrap(),
             WriteStageReturnType::LeaderRotation
