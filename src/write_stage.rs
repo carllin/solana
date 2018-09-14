@@ -15,7 +15,7 @@ use signature::Keypair;
 use std::cmp;
 use std::net::UdpSocket;
 use std::sync::atomic::AtomicUsize;
-use std::sync::mpsc::{channel, Receiver, Sender, RecvTimeoutError};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
@@ -40,11 +40,11 @@ impl WriteStage {
     ) -> Result<()> {
         let mut entries = entry_receiver.recv_timeout(Duration::new(1, 0))?;
 
-        // Find out how many more entries we can squeeze in. Note if the leader stays in power 
-        // for the next round as well, then there will be a point at which 
-        // *entry_height % LEADER_ROTATION_INTERVAL == 0, which is ok b/c 
+        // Find out how many more entries we can squeeze in. Note if the leader stays in power
+        // for the next round as well, then there will be a point at which
+        // *entry_height % LEADER_ROTATION_INTERVAL == 0, which is ok b/c
         // that will set LEADER_ROTATION_INTERVAL - (*entry_height % LEADER_ROTATION_INTERVAL)
-        // equal to LEADER_ROTATION_INTERVAL (represents LEADER_ROTATION_INTERVAL open slots), 
+        // equal to LEADER_ROTATION_INTERVAL (represents LEADER_ROTATION_INTERVAL open slots),
         // which is what we want.
         let num_entries_to_take = cmp::min(
             LEADER_ROTATION_INTERVAL - (*entry_height % LEADER_ROTATION_INTERVAL),
@@ -115,7 +115,7 @@ impl WriteStage {
                     // old leader is in power up to and including entry height
                     // n * LEADER_ROTATION_INTERVAL, so once we've forwarded that last block,
                     // check for the next leader. If we happen to exit due to leader rotation
-                    // before the send_leader_vote() below, the next leader will have to 
+                    // before the send_leader_vote() below, the next leader will have to
                     // take care of voting
                     if entry_height % (LEADER_ROTATION_INTERVAL as u64) == 0 {
                         let rcrdt = crdt.read().unwrap();
@@ -123,7 +123,7 @@ impl WriteStage {
                         let a = rcrdt.get_scheduled_leader(entry_height);
                         match a {
                             Some(id) if id == my_id => (),
-                            // If the leader stays in power for the next 
+                            // If the leader stays in power for the next
                             // round as well, then we don't exit. Otherwise, exit.
                             _ => {
                                 // Make sure broadcast stage has received the last blob sent
@@ -192,7 +192,7 @@ impl Service for WriteStage {
 #[cfg(test)]
 mod tests {
     use bank::Bank;
-    use crdt::{Crdt, LEADER_ROTATION_INTERVAL, Node};
+    use crdt::{Crdt, Node, LEADER_ROTATION_INTERVAL};
     use entry::Entry;
     use ledger::{genesis, read_ledger};
     use packet::BlobRecycler;
@@ -200,14 +200,13 @@ mod tests {
     use service::Service;
     use signature::{Keypair, KeypairUtil, Pubkey};
     use std::fs::remove_dir_all;
-    use std::sync::{Arc, RwLock};
     use std::sync::mpsc::{channel, Sender};
+    use std::sync::{Arc, RwLock};
     use std::thread::sleep;
     use std::time::Duration;
     use write_stage::WriteStage;
 
-    fn process_ledger(ledger_path: &str, bank: &Bank) -> (u64, Vec<Entry>)
-    {
+    fn process_ledger(ledger_path: &str, bank: &Bank) -> (u64, Vec<Entry>) {
         let entries = read_ledger(ledger_path, true).expect("opening ledger");
 
         let entries = entries
@@ -217,9 +216,16 @@ mod tests {
         bank.process_ledger(entries).expect("process_ledger")
     }
 
-    fn setup_dummy_write_stage() -> 
-        (Pubkey, WriteStage, Sender<bool>, Sender<Vec<Entry>>, Arc<RwLock<Crdt>>, Arc<Bank>, String, Vec<Entry>) 
-    {
+    fn setup_dummy_write_stage() -> (
+        Pubkey,
+        WriteStage,
+        Sender<bool>,
+        Sender<Vec<Entry>>,
+        Arc<RwLock<Crdt>>,
+        Arc<Bank>,
+        String,
+        Vec<Entry>,
+    ) {
         // Setup leader info
         let leader_keypair = Keypair::new();
         let id = leader_keypair.pubkey();
@@ -265,22 +271,20 @@ mod tests {
     fn test_write_stage_leader_rotation_exit() {
         let (
             id,
-            write_stage, 
+            write_stage,
             exit_sender,
             entry_sender,
             crdt,
             bank,
             leader_ledger_path,
-            ledger_tail
+            ledger_tail,
         ) = setup_dummy_write_stage();
 
-        crdt.write().unwrap().set_scheduled_leader(
-            LEADER_ROTATION_INTERVAL,
-            id,
-        );
+        crdt.write()
+            .unwrap()
+            .set_scheduled_leader(LEADER_ROTATION_INTERVAL, id);
 
-        let last_entry_hash = 
-            ledger_tail.last().expect("Ledger should not be empty").id;
+        let last_entry_hash = ledger_tail.last().expect("Ledger should not be empty").id;
 
         let genesis_entry_height = ledger_tail.len() as u64;
 
@@ -299,9 +303,8 @@ mod tests {
         // Wait until at least LEADER_ROTATION_INTERVAL have been written to the ledger
         loop {
             sleep(Duration::from_secs(1));
-            let (current_entry_height, _) = 
-                process_ledger(&leader_ledger_path, &bank);
-            
+            let (current_entry_height, _) = process_ledger(&leader_ledger_path, &bank);
+
             if current_entry_height == LEADER_ROTATION_INTERVAL {
                 break;
             }
@@ -310,14 +313,11 @@ mod tests {
         // Set the scheduled next leader in the crdt with to some other node
         let leader2_keypair = Keypair::new();
         let leader2_info = Node::new_localhost_with_pubkey(leader2_keypair.pubkey());
-    
+
         {
             let mut wcrdt = crdt.write().unwrap();
             wcrdt.insert(&leader2_info.info);
-            wcrdt.set_scheduled_leader(
-                2 * LEADER_ROTATION_INTERVAL,
-                leader2_keypair.pubkey(),
-            );
+            wcrdt.set_scheduled_leader(2 * LEADER_ROTATION_INTERVAL, leader2_keypair.pubkey());
         }
 
         // Input another LEADER_ROTATION_INTERVAL dummy entries one at a time,

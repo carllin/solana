@@ -205,7 +205,7 @@ impl Fullnode {
     ///   `--------`  |                               |    `------------`
     ///               `-------------------------------`
     /// ```
-pub fn new_with_bank(
+    pub fn new_with_bank(
         keypair: Keypair,
         bank: Bank,
         entry_height: u64,
@@ -345,10 +345,10 @@ impl Service for Fullnode {
         match self.node_role {
             Some(NodeRole::Validator(validator_service)) => {
                 validator_service.join()?;
-            },
+            }
             Some(NodeRole::Leader(leader_service)) => {
                 leader_service.join()?;
-            },
+            }
             _ => (),
         }
 
@@ -405,7 +405,7 @@ mod tests {
     fn test_leader_transition_exit() {
         // Make a mint and a genesis entry in the leader ledger
         let (_, leader_ledger_path) = genesis("test_leader_transition_exit", 10_000);
-         // Start the leader node
+        // Start the leader node
         let leader_keypair = Keypair::new();
         let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
         let mut leader_node = Fullnode::new(

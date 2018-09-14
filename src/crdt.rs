@@ -310,12 +310,7 @@ impl Crdt {
 
     // TODO: For now this is a dummy method that sets the scheduled leader
     // starting at a given entry_height
-    pub fn set_scheduled_leader(
-        &mut self,
-        _entry_height: u64,
-        new_leader_id: Pubkey
-    ) -> ()
-    {
+    pub fn set_scheduled_leader(&mut self, _entry_height: u64, new_leader_id: Pubkey) -> () {
         self.set_leader(new_leader_id);
     }
 

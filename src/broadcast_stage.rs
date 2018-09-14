@@ -143,7 +143,7 @@ impl BroadcastStage {
                 let my_id = rcrdt.my_data().id;
                 match rcrdt.get_scheduled_leader(entry_height) {
                     Some(id) if id == my_id => (),
-                    // If the leader stays in power for the next 
+                    // If the leader stays in power for the next
                     // round as well, then we don't exit. Otherwise, exit.
                     _ => {
                         let _ = exit_sender.send(true);
@@ -197,7 +197,15 @@ impl BroadcastStage {
         let thread_hdl = Builder::new()
             .name("solana-broadcaster".to_string())
             .spawn(move || {
-                Self::run(&sock, &crdt, &window, entry_height, &recycler, &receiver, exit_sender);
+                Self::run(
+                    &sock,
+                    &crdt,
+                    &window,
+                    entry_height,
+                    &recycler,
+                    &receiver,
+                    exit_sender,
+                );
             })
             .unwrap();
 
@@ -216,32 +224,40 @@ impl Service for BroadcastStage {
 
 #[cfg(test)]
 mod tests {
-    use crdt::{Crdt, LEADER_ROTATION_INTERVAL, Node};
+    use broadcast_stage::BroadcastStage;
+    use crdt::{Crdt, Node, LEADER_ROTATION_INTERVAL};
     use entry::Entry;
-    use ledger::Block;
     use hash::Hash;
+    use ledger::Block;
+    use mint::Mint;
     use packet::BlobRecycler;
     use recorder::Recorder;
     use service::Service;
     use signature::{Keypair, KeypairUtil, Pubkey};
-    use std::sync::{Arc, RwLock};
-    use std::sync::mpsc::{channel, Receiver};
-    use broadcast_stage::BroadcastStage;
-    use mint::Mint;
-    use streamer::BlobSender;
     use std::cmp;
-    use window::{new_window_from_entries, SharedWindow};
+    use std::sync::mpsc::{channel, Receiver};
+    use std::sync::{Arc, RwLock};
     use std::thread::sleep;
     use std::time::Duration;
+    use streamer::BlobSender;
+    use window::{new_window_from_entries, SharedWindow};
 
-    fn setup_dummy_broadcast_stage() -> 
-        (Pubkey, Pubkey, BroadcastStage, SharedWindow, BlobSender, BlobRecycler, Arc<RwLock<Crdt>>, Vec<Entry>, Receiver<bool>) 
-    {
+    fn setup_dummy_broadcast_stage() -> (
+        Pubkey,
+        Pubkey,
+        BroadcastStage,
+        SharedWindow,
+        BlobSender,
+        BlobRecycler,
+        Arc<RwLock<Crdt>>,
+        Vec<Entry>,
+        Receiver<bool>,
+    ) {
         // Setup dummy leader info
         let leader_keypair = Keypair::new();
         let id = leader_keypair.pubkey();
         let leader_info = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
-        
+
         // Give the leader somebody to broadcast to so he isn't lonely
         let buddy_keypair = Keypair::new();
         let buddy_id = buddy_keypair.pubkey();
@@ -316,14 +332,12 @@ mod tests {
             exit_receiver,
         ) = setup_dummy_broadcast_stage();
 
-        crdt.write().unwrap().set_scheduled_leader(
-            LEADER_ROTATION_INTERVAL,
-            id,
-        );
+        crdt.write()
+            .unwrap()
+            .set_scheduled_leader(LEADER_ROTATION_INTERVAL, id);
 
         let genesis_len = entries.len() as u64;
-        let last_entry_hash = 
-            entries.last().expect("Ledger should not be empty").id;
+        let last_entry_hash = entries.last().expect("Ledger should not be empty").id;
 
         // Input enough entries to make exactly LEADER_ROTATION_INTERVAL entries, which will
         // trigger a check for leader rotation. Because the next scheduled leader
@@ -347,13 +361,12 @@ mod tests {
         }
 
         // Set the scheduled next leader in the crdt to the buddy
-        crdt.write().unwrap().set_scheduled_leader(
-            2 * LEADER_ROTATION_INTERVAL,
-            buddy_id,
-        );
+        crdt.write()
+            .unwrap()
+            .set_scheduled_leader(2 * LEADER_ROTATION_INTERVAL, buddy_id);
 
         // Input another LEADER_ROTATION_INTERVAL dummy entries, which will take us
-        // past the point of the leader rotation. The write_stage will see that 
+        // past the point of the leader rotation. The write_stage will see that
         // it's no longer the leader after checking the crdt, and exit
         for _ in 0..LEADER_ROTATION_INTERVAL {
             let new_entry = recorder.record(vec![]);
@@ -366,8 +379,7 @@ mod tests {
         }
 
         match exit_receiver.recv() {
-            Ok(x) if x == false => 
-                panic!("Unexpected value on exit channel for Broadcast stage"),
+            Ok(x) if x == false => panic!("Unexpected value on exit channel for Broadcast stage"),
             _ => (),
         }
 
