@@ -68,6 +68,7 @@ pub trait WindowUtil {
     fn process_blob(
         &mut self,
         id: &Pubkey,
+        crdt: &Arc<RwLock<Crdt>>,
         blob: SharedBlob,
         pix: u64,
         consume_queue: &mut SharedBlobs,
@@ -75,6 +76,7 @@ pub trait WindowUtil {
         consumed: &mut u64,
         leader_unknown: bool,
         pending_retransmits: &mut bool,
+        leader_rotation_interval: u64,
     );
 }
 
@@ -184,6 +186,7 @@ impl WindowUtil for Window {
     fn process_blob(
         &mut self,
         id: &Pubkey,
+        crdt: &Arc<RwLock<Crdt>>,
         blob: SharedBlob,
         pix: u64,
         consume_queue: &mut SharedBlobs,
@@ -191,6 +194,7 @@ impl WindowUtil for Window {
         consumed: &mut u64,
         leader_unknown: bool,
         pending_retransmits: &mut bool,
+        leader_rotation_interval: u64,
     ) {
         let w = (pix % WINDOW_SIZE) as usize;
 
@@ -254,6 +258,20 @@ impl WindowUtil for Window {
 
         // push all contiguous blobs into consumed queue, increment consumed
         loop {
+            if *consumed != 0 && *consumed % (leader_rotation_interval as u64) == 0 {
+                let rcrdt = crdt.read().unwrap();
+                let my_id = rcrdt.my_data().id;
+                match rcrdt.get_scheduled_leader(*consumed) {
+                    // If we are the next leader, exit
+                    Some(id) if id == my_id => {
+                        break;
+                    }
+                    // TODO: update leader status, make sure new blobs to window
+                    // actually originate from new leader
+                    _ => (),
+                }
+            }
+
             let k = (*consumed % WINDOW_SIZE) as usize;
             trace!("{}: k: {} consumed: {}", id, k, *consumed,);
 
