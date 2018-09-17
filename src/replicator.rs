@@ -11,13 +11,13 @@ use std::thread::JoinHandle;
 use store_ledger_stage::StoreLedgerStage;
 use streamer::BlobReceiver;
 use window;
-use window_service::window_service;
+use window_service::{window_service, WindowServiceReturnType};
 
 pub struct Replicator {
     ncp: Ncp,
     fetch_stage: BlobFetchStage,
     store_ledger_stage: StoreLedgerStage,
-    t_window: JoinHandle<()>,
+    t_window: JoinHandle<Option<WindowServiceReturnType>>,
     pub retransmit_receiver: BlobReceiver,
 }
 
