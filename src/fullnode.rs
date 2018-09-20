@@ -63,7 +63,7 @@ impl ValidatorServices {
     }
 
     pub fn exit(&self) -> () {
-        //TODO: implement exit for Tvu
+        self.tvu.exit()
     }
 }
 
@@ -309,7 +309,6 @@ impl Fullnode {
                         .try_clone()
                         .expect("Failed to clone retransmit socket"),
                     Some(ledger_path),
-                    exit.clone(),
                 );
                 let validator_state = ValidatorServices::new(tvu);
                 node_role = Some(NodeRole::Validator(validator_state));
@@ -422,7 +421,6 @@ impl Fullnode {
                 .try_clone()
                 .expect("Failed to clone retransmit socket"),
             Some(&self.ledger_path),
-            self.exit.clone(),
         );
         let validator_state = ValidatorServices::new(tvu);
         self.node_role = Some(NodeRole::Validator(validator_state));

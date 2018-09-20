@@ -10,8 +10,7 @@ use result::{Error, Result};
 use service::Service;
 use signature::Keypair;
 use std::net::UdpSocket;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, RwLock};
@@ -19,6 +18,24 @@ use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 use streamer::responder;
 use vote_stage::VoteStage;
+
+// Implement a destructor for the ReplicateStage thread to signal it exited
+// even on panics
+struct Finalizer {
+    exit_sender: Arc<AtomicBool>,
+}
+
+impl Finalizer {
+    fn new(exit_sender: Arc<AtomicBool>) -> Self {
+        Finalizer { exit_sender }
+    }
+}
+// Implement a destructor for Finalizer.
+impl Drop for Finalizer {
+    fn drop(&mut self) {
+        self.exit_sender.clone().store(true, Ordering::Relaxed);
+    }
+}
 
 pub struct ReplicateStage {
     thread_hdls: Vec<JoinHandle<()>>,
@@ -60,6 +77,7 @@ impl ReplicateStage {
         res?;
         Ok(())
     }
+
     pub fn new(
         keypair: Arc<Keypair>,
         bank: Arc<Bank>,
@@ -72,21 +90,32 @@ impl ReplicateStage {
         let send = UdpSocket::bind("0.0.0.0:0").expect("bind");
         let t_responder = responder("replicate_stage", Arc::new(send), vote_blob_receiver);
 
-        let vote_stage =
-            VoteStage::new(keypair, bank.clone(), crdt.clone(), vote_blob_sender, exit);
+        let vote_stage = VoteStage::new(
+            keypair,
+            bank.clone(),
+            crdt.clone(),
+            vote_blob_sender,
+            exit.clone(),
+        );
 
         let mut ledger_writer = ledger_path.map(|p| LedgerWriter::open(p, false).unwrap());
 
         let t_replicate = Builder::new()
             .name("solana-replicate-stage".to_string())
-            .spawn(move || loop {
-                if let Err(e) =
-                    Self::replicate_requests(&bank, &crdt, &window_receiver, ledger_writer.as_mut())
-                {
-                    match e {
-                        Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
-                        Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
-                        _ => error!("{:?}", e),
+            .spawn(move || {
+                let _exit = Finalizer::new(exit);
+                loop {
+                    if let Err(e) = Self::replicate_requests(
+                        &bank,
+                        &crdt,
+                        &window_receiver,
+                        ledger_writer.as_mut(),
+                    ) {
+                        match e {
+                            Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
+                            Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
+                            _ => error!("{:?}", e),
+                        }
                     }
                 }
             }).unwrap();
