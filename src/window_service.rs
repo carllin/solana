@@ -606,8 +606,8 @@ mod test {
         let resp_recycler = BlobRecycler::default();
         let (s_reader, r_reader) = channel();
         let t_receiver = blob_receiver(Arc::new(tn.sockets.gossip), exit.clone(), s_reader);
-        let (s_window, r_window) = channel();
-        let (s_retransmit, r_retransmit) = channel();
+        let (s_window, _r_window) = channel();
+        let (s_retransmit, _r_retransmit) = channel();
         let win = Arc::new(RwLock::new(default_window()));
         let t_window = window_service(
             subs,

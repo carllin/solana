@@ -44,7 +44,7 @@ use retransmit_stage::{RetransmitStage, RetransmitStageReturnType};
 use service::Service;
 use signature::Keypair;
 use std::net::UdpSocket;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use window::SharedWindow;
@@ -58,6 +58,7 @@ pub struct Tvu {
     replicate_stage: ReplicateStage,
     fetch_stage: BlobFetchStage,
     retransmit_stage: RetransmitStage,
+    exit: Arc<AtomicBool>,
 }
 
 impl Tvu {
@@ -83,8 +84,9 @@ impl Tvu {
         repair_socket: UdpSocket,
         retransmit_socket: UdpSocket,
         ledger_path: Option<&str>,
-        exit: Arc<AtomicBool>,
     ) -> Self {
+        let exit = Arc::new(AtomicBool::new(false));
+
         let repair_socket = Arc::new(repair_socket);
         let mut blob_sockets: Vec<Arc<UdpSocket>> =
             replicate_sockets.into_iter().map(Arc::new).collect();
@@ -109,14 +111,19 @@ impl Tvu {
             crdt,
             blob_window_receiver,
             ledger_path,
-            exit,
+            exit.clone(),
         );
 
         Tvu {
             replicate_stage,
             fetch_stage,
             retransmit_stage,
+            exit,
         }
+    }
+
+    pub fn exit(&self) -> () {
+        self.exit.store(true, Ordering::Relaxed);
     }
 
     pub fn close(self) -> thread::Result<Option<TvuReturnType>> {
@@ -242,7 +249,6 @@ pub mod tests {
             target1.sockets.repair,
             target1.sockets.retransmit,
             None,
-            exit.clone(),
         );
 
         let mut alice_ref_balance = starting_balance;
