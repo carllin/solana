@@ -715,8 +715,7 @@ mod tests {
         }
 
         // Check the validator ledger to make sure it's the right height
-        let (_, entry_height, _) =
-            Fullnode::new_bank_from_ledger(&validator_ledger_path);
+        let (_, entry_height, _) = Fullnode::new_bank_from_ledger(&validator_ledger_path);
 
         assert_eq!(
             entry_height,

@@ -857,6 +857,107 @@ fn test_leader_to_validator_transition() {
     remove_dir_all(leader_ledger_path).unwrap();
 }
 
+#[test]
+fn test_leader_validator_basic() {
+    logger::setup();
+    let leader_rotation_interval = 10;
+
+    // Account that will be the sink for all the test's transactions
+    let bob_pubkey = Keypair::new().pubkey();
+
+    // Make a mint and a genesis entry in the leader ledger
+    let (mint, leader_ledger_path, genesis_entries) =
+        genesis("test_validator_to_leader_transition", 10_000);
+    let genesis_height = genesis_entries.len();
+
+    // Initialize the leader ledger
+    let mut ledger_paths = Vec::new();
+    ledger_paths.push(leader_ledger_path.clone());
+
+    // Create the leader fullnode
+    let leader_keypair = Keypair::new();
+    let leader_node = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
+    let leader_info = leader_node.info.clone();
+
+    let mut leader = Fullnode::new(
+        leader_node,
+        &leader_ledger_path,
+        leader_keypair,
+        None,
+        false,
+        Some(leader_rotation_interval),
+    );
+
+    // Start the validator node
+    let validator_ledger_path =
+        tmp_copy_ledger(&leader_ledger_path, "test_validator_to_leader_transition");
+    let validator_keypair = Keypair::new();
+    let validator_node = Node::new_localhost_with_pubkey(validator_keypair.pubkey());
+    let validator_info = validator_node.info.clone();
+    let mut validator = Fullnode::new(
+        validator_node,
+        &validator_ledger_path,
+        validator_keypair,
+        Some(leader_info.contact_info.ncp),
+        false,
+        Some(leader_rotation_interval),
+    );
+
+    ledger_paths.push(validator_ledger_path);
+
+    // Set the leader schedule for the validator and leader
+    let my_leader_begin_epoch = 2;
+    for i in 0..my_leader_begin_epoch {
+        validator.set_scheduled_leader(leader_info.id, leader_rotation_interval * i);
+        leader.set_scheduled_leader(leader_info.id, leader_rotation_interval * i);
+    }
+    validator.set_scheduled_leader(
+        validator_info.id,
+        my_leader_begin_epoch * leader_rotation_interval,
+    );
+    leader.set_scheduled_leader(
+        validator_info.id,
+        my_leader_begin_epoch * leader_rotation_interval,
+    );
+
+    // Wait for convergence
+    let servers = converge(&leader_info, 2);
+    assert_eq!(servers.len(), 2);
+
+    // Send transactions to the leader
+    let extra_transactions = std::cmp::max(leader_rotation_interval / 3, 1);
+    let total_transactions_to_send =
+        my_leader_begin_epoch * leader_rotation_interval + extra_transactions;
+
+    // Push "extra_transactions" past leader_rotation_interval entry height,
+    // make sure the validator stops.
+    for _ in genesis_height as u64..total_transactions_to_send {
+        send_tx_and_retry_get_balance(&leader_info, &mint, &bob_pubkey, 1, None);
+    }
+
+    match leader.handle_role_transition().unwrap() {
+        Some(FullnodeReturnType::LeaderRotation) => (),
+        _ => panic!("Expected reason for exit to be leader rotation"),
+    }
+
+    // Wait for validator to shut down tvu and restart tpu
+    match validator.handle_role_transition().unwrap() {
+        Some(FullnodeReturnType::LeaderRotation) => (),
+        _ => panic!("Expected reason for exit to be leader rotation"),
+    }
+
+    // Check the ledger of the validator to make sure the entry height is correct
+    // and that the old leader and the new leader's ledgers agree
+    // up to the point of leader rotation
+
+    // Shut down
+    validator.close().unwrap();
+    leader.close().unwrap();
+    for path in ledger_paths {
+        remove_dir_all(path).unwrap();
+    }
+}
+
 fn mk_client(leader: &NodeInfo) -> ThinClient {
     let requests_socket = UdpSocket::bind("0.0.0.0:0").unwrap();
     requests_socket
