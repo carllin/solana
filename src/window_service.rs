@@ -624,7 +624,11 @@ mod test {
             let blob_sockets: Vec<Arc<UdpSocket>> =
                 tn.sockets.replicate.into_iter().map(Arc::new).collect();
 
-            let t_responder = responder("test_window_leader_rotation_exit", blob_sockets[0].clone(), r_responder);
+            let t_responder = responder(
+                "test_window_leader_rotation_exit",
+                blob_sockets[0].clone(),
+                r_responder,
+            );
             let mut msgs = Vec::new();
 
             // Send the blobs out of order, in reverse. Also send an extra leader_rotation_interval

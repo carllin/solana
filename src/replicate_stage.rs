@@ -90,8 +90,13 @@ impl ReplicateStage {
         let send = UdpSocket::bind("0.0.0.0:0").expect("bind");
         let t_responder = responder("replicate_stage", Arc::new(send), vote_blob_receiver);
 
-        let vote_stage =
-            VoteStage::new(keypair, bank.clone(), crdt.clone(), vote_blob_sender, exit.clone());
+        let vote_stage = VoteStage::new(
+            keypair,
+            bank.clone(),
+            crdt.clone(),
+            vote_blob_sender,
+            exit.clone(),
+        );
 
         let mut ledger_writer = ledger_path.map(|p| LedgerWriter::open(p, false).unwrap());
 
