@@ -22,12 +22,11 @@ pub const MAX_REPAIR_BACKOFF: usize = 128;
 
 fn repair_backoff(last: &mut u64, times: &mut usize, consumed: u64) -> bool {
     //exponential backoff
-    if *last != consumed {
+    if *last != consumed || *times < 1 {
         //start with a 50% chance of asking for repairs
         *times = 1;
     }
     *last = consumed;
-    *times += 1;
 
     // Experiment with capping repair request duration.
     // Once nodes are too far behind they can spend many
@@ -38,7 +37,12 @@ fn repair_backoff(last: &mut u64, times: &mut usize, consumed: u64) -> bool {
     }
 
     //if we get lucky, make the request, which should exponentially get less likely
-    thread_rng().gen_range(0, *times as u64) == 0
+    let should_repair = thread_rng().gen_range(0, *times as u64) == 0;
+    if should_repair {
+        *times += 1;
+    }
+
+    should_repair
 }
 
 fn add_block_to_retransmit_queue(
@@ -243,7 +247,7 @@ pub fn window_service(
             let mut consumed = entry_height;
             let mut received = entry_height;
             let mut last = entry_height;
-            let mut times = 0;
+            let mut times = 1;
             let id = crdt.read().unwrap().id;
             let mut pending_retransmits = false;
             let recycler = BlobRecycler::default();
@@ -316,7 +320,7 @@ mod test {
     use std::time::Duration;
     use streamer::{blob_receiver, responder};
     use window::default_window;
-    use window_service::{repair_backoff, window_service};
+    use window_service::{repair_backoff, window_service, MAX_REPAIR_BACKOFF};
 
     fn make_consecutive_blobs(
         me_id: Pubkey,
@@ -555,28 +559,29 @@ mod test {
 
     #[test]
     pub fn test_repair_backoff() {
-        let num_tests = 100;
-        let res: usize = (0..num_tests)
-            .map(|_| {
-                let mut last = 0;
-                let mut times = 0;
-                let total: usize = (0..127)
-                    .map(|x| {
-                        let rv = repair_backoff(&mut last, &mut times, 1) as usize;
-                        assert_eq!(times, x + 2);
-                        rv
-                    }).sum();
-                assert_eq!(times, 128);
-                assert_eq!(last, 1);
-                repair_backoff(&mut last, &mut times, 1);
-                assert_eq!(times, 64);
-                repair_backoff(&mut last, &mut times, 2);
-                assert_eq!(times, 2);
-                assert_eq!(last, 2);
-                total
-            }).sum();
-        let avg = res / num_tests;
-        assert!(avg >= 3);
-        assert!(avg <= 5);
+        let mut last = 0;
+        let mut times = 0;
+        let mut expected = 1;
+        for _ in 0..MAX_REPAIR_BACKOFF - 1 {
+            if repair_backoff(&mut last, &mut times, 1) {
+                expected += 1;
+                assert_eq!(times, expected);
+            } else {
+                assert_eq!(times, expected);
+            }
+        }
+        assert_eq!(last, 1);
+        let result = repair_backoff(&mut last, &mut times, 2);
+        if result {
+            assert_eq!(times, 2);
+        } else {
+            assert_eq!(times, 1);
+        }
+        assert_eq!(last, 2);
+
+        times = MAX_REPAIR_BACKOFF;
+        while !repair_backoff(&mut last, &mut times, 2) {}
+        repair_backoff(&mut last, &mut times, 2);
+        assert_eq!(times, MAX_REPAIR_BACKOFF / 2);
     }
 }
