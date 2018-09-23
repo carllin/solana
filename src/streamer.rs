@@ -27,10 +27,16 @@ fn recv_loop(
             match result {
                 Ok(()) => {
                     channel.send(msgs)?;
+                    println!(
+                        "GOT SOMETHING AGAIN on socket: {}",
+                        sock.local_addr().unwrap()
+                    );
                     break;
                 }
                 Err(_) => {
+                    println!("CHECKING EXIT on socket: {}", sock.local_addr().unwrap());
                     if exit.load(Ordering::Relaxed) {
+                        println!("EXITING on socket: {}", sock.local_addr().unwrap());
                         return Ok(());
                     }
                 }

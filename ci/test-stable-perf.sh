@@ -20,7 +20,7 @@ _() {
   "$@"
 }
 
-_ cargo test --features=cuda,erasure
+_ cargo test --features=cuda,erasure -- --nocapture
 
 echo --- ci/localnet-sanity.sh
 (

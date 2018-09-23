@@ -607,7 +607,7 @@ impl Crdt {
                 let bl = b.unwrap();
                 let blob = bl.read();
                 //TODO profile this, may need multiple sockets for par_iter
-                trace!(
+                println!(
                     "{}: BROADCAST idx: {} sz: {} to {},{} coding: {}",
                     me.id,
                     blob.get_index().unwrap(),

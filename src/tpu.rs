@@ -66,6 +66,10 @@ impl Tpu {
     ) -> (Self, Receiver<Vec<Entry>>, Arc<AtomicBool>) {
         let exit = Arc::new(AtomicBool::new(false));
 
+        for i in &transactions_sockets {
+            println!("TRANSACTION SOCKET: {:?}", i.local_addr().unwrap());
+        }
+
         let (fetch_stage, packet_receiver) = FetchStage::new(transactions_sockets, exit.clone());
 
         let (sigverify_stage, verified_receiver) =
@@ -94,6 +98,7 @@ impl Tpu {
     }
 
     pub fn exit(&self) -> () {
+        println!("tpu exit called");
         self.exit.store(true, Ordering::Relaxed);
     }
 
@@ -107,12 +112,19 @@ impl Service for Tpu {
     type JoinReturnType = Option<TpuReturnType>;
 
     fn join(self) -> thread::Result<(Option<TpuReturnType>)> {
+        println!("join starting on Tpu");
         self.fetch_stage.join()?;
+        println!("fetch stage joined");
         self.sigverify_stage.join()?;
+        println!("sigverify stage joined");
         self.banking_stage.join()?;
+        println!("banking stage joined");
         match self.write_stage.join()? {
             WriteStageReturnType::LeaderRotation => Ok(Some(TpuReturnType::LeaderRotation)),
-            _ => Ok(None),
+            _ => {
+                println!("write stage joined");
+                Ok(None)
+            }
         }
     }
 }

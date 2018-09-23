@@ -123,6 +123,7 @@ impl Tvu {
     }
 
     pub fn exit(&self) -> () {
+        println!("tvu exit called");
         self.exit.store(true, Ordering::Relaxed);
     }
 
@@ -136,13 +137,19 @@ impl Service for Tvu {
     type JoinReturnType = Option<TvuReturnType>;
 
     fn join(self) -> thread::Result<Option<TvuReturnType>> {
+        println!("join starting on Tvu");
         self.replicate_stage.join()?;
+        println!("replicate stage joined");
         self.fetch_stage.join()?;
+        println!("fetch stage joined");
         match self.retransmit_stage.join()? {
             Some(RetransmitStageReturnType::LeaderRotation(entry_height)) => {
                 Ok(Some(TvuReturnType::LeaderRotation(entry_height)))
             }
-            _ => Ok(None),
+            _ => {
+                println!("retransmit stage joined");
+                Ok(None)
+            }
         }
     }
 }

@@ -196,6 +196,8 @@ fn recv_window(
             let p = b.read();
             (p.get_index()?, p.meta.size)
         };
+
+        println!("RECEIVED INDEX: {}", pix);
         pixs.push(pix);
 
         if !blob_idx_in_window(&id, pix, *consumed, received) {
@@ -217,6 +219,15 @@ fn recv_window(
             leader_rotation_interval,
         );
     }
+    println!(
+        "{}: consumed: {} received: {} sending consume.len: {} pixs: {:?} took {} ms",
+        id,
+        *consumed,
+        *received,
+        consume_queue.len(),
+        pixs,
+        duration_as_ms(&now.elapsed())
+    );
     if log_enabled!(Level::Trace) {
         trace!("{}", window.read().unwrap().print(id, *consumed));
         trace!(
@@ -270,6 +281,7 @@ pub fn window_service(
                     match rcrdt.get_scheduled_leader(consumed) {
                         // If we are the next leader, exit
                         Some(id) if id == my_id => {
+                            println!("Exiting window service");
                             return Some(WindowServiceReturnType::LeaderRotation(consumed));
                         }
                         // TODO: update leader status, make sure new blobs to window
@@ -302,11 +314,9 @@ pub fn window_service(
                 }
 
                 if received <= consumed {
-                    trace!(
+                    println!(
                         "{} we have everything received:{} consumed:{}",
-                        id,
-                        received,
-                        consumed
+                        id, received, consumed
                     );
                     continue;
                 }
@@ -316,7 +326,7 @@ pub fn window_service(
                     trace!("{} !repair_backoff() times = {}", id, times);
                     continue;
                 }
-                trace!("{} let's repair! times = {}", id, times);
+                println!("{} let's repair! times = {}", id, times);
 
                 let mut window = window.write().unwrap();
                 let reqs = window.repair(&crdt, &id, times, consumed, received);

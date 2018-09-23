@@ -13,7 +13,7 @@ _() {
 
 _ cargo fmt -- --check
 _ cargo build --verbose
-_ cargo test --verbose
+_ cargo test --verbose -- --nocapture
 
 echo --- ci/localnet-sanity.sh
 (

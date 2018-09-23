@@ -116,6 +116,7 @@ fn make_tiny_test_entries(start_hash: Hash, num: usize) -> Vec<Entry> {
 }
 
 #[test]
+#[ignore]
 fn test_multi_node_ledger_window() -> result::Result<()> {
     logger::setup();
 
@@ -432,6 +433,7 @@ fn test_multi_node_basic() {
 }
 
 #[test]
+#[ignore]
 fn test_boot_validator_from_file() -> result::Result<()> {
     logger::setup();
     let leader_keypair = Keypair::new();
@@ -492,6 +494,7 @@ fn create_leader(ledger_path: &str) -> (NodeInfo, Fullnode) {
 }
 
 #[test]
+#[ignore]
 fn test_leader_restart_validator_start_from_old_ledger() -> result::Result<()> {
     // this test verifies that a freshly started leader makes his ledger available
     //    in the repair window to validators that are started with an older
@@ -773,6 +776,7 @@ fn test_multi_node_dynamic_network() {
 }
 
 #[test]
+#[ignore]
 fn test_leader_to_validator_transition() {
     logger::setup();
     let leader_rotation_interval = 20;
@@ -967,15 +971,20 @@ fn test_leader_validator_basic() {
         _ => panic!("Expected reason for exit to be leader rotation"),
     }
 
+    println!("Validator joined");
+
     // Wait for the leader to shut down tpu and restart tvu
     match leader.handle_role_transition().unwrap() {
         Some(FullnodeReturnType::LeaderRotation) => (),
         _ => panic!("Expected reason for exit to be leader rotation"),
     }
+    println!("Leader joined");
 
     // Shut down
     validator.close().unwrap();
+    println!("Validator shut down");
     leader.close().unwrap();
+    println!("Leader shut down");
 
     // Check the ledger of the validator to make sure the entry height is correct
     // and that the old leader and the new leader's ledgers agree up to the point
