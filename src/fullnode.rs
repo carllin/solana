@@ -526,12 +526,16 @@ impl Service for Fullnode {
     type JoinReturnType = Option<FullnodeReturnType>;
 
     fn join(self) -> Result<Option<FullnodeReturnType>> {
+        println!("JOIN ON ROLE STARTED");
         if let Some(rpu) = self.rpu {
             rpu.join()?;
         }
+        println!("JOINED RPU");
         self.ncp.join()?;
+        println!("JOINED NCP");
         self.rpc_service.join()?;
-
+        println!("JOINED RPC");
+        println!("JOIINGIN ON ROLE");
         match self.node_role {
             Some(NodeRole::Validator(validator_service)) => {
                 if let Some(TvuReturnType::LeaderRotation(_)) = validator_service.join()? {
@@ -700,6 +704,7 @@ mod tests {
             t_responder
         };
 
+        println!("WAITING FOR LEADER ROTATION");
         // Wait for validator to shut down tvu and restart tpu
         match validator.handle_role_transition().unwrap() {
             Some(FullnodeReturnType::LeaderRotation) => (),
@@ -716,6 +721,7 @@ mod tests {
 
         // Shut down
         t_responder.join().expect("responder thread join");
+        println!("SHUTTING DOWN NODE");
         validator.close().unwrap();
         remove_dir_all(&validator_ledger_path).unwrap();
     }

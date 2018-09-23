@@ -23,6 +23,10 @@ fn recv_loop(
     loop {
         let msgs = re.allocate();
         loop {
+            if exit.load(Ordering::Relaxed) {
+                println!("EXITING on socket: {}", sock.local_addr().unwrap());
+                return Ok(());
+            }
             let result = msgs.write().recv_from(sock);
             match result {
                 Ok(()) => {
@@ -33,13 +37,7 @@ fn recv_loop(
                     );
                     break;
                 }
-                Err(_) => {
-                    println!("CHECKING EXIT on socket: {}", sock.local_addr().unwrap());
-                    if exit.load(Ordering::Relaxed) {
-                        println!("EXITING on socket: {}", sock.local_addr().unwrap());
-                        return Ok(());
-                    }
-                }
+                Err(_) => (),
             }
         }
     }

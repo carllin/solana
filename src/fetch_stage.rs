@@ -40,9 +40,12 @@ impl Service for FetchStage {
     type JoinReturnType = ();
 
     fn join(self) -> thread::Result<()> {
+        println!("JOIN CALLED ON FETCH STAGE");
         for thread_hdl in self.thread_hdls {
             thread_hdl.join()?;
+            println!("JOIN FINSIHED ON ONE FETCH STAGE THREAD");
         }
+        println!("FETCH STAGE FINISHED JOINING");
         Ok(())
     }
 }

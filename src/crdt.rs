@@ -603,6 +603,10 @@ impl Crdt {
             .into_iter()
             .map(|(b, v)| {
                 // only leader should be broadcasting
+                println!(
+                    "my_id: {}, leader_id: {}, v.id: {}",
+                    me.id, me.leader_id, v.id
+                );
                 assert!(me.leader_id != v.id);
                 let bl = b.unwrap();
                 let blob = bl.read();
@@ -857,6 +861,12 @@ impl Crdt {
     fn update_leader(&mut self) {
         if let Some(leader_id) = self.top_leader() {
             if self.my_data().leader_id != leader_id && self.table.get(&leader_id).is_some() {
+                println!(
+                    "NODE WITH ID: {}, setting leader to {}, old leader was: {}",
+                    self.my_data().id,
+                    leader_id,
+                    self.my_data().leader_id,
+                );
                 self.set_leader(leader_id);
             }
         }
