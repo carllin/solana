@@ -4,6 +4,7 @@ use bank::Bank;
 use counter::Counter;
 use crdt::Crdt;
 use entry::EntryReceiver;
+use leader_scheduler::LeaderScheduler;
 use ledger::{Block, LedgerWriter};
 use log::Level;
 use result::{Error, Result};
@@ -50,7 +51,9 @@ impl ReplicateStage {
         window_receiver: &EntryReceiver,
         ledger_writer: Option<&mut LedgerWriter>,
         keypair: &Arc<Keypair>,
-        vote_blob_sender: Option<&BlobSender>,
+        vote_blob_sender: &BlobSender,
+        entry_height: &mut u64,
+        leader_scheduler: &Arc<RwLock<LeaderScheduler>>,
     ) -> Result<()> {
         let timer = Duration::new(1, 0);
         //coalesce all the available entries into a single vote
@@ -60,22 +63,28 @@ impl ReplicateStage {
         }
 
         let res = bank.process_entries(&entries);
-
         if let Some(sender) = vote_blob_sender {
             send_validator_vote(bank, keypair, crdt, sender)?;
         }
+        let votes = &entries.votes(*entry_height);
+        let mut wcrdt = crdt.write().unwrap().insert_votes(votes);
 
-        {
-            let mut wcrdt = crdt.write().unwrap();
-            wcrdt.insert_votes(&entries.votes());
+        for (pk, _, _, entry_height) in votes {
+            leader_scheduler
+                .write()
+                .unwrap()
+                .push_vote(*pk, *entry_height);
         }
+
+        *entry_height += entries.len() as u64;
 
         inc_new_counter_info!(
             "replicate-transactions",
             entries.iter().map(|x| x.transactions.len()).sum()
         );
 
-        // TODO: move this to another stage?
+        // TODO: move this to another stage? Also handle failure here b/c bank will be
+        // in inconsistent state
         if let Some(ledger_writer) = ledger_writer {
             ledger_writer.write_entries(entries)?;
         }
@@ -91,6 +100,8 @@ impl ReplicateStage {
         window_receiver: EntryReceiver,
         ledger_path: Option<&str>,
         exit: Arc<AtomicBool>,
+        entry_height: u64,
+        leader_scheduler: Arc<RwLock<LeaderScheduler>>,
     ) -> Self {
         let (vote_blob_sender, vote_blob_receiver) = channel();
         let send = UdpSocket::bind("0.0.0.0:0").expect("bind");
@@ -102,9 +113,11 @@ impl ReplicateStage {
         let t_replicate = Builder::new()
             .name("solana-replicate-stage".to_string())
             .spawn(move || {
-                let _exit = Finalizer::new(exit);;
+                let _exit = Finalizer::new(exit);
                 let now = Instant::now();
                 let mut next_vote_secs = 1;
+                let mut entry_height_ = entry_height;
+                let leader_scheduler_ = leader_scheduler;
                 loop {
                     // Only vote once a second.
                     let vote_sender = if now.elapsed().as_secs() > next_vote_secs {
@@ -121,6 +134,9 @@ impl ReplicateStage {
                         ledger_writer.as_mut(),
                         &keypair,
                         vote_sender,
+                        &vote_blob_sender,
+                        &mut entry_height_,
+                        &leader_scheduler_,
                     ) {
                         match e {
                             Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,

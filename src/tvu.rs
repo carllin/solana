@@ -39,6 +39,7 @@
 use bank::Bank;
 use blob_fetch_stage::BlobFetchStage;
 use crdt::Crdt;
+use leader_scheduler::LeaderScheduler;
 use replicate_stage::ReplicateStage;
 use retransmit_stage::{RetransmitStage, RetransmitStageReturnType};
 use service::Service;
@@ -84,6 +85,7 @@ impl Tvu {
         repair_socket: UdpSocket,
         retransmit_socket: UdpSocket,
         ledger_path: Option<&str>,
+        leader_scheduler: Arc<RwLock<LeaderScheduler>>,
     ) -> Self {
         let exit = Arc::new(AtomicBool::new(false));
 
@@ -112,6 +114,8 @@ impl Tvu {
             blob_window_receiver,
             ledger_path,
             exit.clone(),
+            entry_height,
+            leader_scheduler,
         );
 
         Tvu {
