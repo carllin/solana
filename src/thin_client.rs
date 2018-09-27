@@ -426,6 +426,7 @@ mod tests {
     use bank::Bank;
     use crdt::Node;
     use fullnode::Fullnode;
+    use leader_scheduler::LeaderScheduler;
     use ledger::LedgerWriter;
     use logger;
     use mint::Mint;
@@ -458,6 +459,9 @@ mod tests {
         let bob_pubkey = Keypair::new().pubkey();
         let ledger_path = tmp_ledger("thin_client", &alice);
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -467,7 +471,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(0),
         );
         sleep(Duration::from_millis(900));
@@ -505,6 +509,9 @@ mod tests {
         let leader_data = leader.info.clone();
         let ledger_path = tmp_ledger("bad_sig", &alice);
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -514,7 +521,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(0),
         );
         //TODO: remove this sleep, or add a retry so CI is stable
@@ -565,6 +572,9 @@ mod tests {
         let leader_data = leader.info.clone();
         let ledger_path = tmp_ledger("client_check_signature", &alice);
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -574,7 +584,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(0),
         );
         sleep(Duration::from_millis(300));
@@ -626,6 +636,9 @@ mod tests {
         let leader_data = leader.info.clone();
         let ledger_path = tmp_ledger("zero_balance_check", &alice);
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -635,7 +648,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(0),
         );
         sleep(Duration::from_millis(900));

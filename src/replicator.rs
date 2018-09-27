@@ -143,6 +143,9 @@ mod tests {
             None,
             false,
             Some(leader_rotation_interval),
+            None,
+            None,
+            None,
         );
 
         let mut leader_client = mk_client(&leader_info);

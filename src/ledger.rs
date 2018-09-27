@@ -444,7 +444,7 @@ impl Block for [Entry] {
         self.iter()
             .enumerate()
             .flat_map(|(i, entry)| {
-                entry.transactions.iter().filter_map(|t| {
+                entry.transactions.iter().filter_map(move |t| {
                     t.vote()
                         .map(|(pk, vote, hash)| (pk, vote, hash, start_entry_height + i as u64))
                 })

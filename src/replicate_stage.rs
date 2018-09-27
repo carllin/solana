@@ -67,7 +67,7 @@ impl ReplicateStage {
             send_validator_vote(bank, keypair, crdt, sender)?;
         }
         let votes = &entries.votes(*entry_height);
-        let mut wcrdt = crdt.write().unwrap().insert_votes(votes);
+        crdt.write().unwrap().insert_votes(votes);
 
         for (pk, _, _, entry_height) in votes {
             leader_scheduler

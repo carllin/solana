@@ -151,6 +151,9 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
         None,
         false,
         None,
+        None,
+        None,
+        None,
     );
 
     // Send leader some tokens to vote
@@ -170,6 +173,9 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
         keypair,
         Some(leader_data.contact_info.ncp),
         false,
+        None,
+        None,
+        None,
         None,
     );
 
@@ -241,6 +247,9 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
         None,
         false,
         None,
+        None,
+        None,
+        None,
     );
 
     // Send leader some tokens to vote
@@ -271,6 +280,9 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
             keypair,
             Some(leader_data.contact_info.ncp),
             false,
+            None,
+            None,
+            None,
             None,
         );
         nodes.push(val);
@@ -307,6 +319,9 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
         keypair,
         Some(leader_data.contact_info.ncp),
         false,
+        None,
+        None,
+        None,
         None,
     );
     nodes.push(val);
@@ -374,6 +389,9 @@ fn test_multi_node_basic() {
         None,
         false,
         None,
+        None,
+        None,
+        None,
     );
 
     // Send leader some tokens to vote
@@ -401,6 +419,9 @@ fn test_multi_node_basic() {
             keypair,
             Some(leader_data.contact_info.ncp),
             false,
+            None,
+            None,
+            None,
             None,
         );
         nodes.push(val);
@@ -451,6 +472,9 @@ fn test_boot_validator_from_file() -> result::Result<()> {
         None,
         false,
         None,
+        None,
+        None,
+        None,
     );
     let leader_balance =
         send_tx_and_retry_get_balance(&leader_data, &alice, &bob_pubkey, 500, Some(500)).unwrap();
@@ -471,6 +495,9 @@ fn test_boot_validator_from_file() -> result::Result<()> {
         Some(leader_data.contact_info.ncp),
         false,
         None,
+        None,
+        None,
+        None,
     );
     let mut client = mk_client(&validator_data);
     let getbal = retry_get_balance(&mut client, &bob_pubkey, Some(leader_balance));
@@ -489,7 +516,17 @@ fn create_leader(ledger_path: &str) -> (NodeInfo, Fullnode) {
     let leader_keypair = Keypair::new();
     let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let leader_data = leader.info.clone();
-    let leader_fullnode = Fullnode::new(leader, &ledger_path, leader_keypair, None, false, None);
+    let leader_fullnode = Fullnode::new(
+        leader,
+        &ledger_path,
+        leader_keypair,
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+    );
     (leader_data, leader_fullnode)
 }
 
@@ -543,6 +580,9 @@ fn test_leader_restart_validator_start_from_old_ledger() -> result::Result<()> {
         keypair,
         Some(leader_data.contact_info.ncp),
         false,
+        None,
+        None,
+        None,
         None,
     );
 
@@ -607,6 +647,9 @@ fn test_multi_node_dynamic_network() {
         leader_keypair,
         None,
         true,
+        None,
+        None,
+        None,
         None,
     );
 
@@ -681,6 +724,9 @@ fn test_multi_node_dynamic_network() {
                         keypair,
                         Some(leader_data.contact_info.ncp),
                         true,
+                        None,
+                        None,
+                        None,
                         None,
                     );
                     (rd, val)
@@ -803,6 +849,9 @@ fn test_leader_to_validator_transition() {
         None,
         false,
         Some(leader_rotation_interval),
+        None,
+        None,
+        None,
     );
 
     // Set the next leader to be Bob
@@ -914,6 +963,9 @@ fn test_leader_validator_basic() {
         None,
         false,
         Some(leader_rotation_interval),
+        None,
+        None,
+        None,
     );
 
     // Send leader some tokens to vote
@@ -931,6 +983,9 @@ fn test_leader_validator_basic() {
         Some(leader_info.contact_info.ncp),
         false,
         Some(leader_rotation_interval),
+        None,
+        None,
+        None,
     );
 
     ledger_paths.push(validator_ledger_path.clone());

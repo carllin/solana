@@ -158,6 +158,7 @@ pub mod tests {
     use crdt::{Crdt, Node};
     use entry::Entry;
     use hash::{hash, Hash};
+    use leader_scheduler::LeaderScheduler;
     use logger;
     use mint::Mint;
     use ncp::Ncp;
@@ -243,6 +244,8 @@ pub mod tests {
         let cref1 = Arc::new(RwLock::new(crdt1));
         let dr_1 = new_ncp(cref1.clone(), target1.sockets.gossip, exit.clone());
 
+        let leader_scheduler = LeaderScheduler::new(leader_id, Some(5000), Some(100), Some(100));
+
         let tvu = Tvu::new(
             Arc::new(target1_keypair),
             &bank,
@@ -253,6 +256,7 @@ pub mod tests {
             target1.sockets.repair,
             target1.sockets.retransmit,
             None,
+            Arc::new(RwLock::new(leader_scheduler)),
         );
 
         let mut alice_ref_balance = starting_balance;

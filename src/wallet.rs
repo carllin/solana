@@ -670,6 +670,7 @@ mod tests {
     use crdt::Node;
     use drone::run_local_drone;
     use fullnode::Fullnode;
+    use leader_scheduler::LeaderScheduler;
     use ledger::LedgerWriter;
     use mint::Mint;
     use signature::{read_keypair, read_pkcs8, Keypair, KeypairUtil};
@@ -994,6 +995,9 @@ mod tests {
         let mut config = WalletConfig::default();
         let rpc_port = 12345; // Needs to be distinct known number to not conflict with other tests
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -1003,7 +1007,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(rpc_port),
         );
         sleep(Duration::from_millis(900));
@@ -1069,6 +1073,9 @@ mod tests {
 
         let rpc_port = 11111; // Needs to be distinct known number to not conflict with other tests
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -1078,7 +1085,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(rpc_port),
         );
         sleep(Duration::from_millis(900));
@@ -1137,6 +1144,9 @@ mod tests {
         let mut config_witness = WalletConfig::default();
         let rpc_port = 13579; // Needs to be distinct known number to not conflict with other tests
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -1146,7 +1156,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(rpc_port),
         );
         sleep(Duration::from_millis(900));
@@ -1258,6 +1268,9 @@ mod tests {
         let mut config_witness = WalletConfig::default();
         let rpc_port = 11223; // Needs to be distinct known number to not conflict with other tests
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -1267,7 +1280,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(rpc_port),
         );
         sleep(Duration::from_millis(900));
@@ -1377,6 +1390,9 @@ mod tests {
         let mut config_witness = WalletConfig::default();
         let rpc_port = 13456; // Needs to be distinct known number to not conflict with other tests
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -1386,7 +1402,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(rpc_port),
         );
         sleep(Duration::from_millis(900));

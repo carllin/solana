@@ -227,6 +227,7 @@ mod tests {
     use crdt::Node;
     use drone::{Drone, DroneRequest, REQUEST_CAP, TIME_SLICE};
     use fullnode::Fullnode;
+    use leader_scheduler::LeaderScheduler;
     use logger;
     use mint::Mint;
     use netutil::get_ip_addr;
@@ -329,6 +330,9 @@ mod tests {
         let leader_data = leader.info.clone();
         let ledger_path = tmp_ledger_path("send_airdrop");
 
+        let leader_scheduler =
+            LeaderScheduler::new(leader_data.id, Some(5000), Some(1000), Some(1000));
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -338,7 +342,7 @@ mod tests {
             None,
             &ledger_path,
             false,
-            None,
+            leader_scheduler,
             Some(0),
         );
 
@@ -376,7 +380,17 @@ mod tests {
         let leader_keypair = Keypair::new();
         let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
         let leader_data = leader.info.clone();
-        let server = Fullnode::new(leader, &ledger_path, leader_keypair, None, false, None);
+        let server = Fullnode::new(
+            leader,
+            &ledger_path,
+            leader_keypair,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+        );
 
         let requests_socket = UdpSocket::bind("0.0.0.0:0").expect("drone bind to requests socket");
         let transactions_socket =
