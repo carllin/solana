@@ -805,7 +805,7 @@ impl Bank {
         entries: I,
         tail: &mut Vec<Entry>,
         tail_idx: &mut usize,
-        mut leader_scheduler_option: Option<&mut LeaderScheduler>,
+        leader_scheduler: &mut LeaderScheduler,
     ) -> Result<u64>
     where
         I: IntoIterator<Item = Entry>,
@@ -824,7 +824,7 @@ impl Bank {
             let tail_count = self.process_entries_tail(&block, tail, tail_idx)?;
 
             for (i, entry) in block.iter().enumerate() {
-                if let Some(ref mut leader_scheduler) = leader_scheduler_option {
+                if !leader_scheduler.use_only_bootstrap_leader {
                     Self::process_entry_votes(
                         self,
                         &entry,
@@ -843,7 +843,7 @@ impl Bank {
     pub fn process_ledger<I>(
         &self,
         entries: I,
-        leader_scheduler_option: Option<&mut LeaderScheduler>,
+        leader_scheduler: &mut LeaderScheduler,
     ) -> Result<(u64, Vec<Entry>)>
     where
         I: IntoIterator<Item = Entry>,
@@ -891,7 +891,7 @@ impl Bank {
             entries,
             &mut tail,
             &mut tail_idx,
-            leader_scheduler_option,
+            leader_scheduler,
         )?;
 
         // check if we need to rotate tail
@@ -1001,6 +1001,7 @@ mod tests {
     use entry::Entry;
     use entry_writer::{self, EntryWriter};
     use hash::hash;
+    use leader_scheduler::LeaderScheduler;
     use ledger;
     use logger;
     use signature::Keypair;
@@ -1348,7 +1349,8 @@ mod tests {
         let mint = Mint::new(1);
         let genesis = mint.create_entries();
         let bank = Bank::default();
-        bank.process_ledger(genesis, None).unwrap();
+        bank.process_ledger(genesis, &mut LeaderScheduler::default())
+            .unwrap();
         assert_eq!(bank.get_balance(&mint.pubkey()), 1);
     }
 
@@ -1406,7 +1408,9 @@ mod tests {
         let (ledger, pubkey) = create_sample_ledger(1);
         let (ledger, dup) = ledger.tee();
         let bank = Bank::default();
-        let (ledger_height, tail) = bank.process_ledger(ledger, None).unwrap();
+        let (ledger_height, tail) = bank
+            .process_ledger(ledger, &mut LeaderScheduler::default())
+            .unwrap();
         assert_eq!(bank.get_balance(&pubkey), 1);
         assert_eq!(ledger_height, 3);
         assert_eq!(tail.len(), 3);
@@ -1428,7 +1432,9 @@ mod tests {
         for entry_count in window_size - 3..window_size + 2 {
             let (ledger, pubkey) = create_sample_ledger(entry_count);
             let bank = Bank::default();
-            let (ledger_height, tail) = bank.process_ledger(ledger, None).unwrap();
+            let (ledger_height, tail) = bank
+                .process_ledger(ledger, &mut LeaderScheduler::default())
+                .unwrap();
             assert_eq!(bank.get_balance(&pubkey), 1);
             assert_eq!(ledger_height, entry_count as u64 + 2);
             assert!(tail.len() <= window_size);
@@ -1453,7 +1459,8 @@ mod tests {
         let ledger = to_file_iter(ledger);
 
         let bank = Bank::default();
-        bank.process_ledger(ledger, None).unwrap();
+        bank.process_ledger(ledger, &mut LeaderScheduler::default())
+            .unwrap();
         assert_eq!(bank.get_balance(&pubkey), 1);
     }
 
@@ -1464,7 +1471,8 @@ mod tests {
         let block = to_file_iter(create_sample_block(&mint, 1));
 
         let bank = Bank::default();
-        bank.process_ledger(genesis.chain(block), None).unwrap();
+        bank.process_ledger(genesis.chain(block), &mut LeaderScheduler::default())
+            .unwrap();
         assert_eq!(bank.get_balance(&mint.pubkey()), 1);
     }
 
@@ -1487,9 +1495,13 @@ mod tests {
         let ledger1 = create_sample_ledger_with_mint_and_keypairs(&mint, &keypairs);
 
         let bank0 = Bank::default();
-        bank0.process_ledger(ledger0, None).unwrap();
+        bank0
+            .process_ledger(ledger0, &mut LeaderScheduler::default())
+            .unwrap();
         let bank1 = Bank::default();
-        bank1.process_ledger(ledger1, None).unwrap();
+        bank1
+            .process_ledger(ledger1, &mut LeaderScheduler::default())
+            .unwrap();
 
         let initial_state = bank0.hash_internal_state();
 
