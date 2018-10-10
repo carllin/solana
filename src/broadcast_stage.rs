@@ -205,7 +205,8 @@ impl BroadcastStage {
             ) {
                 match e {
                     Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
-                        return BroadcastStageReturnType::ChannelDisconnected
+                        println!("BROADCAST STAGE DISCONNECTED, RETURNING");
+                        return BroadcastStageReturnType::ChannelDisconnected;
                     }
                     Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
                     Error::ClusterInfoError(ClusterInfoError::NoPeers) => (), // TODO: Why are the unit-tests throwing hundreds of these?

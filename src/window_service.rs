@@ -51,6 +51,7 @@ fn add_block_to_retransmit_queue(
     b: &SharedBlob,
     leader_id: Pubkey,
     retransmit_queue: &mut Vec<SharedBlob>,
+    my_id: Pubkey,
 ) {
     let p = b.read().unwrap();
     //TODO this check isn't safe against adverserial packets
@@ -80,7 +81,22 @@ fn add_block_to_retransmit_queue(
             mnv.meta.size = sz;
             mnv.data[..sz].copy_from_slice(&p.data[..sz]);
         }
+        println!(
+            "MY_ID: {}, Adding blob with idx: {} from leader: {} to retransmit queue addr",
+            my_id,
+            p.get_index()
+                .expect("get_index in fn add_block_to_retransmit_queue"),
+            leader_id
+        );
         retransmit_queue.push(nv);
+    } else {
+        println!(
+            "MY_ID: {}, Not putting blob with idx: {} from node: {:?} to retransmit queue addr",
+            my_id,
+            p.get_index()
+                .expect("get_index in fn add_block_to_retransmit_queue"),
+            p.get_id()
+        );
     }
 }
 
@@ -98,7 +114,7 @@ fn retransmit_all_leader_blocks(
     if let Some(leader) = maybe_leader {
         let leader_id = leader.id;
         for b in dq {
-            add_block_to_retransmit_queue(b, leader_id, &mut retransmit_queue);
+            add_block_to_retransmit_queue(b, leader_id, &mut retransmit_queue, *id);
         }
 
         if *pending_retransmits {
@@ -110,7 +126,7 @@ fn retransmit_all_leader_blocks(
                 *pending_retransmits = false;
                 if w.leader_unknown {
                     if let Some(ref b) = w.data {
-                        add_block_to_retransmit_queue(b, leader_id, &mut retransmit_queue);
+                        add_block_to_retransmit_queue(b, leader_id, &mut retransmit_queue, *id);
                         w.leader_unknown = false;
                     }
                 }
@@ -120,7 +136,7 @@ fn retransmit_all_leader_blocks(
         warn!("{}: no leader to retransmit from", id);
     }
     if !retransmit_queue.is_empty() {
-        trace!(
+        println!(
             "{}: RECV_WINDOW {} {}: retransmit {}",
             id,
             consumed,
@@ -160,7 +176,7 @@ fn recv_window(
     }
     let now = Instant::now();
     inc_new_counter_info!("streamer-recv_window-recv", dq.len(), 100);
-    trace!(
+    println!(
         "{}: RECV_WINDOW {} {}: got packets {}",
         id,
         *consumed,
@@ -188,6 +204,8 @@ fn recv_window(
             (p.get_index()?, p.meta.size)
         };
         pixs.push(pix);
+
+        trace!("{}: RECEIVED BLOB WITH ID: {}", id, pix,);
 
         if !blob_idx_in_window(&id, pix, *consumed, received) {
             continue;

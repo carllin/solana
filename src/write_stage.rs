@@ -12,7 +12,7 @@ use ledger::{Block, LedgerWriter};
 use log::Level;
 use result::{Error, Result};
 use service::Service;
-use signature::Keypair;
+use signature::{Keypair, KeypairUtil};
 use solana_program_interface::pubkey::Pubkey;
 use std::cmp;
 use std::net::UdpSocket;
@@ -237,6 +237,7 @@ impl WriteStage {
                 let id = cluster_info.read().unwrap().id;
                 let mut entry_height_ = entry_height;
                 loop {
+                    println!("WRITE STAGE HAS ENTRY_HEIGHT: {}", entry_height_);
                     // Note that entry height is not zero indexed, it starts at 1, so the
                     // old leader is in power up to and including entry height
                     // n * leader_rotation_interval for some "n". Once we've forwarded
@@ -255,6 +256,10 @@ impl WriteStage {
                             // When the broadcast stage has received the last blob, it
                             // will signal to close the fetch stage, which will in turn
                             // close down this write stage
+                            println!(
+                                "LEADER WITH ID: {:?}, RETURNING FROM WRITE_STAGE",
+                                keypair.pubkey()
+                            );
                             return WriteStageReturnType::LeaderRotation;
                         }
                     }

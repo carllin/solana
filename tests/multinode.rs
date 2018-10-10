@@ -1084,6 +1084,7 @@ fn test_full_leader_validator_network() {
     let bootstrap_leader_node = Node::new_localhost_with_pubkey(bootstrap_leader_keypair.pubkey());
     let bootstrap_leader_info = bootstrap_leader_node.info.clone();
 
+    println!("BOOTSTRAP LEADER ID: {}", bootstrap_leader_keypair.pubkey());
     let mut node_keypairs = VecDeque::new();
     node_keypairs.push_back(bootstrap_leader_keypair);
 

@@ -497,7 +497,7 @@ impl ClusterInfo {
         received_index: u64,
     ) -> Result<()> {
         if broadcast_table.is_empty() {
-            debug!("{}:not enough peers in cluster_info table", me.id);
+            println!("{}:not enough peers in cluster_info table", me.id);
             inc_new_counter_info!("cluster_info-broadcast-not_enough_peers_error", 1);
             Err(ClusterInfoError::NoPeers)?;
         }
@@ -592,7 +592,7 @@ impl ClusterInfo {
                 let bl = b.unwrap();
                 let blob = bl.read().unwrap();
                 //TODO profile this, may need multiple sockets for par_iter
-                trace!(
+                println!(
                     "{}: BROADCAST idx: {} sz: {} to {},{} coding: {}",
                     me.id,
                     blob.get_index().unwrap(),
@@ -603,12 +603,9 @@ impl ClusterInfo {
                 );
                 assert!(blob.meta.size <= BLOB_SIZE);
                 let e = s.send_to(&blob.data[..blob.meta.size], &v.contact_info.tvu);
-                trace!(
+                println!(
                     "{}: done broadcast {} to {} {}",
-                    me.id,
-                    blob.meta.size,
-                    v.id,
-                    v.contact_info.tvu
+                    me.id, blob.meta.size, v.id, v.contact_info.tvu
                 );
                 e
             }).collect();
@@ -670,7 +667,7 @@ impl ClusterInfo {
         let errs: Vec<_> = orders
             .par_iter()
             .map(|v| {
-                debug!(
+                println!(
                     "{}: retransmit blob {} to {} {}",
                     me.id,
                     rblob.get_index().unwrap(),

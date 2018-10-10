@@ -338,6 +338,10 @@ impl LeaderScheduler {
             .truncate((self.seed_rotation_interval / self.leader_rotation_interval) as usize);
         self.leader_schedule = validator_rankings;
         self.last_seed_height = Some(height);
+        println!(
+            "GENERATED SCHEDULE FOR SEED HEIGHT: {} IS AS FOLLOWS: {:?}",
+            height, self.leader_schedule
+        );
     }
 
     fn get_stake(id: &Pubkey, bank: &Bank) -> i64 {

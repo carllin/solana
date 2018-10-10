@@ -331,6 +331,7 @@ impl Fullnode {
                 leader_scheduler.clone(),
             );
             let validator_state = ValidatorServices::new(tvu);
+            println!("STARTED VALIDATOR WITH ID: {}", keypair.pubkey());
             Some(NodeRole::Validator(validator_state))
         } else {
             // Start in leader mode.
@@ -363,6 +364,7 @@ impl Fullnode {
                 tpu_exit,
             );
             let leader_state = LeaderServices::new(tpu, broadcast_stage);
+            println!("STARTED LEADER WITH ID: {}", keypair.pubkey());
             Some(NodeRole::Leader(leader_state))
         };
 

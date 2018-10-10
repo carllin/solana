@@ -396,6 +396,11 @@ pub fn index_blobs(
         blob.set_index(*receive_index + i as u64)
             .expect("set_index in pub fn broadcast");
         blob.set_flags(0).unwrap();
+
+        println!(
+            "BROADCAST STAGE GOT BLOB WITH INDEX: {}",
+            *receive_index + i as u64
+        );
     }
 
     Ok(())
