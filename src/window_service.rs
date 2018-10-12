@@ -160,7 +160,7 @@ fn recv_window(
     }
     let now = Instant::now();
     inc_new_counter_info!("streamer-recv_window-recv", dq.len(), 100);
-    trace!(
+    println!(
         "{}: RECV_WINDOW {} {}: got packets {}",
         id,
         *consumed,
@@ -188,7 +188,7 @@ fn recv_window(
             (p.get_index()?, p.meta.size)
         };
         pixs.push(pix);
-
+        println!("VALIDATOR: {:?}, GOT BLOB INDEX: {}", id, pix);
         if !blob_idx_in_window(&id, pix, *consumed, received) {
             continue;
         }

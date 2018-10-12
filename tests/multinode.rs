@@ -177,6 +177,10 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
     );
 
+    println!(
+        "Leader: {:?}, Validator: {:?}",
+        leader_pubkey, validator_pubkey
+    );
     // Send validator some tokens to vote
     let validator_balance =
         send_tx_and_retry_get_balance(&leader_data, &alice, &validator_pubkey, 500, None).unwrap();
