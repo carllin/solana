@@ -635,13 +635,17 @@ fn create_ticks(num_ticks: usize, hash: &mut Hash) -> Vec<Entry> {
     ticks
 }
 
-pub fn create_sample_ledger(name: &str, num: i64) -> (Mint, String, Vec<Entry>) {
-    let mint = Mint::new(num);
+pub fn create_sample_ledger(
+    name: &str,
+    num_tokens: i64,
+    num_ending_ticks: u64,
+) -> (Mint, String, Vec<Entry>) {
+    let mint = Mint::new(num_tokens);
     let path = tmp_ledger_path(name);
 
     // Create the entries
     let mut genesis = mint.create_entries();
-    let ticks = create_ticks(1, &mut mint.last_id());
+    let ticks = create_ticks(num_ending_ticks as usize, &mut mint.last_id());
     genesis.extend(ticks);
 
     let mut writer = LedgerWriter::open(&path, true).unwrap();
@@ -1021,5 +1025,4 @@ mod tests {
         // Read out of range
         assert!(window.get_entries_bytes(20, 2, &mut buf).is_err());
     }
-
 }

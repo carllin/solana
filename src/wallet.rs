@@ -946,6 +946,7 @@ mod tests {
             leader_keypair,
             bank,
             0,
+            0,
             &[],
             leader,
             None,
@@ -1022,6 +1023,7 @@ mod tests {
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
+            0,
             entry_height,
             &genesis_entries,
             leader,
@@ -1098,6 +1100,7 @@ mod tests {
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
+            0,
             0,
             &[],
             leader,
@@ -1220,6 +1223,7 @@ mod tests {
             leader_keypair,
             bank,
             0,
+            0,
             &[],
             leader,
             None,
@@ -1338,6 +1342,7 @@ mod tests {
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
+            0,
             0,
             &[],
             leader,

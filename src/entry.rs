@@ -186,7 +186,7 @@ fn next_hash(start_hash: &Hash, num_hashes: u64, transactions: &[Transaction]) -
         return *start_hash;
     }
 
-    let mut poh = Poh::new(*start_hash);
+    let mut poh = Poh::new(*start_hash, 0);
 
     for _ in 1..num_hashes {
         poh.hash();
