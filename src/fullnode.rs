@@ -154,6 +154,7 @@ impl Fullnode {
         let server = Self::new_with_bank(
             keypair,
             bank,
+            poh_height,
             entry_height,
             &ledger_tail,
             node,
@@ -558,7 +559,7 @@ impl Fullnode {
         let entries = entries
             .map(|e| e.unwrap_or_else(|err| panic!("failed to parse entry. error: {}", err)));
         info!("processing ledger...");
-        let (entry_height, ledger_tail) = bank
+        let (entry_height, poh_height, ledger_tail) = bank
             .process_ledger(entries, leader_scheduler)
             .expect("process_ledger");
         // entry_height is the network-wide agreed height of the ledger.
@@ -709,7 +710,7 @@ mod tests {
         let first_entries =
             make_active_set_entries(&validator_keypair, &mint.keypair(), &last_id, &last_id);
 
-        let ledger_initial_len = (genesis_entries.len() + first_entries.len()) as u64;
+        let initial_poh_height = first_entries.len() as u64;
         ledger_writer.write_entries(first_entries).unwrap();
 
         // Create the common leader scheduling configuration
@@ -720,13 +721,13 @@ mod tests {
         // Set the bootstrap height exactly the current ledger length, so that we can
         // test if the bootstrap leader knows to immediately transition to a validator
         // after parsing the ledger during startup
-        let bootstrap_height = ledger_initial_len;
+        let bootstrap_height = initial_poh_height;
         let leader_scheduler_config = LeaderSchedulerConfig::new(
             bootstrap_leader_info.id,
             Some(bootstrap_height),
             Some(leader_rotation_interval),
             Some(seed_rotation_interval),
-            Some(ledger_initial_len),
+            Some(initial_poh_height),
         );
 
         // Test that a node knows to transition to a validator based on parsing the ledger

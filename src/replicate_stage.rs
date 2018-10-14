@@ -353,7 +353,8 @@ mod test {
             .into_inner()
             .expect("RwLock for LeaderScheduler is still locked");
 
-        let (_, entry_height, _) =
+        leader_scheduler.reset();
+        let (_, entry_height, _, _) =
             Fullnode::new_bank_from_ledger(&my_ledger_path, &mut leader_scheduler);
 
         assert_eq!(entry_height, bootstrap_height);

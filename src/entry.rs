@@ -48,8 +48,8 @@ pub struct Entry {
 impl Entry {
     /// Creates the next Entry `num_hashes` after `start_hash`.
     pub fn new(start_hash: &Hash, num_hashes: u64, transactions: Vec<Transaction>) -> Self {
-        let num_hashes = num_hashes + if transactions.is_empty() { 0 } else { 1 };
-        let id = next_hash(start_hash, 0, &transactions);
+        // If you want a tick, then pass in num_hashes = 1 and transactions = empty
+        let id = next_hash(start_hash, num_hashes, &transactions);
         let entry = Entry {
             num_hashes,
             id,

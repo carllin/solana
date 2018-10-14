@@ -347,7 +347,7 @@ mod tests {
         leader_scheduler: Arc<RwLock<LeaderScheduler>>,
     }
 
-    fn process_ledger(ledger_path: &str, bank: &Bank) -> (u64, Vec<Entry>) {
+    fn process_ledger(ledger_path: &str, bank: &Bank) -> (u64, u64, Vec<Entry>) {
         let entries = read_ledger(ledger_path, true).expect("opening ledger");
 
         let entries = entries
@@ -374,7 +374,7 @@ mod tests {
         // Make a ledger
         let (_, leader_ledger_path) = genesis(test_name, 10_000);
 
-        let (entry_height, ledger_tail) = process_ledger(&leader_ledger_path, &bank);
+        let (entry_height, poh_height, ledger_tail) = process_ledger(&leader_ledger_path, &bank);
 
         // Make a dummy pipe
         let (entry_sender, entry_receiver) = channel();
@@ -435,6 +435,7 @@ mod tests {
             .last()
             .expect("Ledger should not be empty")
             .id;
+
         let mut num_hashes = 0;
 
         let genesis_entry_height = write_stage_info.ledger_tail.len() as u64;
@@ -482,7 +483,7 @@ mod tests {
         );
 
         // Make sure the ledger contains exactly 2 * leader_rotation_interval entries
-        let (entry_height, _) =
+        let (entry_height, _, _) =
             process_ledger(&write_stage_info.leader_ledger_path, &write_stage_info.bank);
         remove_dir_all(write_stage_info.leader_ledger_path).unwrap();
         assert_eq!(entry_height, 2 * leader_rotation_interval);
