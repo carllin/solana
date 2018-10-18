@@ -867,23 +867,12 @@ impl Bank {
         results
     }
 
-    pub fn process_entry_votes(
-        bank: &Bank,
+    pub fn process_entry(
+        &self,
         entry: &Entry,
-        poh_height: u64,
+        tick_height: &mut u64,
         leader_scheduler: &mut LeaderScheduler,
-    ) {
-        for tx in &entry.transactions {
-            if tx.vote().is_some() {
-                // Update the active set in the leader scheduler
-                leader_scheduler.push_vote(*tx.from(), poh_height);
-            }
-        }
-
-        leader_scheduler.update_height(poh_height, bank);
-    }
-
-    pub fn process_entry(&self, entry: &Entry) -> Result<()> {
+    ) -> Result<()> {
         if !entry.transactions.is_empty() {
             for result in self.process_transactions(&entry.transactions) {
                 result?;
@@ -891,19 +880,45 @@ impl Bank {
         } else {
             self.register_entry_id(&entry.id);
         }
+
+        if entry.is_tick() {
+            println!("Entry tick id: {}, height: {}", entry.id, tick_height);
+            *tick_height += 1;
+        } else {
+            println!("Entry not tick id: {}, height: {}", entry.id, tick_height);
+        }
+
+        self.process_entry_votes(entry, *tick_height, leader_scheduler);
         Ok(())
     }
 
+    fn process_entry_votes(
+        &self,
+        entry: &Entry,
+        tick_height: u64,
+        leader_scheduler: &mut LeaderScheduler,
+    ) {
+        for tx in &entry.transactions {
+            if tx.vote().is_some() {
+                // Update the active set in the leader scheduler
+                leader_scheduler.push_vote(*tx.from(), tick_height);
+            }
+        }
+
+        leader_scheduler.update_height(tick_height, self);
+    }
+
     /// Process an ordered list of entries, populating a circular buffer "tail"
-    ///   as we go.
+    /// as we go.
     fn process_entries_tail(
         &self,
         entries: &[Entry],
         tail: &mut Vec<Entry>,
         tail_idx: &mut usize,
-    ) -> Result<(u64, u64)> {
+        tick_height: &mut u64,
+        leader_scheduler: &mut LeaderScheduler,
+    ) -> Result<u64> {
         let mut entry_count = 0;
-        let mut poh_count = 0;
 
         for entry in entries {
             if tail.len() > *tail_idx {
@@ -914,11 +929,15 @@ impl Bank {
             *tail_idx = (*tail_idx + 1) % WINDOW_SIZE as usize;
 
             entry_count += 1;
-            poh_count += entry.num_hashes;
-            self.process_entry(entry)?;
+            // TODO: We prepare for implementing voting contract by making the associated
+            // process_entries functions aware of the vote-tracking structure inside
+            // the leader scheduler. Next we will extract the vote tracking structure
+            // out of the leader scheduler, and into the bank, and remove the leader
+            // scheduler from these banking functions.
+            self.process_entry(entry, tick_height, leader_scheduler)?;
         }
 
-        Ok((entry_count, poh_count))
+        Ok(entry_count)
     }
 
     /// Process an ordered list of entries.
@@ -997,9 +1016,10 @@ impl Bank {
         // Ledger verification needs to be parallelized, but we can't pull the whole
         // thing into memory. We therefore chunk it.
         let mut entry_height = *tail_idx as u64;
-        let mut poh_height = 0;
+        let mut tick_height = 0;
         for entry in &tail[0..*tail_idx] {
-            poh_height += entry.num_hashes;
+            println!("Genesis, Entry id: {}, height: {}", entry.id, tick_height);
+            tick_height += entry.is_tick() as u64
         }
 
         let mut id = start_hash;
@@ -1010,25 +1030,17 @@ impl Bank {
                 return Err(BankError::LedgerVerificationFailed);
             }
             id = block.last().unwrap().id;
-            let (entry_count, poh_count) = self.process_entries_tail(&block, tail, tail_idx)?;
+            let entry_count = self.process_entries_tail(
+                &block,
+                tail,
+                tail_idx,
+                &mut tick_height,
+                leader_scheduler,
+            )?;
 
-            if !leader_scheduler.use_only_bootstrap_leader {
-                block.iter().fold(0, |poh_count, entry| {
-                    let total_poh_count = poh_count + entry.num_hashes;
-                    Self::process_entry_votes(
-                        self,
-                        &entry,
-                        poh_height + total_poh_count,
-                        leader_scheduler,
-                    );
-                    total_poh_count
-                });
-            }
-
-            poh_height += poh_count;
             entry_height += entry_count;
         }
-        Ok((entry_height, poh_height))
+        Ok((tick_height, entry_height))
     }
 
     /// Process a full ledger.
@@ -1078,7 +1090,7 @@ impl Bank {
         tail.push(entry0);
         tail.push(entry1);
         let mut tail_idx = 2;
-        let (entry_height, poh_height) = self.process_blocks(
+        let (tick_height, entry_height) = self.process_blocks(
             entry1_id,
             entries,
             &mut tail,
@@ -1091,7 +1103,7 @@ impl Bank {
             tail.rotate_left(tail_idx)
         }
 
-        Ok((entry_height, poh_height, tail))
+        Ok((tick_height, entry_height, tail))
     }
 
     /// Create, sign, and process a Transaction from `keypair` to `to` of

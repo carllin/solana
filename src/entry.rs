@@ -196,6 +196,10 @@ impl Entry {
         }
         true
     }
+
+    pub fn is_tick(&self) -> bool {
+        self.transactions.len() == 0
+    }
 }
 
 /// Creates the hash `num_hashes` after `start_hash`. If the transaction contains
@@ -207,7 +211,7 @@ fn next_hash(start_hash: &Hash, num_hashes: u64, transactions: &[Transaction]) -
         return *start_hash;
     }
 
-    let mut poh = Poh::new(*start_hash, 0);
+    let mut poh = Poh::new(*start_hash);
 
     for _ in 1..num_hashes {
         poh.hash();
