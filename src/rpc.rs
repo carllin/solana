@@ -556,6 +556,12 @@ mod tests {
 
         let genesis_entries = &alice.create_entries();
         let entry_height = genesis_entries.len() as u64;
+
+        let leader_scheduler = Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_data.id,
+        )));
+        bank.leader_scheduler = leader_scheduler;
+
         let server = Fullnode::new_with_bank(
             leader_keypair,
             bank,
@@ -566,7 +572,6 @@ mod tests {
             None,
             &ledger_path,
             false,
-            LeaderScheduler::from_bootstrap_leader(leader_data.id),
             Some(rpc_port),
         );
         sleep(Duration::from_millis(900));

@@ -64,7 +64,7 @@ impl ReplicateStage {
         vote_blob_sender: Option<&BlobSender>,
         tick_height: &mut u64,
         entry_height: &mut u64,
-        leader_scheduler: &Arc<RwLock<LeaderScheduler>>,
+        leader_scheduler: &RwLock<LeaderScheduler>,
     ) -> Result<Hash> {
         let timer = Duration::new(1, 0);
         //coalesce all the available entries into a single vote
@@ -96,9 +96,7 @@ impl ReplicateStage {
                     ls_lock.max_height_for_leader(*tick_height)
                 };
 
-                res = bank.process_entry(
-                    &entry
-                );
+                res = bank.process_entry(&entry);
 
                 // Will run only if leader_scheduler.use_only_bootstrap_leader is false
                 if let Some(max_tick_height) = max_tick_height {
@@ -169,7 +167,6 @@ impl ReplicateStage {
         exit: Arc<AtomicBool>,
         tick_height: u64,
         entry_height: u64,
-        leader_scheduler: Arc<RwLock<LeaderScheduler>>,
     ) -> Self {
         let (vote_blob_sender, vote_blob_receiver) = channel();
         let send = UdpSocket::bind("0.0.0.0:0").expect("bind");
@@ -188,6 +185,7 @@ impl ReplicateStage {
                 let mut tick_height_ = tick_height;
                 let mut last_entry_id = None;
                 loop {
+                    let leader_scheduler = &bank.leader_scheduler;
                     let leader_id = leader_scheduler
                         .read()
                         .unwrap()
@@ -222,7 +220,7 @@ impl ReplicateStage {
                         vote_sender,
                         &mut tick_height_,
                         &mut entry_height_,
-                        &leader_scheduler,
+                        leader_scheduler,
                     ) {
                         Err(Error::RecvTimeoutError(RecvTimeoutError::Disconnected)) => break,
                         Err(Error::RecvTimeoutError(RecvTimeoutError::Timeout)) => (),
@@ -319,13 +317,11 @@ mod test {
             Some(bootstrap_height),
         );
 
-        let mut leader_scheduler = LeaderScheduler::new(&leader_scheduler_config);
+        let mut leader_scheduler =
+            Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config)));
 
         // Set up the bank
-        let (bank, _, _, _) =
-            Fullnode::new_bank_from_ledger(&my_ledger_path, &mut leader_scheduler);
-
-        let leader_scheduler = Arc::new(RwLock::new(leader_scheduler));
+        let (bank, _, _, _) = Fullnode::new_bank_from_ledger(&my_ledger_path, leader_scheduler);
 
         // Set up the replicate stage
         let (entry_sender, entry_receiver) = channel();
@@ -339,7 +335,6 @@ mod test {
             exit.clone(),
             initial_tick_height,
             initial_entry_len,
-            leader_scheduler.clone(),
         );
 
         // Send enough ticks to trigger leader rotation
@@ -377,14 +372,11 @@ mod test {
         assert_eq!(exit.load(Ordering::Relaxed), true);
 
         // Check ledger height is correct
-        let mut leader_scheduler = Arc::try_unwrap(leader_scheduler)
-            .expect("Multiple references to this RwLock still exist")
-            .into_inner()
-            .expect("RwLock for LeaderScheduler is still locked");
+        let leader_scheduler =
+            Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config)));
 
-        leader_scheduler.reset();
         let (_, tick_height, entry_height, _) =
-            Fullnode::new_bank_from_ledger(&my_ledger_path, &mut leader_scheduler);
+            Fullnode::new_bank_from_ledger(&my_ledger_path, leader_scheduler);
 
         assert_eq!(tick_height, bootstrap_height);
         assert_eq!(entry_height, expected_entry_height);

@@ -318,6 +318,10 @@ mod tests {
 
         let alice = Mint::new(10_000_000);
         let bank = Bank::new(&alice);
+        let leader_scheduler = Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_data.id,
+        )));
+        bank.leader_scheduler = leader_scheduler;
         let bob_pubkey = Keypair::new().pubkey();
         let carlos_pubkey = Keypair::new().pubkey();
         let leader_data = leader.info.clone();
@@ -333,7 +337,6 @@ mod tests {
             None,
             &ledger_path,
             false,
-            LeaderScheduler::from_bootstrap_leader(leader_data.id),
             Some(0),
         );
 

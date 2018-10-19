@@ -882,7 +882,7 @@ fn test_leader_to_validator_transition() {
     // Check the ledger to make sure it's the right height, we should've
     // transitioned after tick_height == bootstrap_height
     let (_, tick_height, _, _) =
-        Fullnode::new_bank_from_ledger(&leader_ledger_path, &mut LeaderScheduler::default());
+        Fullnode::new_bank_from_ledger(&leader_ledger_path, LeaderScheduler::default());
 
     assert_eq!(tick_height, bootstrap_height);
 
