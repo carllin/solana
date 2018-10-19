@@ -78,7 +78,6 @@ impl Tvu {
     pub fn new(
         keypair: Arc<Keypair>,
         bank: &Arc<Bank>,
-        tick_height: u64,
         entry_height: u64,
         cluster_info: Arc<RwLock<ClusterInfo>>,
         window: SharedWindow,
@@ -101,7 +100,7 @@ impl Tvu {
         let (retransmit_stage, blob_window_receiver) = RetransmitStage::new(
             &cluster_info,
             window,
-            tick_height,
+            bank.get_tick_height(),
             entry_height,
             Arc::new(retransmit_socket),
             repair_socket,
@@ -263,7 +262,6 @@ pub mod tests {
         let tvu = Tvu::new(
             Arc::new(target1_keypair),
             &bank,
-            0,
             0,
             cref1,
             dr_1.1,
