@@ -116,7 +116,6 @@ impl Tvu {
             blob_window_receiver,
             ledger_path,
             exit.clone(),
-            tick_height,
             entry_height,
         );
 
