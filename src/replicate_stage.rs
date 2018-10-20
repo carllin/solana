@@ -12,6 +12,7 @@ use metrics;
 use result::{Error, Result};
 use service::Service;
 use signature::{Keypair, KeypairUtil};
+use solana_program_interface::pubkey::Pubkey;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
@@ -60,6 +61,7 @@ impl ReplicateStage {
         window_receiver: &EntryReceiver,
         ledger_writer: Option<&mut LedgerWriter>,
         keypair: &Arc<Keypair>,
+        vote_account: &mut Pubkey,
         vote_blob_sender: Option<&BlobSender>,
         entry_height: &mut u64,
     ) -> Result<Hash> {
@@ -121,7 +123,7 @@ impl ReplicateStage {
         };
 
         if let Some(sender) = vote_blob_sender {
-            send_validator_vote(bank, keypair, &cluster_info, sender)?;
+            send_validator_vote(bank, keypair, vote_account, &cluster_info, sender)?;
         }
 
         inc_new_counter_info!(
@@ -167,6 +169,7 @@ impl ReplicateStage {
                 let mut next_vote_secs = 1;
                 let mut entry_height_ = entry_height;
                 let mut last_entry_id = None;
+                let mut vote_account = Pubkey::default();
                 loop {
                     let leader_id =
                         bank.get_current_leader()
@@ -198,6 +201,7 @@ impl ReplicateStage {
                         &window_receiver,
                         ledger_writer.as_mut(),
                         &keypair,
+                        &mut vote_account,
                         vote_sender,
                         &mut entry_height_,
                     ) {

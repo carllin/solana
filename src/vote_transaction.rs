@@ -8,15 +8,28 @@ use transaction::Transaction;
 use vote_program::{Vote, VoteInstruction, VoteProgram};
 
 pub trait VoteTransaction {
-    fn vote_new(from_keypair: &Keypair, vote: Vote, last_id: Hash, fee: i64) -> Self;
+    fn vote_new(
+        from_keypair: &Keypair,
+        vote_account: Pubkey,
+        vote: Vote,
+        last_id: Hash,
+        fee: i64,
+    ) -> Self;
     fn get_votes(&self) -> Vec<(Pubkey, Vote, Hash)>;
 }
 
 impl VoteTransaction for Transaction {
-    fn vote_new(from: &Keypair, vote: Vote, last_id: Hash, fee: i64) -> Self {
+    fn vote_new(from: &Keypair, vote_account: Pubkey, vote: Vote, last_id: Hash, fee: i64) -> Self {
         let instruction = VoteInstruction::NewVote(vote);
         let userdata = serialize(&instruction).expect("serialize instruction");
-        Transaction::new(from, &[], VoteProgram::id(), userdata, last_id, fee)
+        Transaction::new(
+            from,
+            &[vote_account],
+            VoteProgram::id(),
+            userdata,
+            last_id,
+            fee,
+        )
     }
 
     fn get_votes(&self) -> Vec<(Pubkey, Vote, Hash)> {

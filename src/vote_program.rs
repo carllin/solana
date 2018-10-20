@@ -6,6 +6,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use solana_program_interface::account::Account;
 use solana_program_interface::pubkey::Pubkey;
 use std;
+use std::collections::VecDeque;
 use transaction::Transaction;
 
 // The number of bytes used to record the size of the vote state in the account userdata
@@ -39,8 +40,8 @@ pub enum VoteInstruction {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct VoteProgram {
-    pub votes: Vec<Vote>,
-    pub validator_id: Pubkey,
+    pub votes: VecDeque<Vote>,
+    pub node_id: Pubkey,
 }
 
 pub const VOTE_PROGRAM_ID: [u8; 32] = [
@@ -103,21 +104,28 @@ impl VoteProgram {
 
         match deserialize(tx.userdata(instruction_index)) {
             Ok(VoteInstruction::NewVote(vote)) => {
-                if vote_state.validator_id == Pubkey::default() {
+                if vote_state.node_id == Pubkey::default() {
                     // If it's a new account, setup this account for voting
-                    vote_state.validator_id = *tx.from();
-                    vote_state.votes = vec![];
-                } else if vote_state.validator_id != *tx.from() {
-                    // If it's an old account, verify the state's validator id and
-                    // the sender's id match (ensures validators can't vote for others)
+                    vote_state.node_id = *tx.from();
+                    vote_state.votes = VecDeque::new();
+                } else if vote_state.node_id != *tx.from() {
+                    // If it's an old account, verify the state's node id and
+                    // the sender's id match (ensures nodes can't vote for other nodes)
                     Err(Error::InvalidArguments)?;
                 }
 
-                // TODO: Verify the vote's bank hash matches what is expected
+                // TODO: Integrity checks
+                // a) Verify the vote's bank hash matches what is expected
+                // b) Verify vote is older than previous votes
 
-                vote_state.votes.push(vote);
+                // Only keep around the most recent MAX_VOTE_HISTORY votes
+                if vote_state.votes.len() == MAX_VOTE_HISTORY {
+                    vote_state.votes.pop_front();
+                    vote_state.votes.push_back(vote);
+                }
+
                 vote_state.serialize(&mut accounts[0].userdata)?;
-                // Update the active set in the leader scheduler
+
                 Ok(())
             }
             Err(_) => {
