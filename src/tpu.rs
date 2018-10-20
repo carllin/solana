@@ -27,17 +27,15 @@
 
 use bank::Bank;
 use banking_stage::{BankingStage, BankingStageReturnType, Config};
-use cluster_info::ClusterInfo;
 use entry::Entry;
 use fetch_stage::FetchStage;
 use hash::Hash;
 use service::Service;
-use signature::Keypair;
 use sigverify_stage::SigVerifyStage;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread;
 use write_stage::WriteStage;
 
@@ -56,9 +54,7 @@ pub struct Tpu {
 impl Tpu {
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn new(
-        keypair: Arc<Keypair>,
         bank: &Arc<Bank>,
-        cluster_info: &Arc<RwLock<ClusterInfo>>,
         tick_duration: Config,
         transactions_sockets: Vec<UdpSocket>,
         ledger_path: &str,
@@ -83,13 +79,7 @@ impl Tpu {
             max_tick_height,
         );
 
-        let (write_stage, entry_forwarder) = WriteStage::new(
-            keypair,
-            bank.clone(),
-            cluster_info.clone(),
-            ledger_path,
-            entry_receiver,
-        );
+        let (write_stage, entry_forwarder) = WriteStage::new(ledger_path, entry_receiver);
 
         let tpu = Tpu {
             fetch_stage,

@@ -6,7 +6,7 @@ use counter::Counter;
 use entry::EntryReceiver;
 use hash::Hash;
 use influx_db_client as influxdb;
-use ledger::{Block, LedgerWriter};
+use ledger::LedgerWriter;
 use log::Level;
 use metrics;
 use result::{Error, Result};
@@ -121,10 +121,8 @@ impl ReplicateStage {
         };
 
         if let Some(sender) = vote_blob_sender {
-            send_validator_vote(bank, keypair, cluster_info, sender)?;
+            send_validator_vote(bank, keypair, &cluster_info, sender)?;
         }
-
-        cluster_info.write().unwrap().insert_votes(&entries.votes());
 
         inc_new_counter_info!(
             "replicate-transactions",
