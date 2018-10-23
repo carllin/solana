@@ -91,7 +91,7 @@ impl Tpu {
         (tpu, entry_forwarder, exit)
     }
 
-    pub fn exit(&self) -> () {
+    pub fn exit(&self) {
         self.exit.store(true, Ordering::Relaxed);
     }
 

@@ -921,7 +921,7 @@ mod tests {
 
         let bob_pubkey = Keypair::new().pubkey();
 
-        let leader_keypair = Keypair::new();
+        let leader_keypair = Arc::new(Keypair::new());
         let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
         let leader_data = leader.info.clone();
         let leader_data1 = leader.info.clone();
@@ -933,9 +933,10 @@ mod tests {
             leader_data.id,
         )));
         bank.leader_scheduler = leader_scheduler;
-
+        let vote_account_keypair = Arc::new(Keypair::new());
         let server = Fullnode::new_with_bank(
             leader_keypair,
+            vote_account_keypair,
             bank,
             0,
             0,
@@ -1002,7 +1003,7 @@ mod tests {
         let mut bank = Bank::new(&alice);
         let bob_pubkey = Keypair::new().pubkey();
 
-        let leader_keypair = Keypair::new();
+        let leader_keypair = Arc::new(Keypair::new());
         let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
         let leader_data = leader.info.clone();
 
@@ -1015,9 +1016,10 @@ mod tests {
             leader_data.id,
         )));
         bank.leader_scheduler = leader_scheduler;
-
+        let vote_account_keypair = Arc::new(Keypair::new());
         let server = Fullnode::new_with_bank(
             leader_keypair,
+            vote_account_keypair,
             bank,
             0,
             entry_height,
@@ -1083,7 +1085,7 @@ mod tests {
 
         let bob_pubkey = Keypair::new().pubkey();
 
-        let leader_keypair = Keypair::new();
+        let leader_keypair = Arc::new(Keypair::new());
         let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
         let leader_data = leader.info.clone();
         let leader_data1 = leader.info.clone();
@@ -1097,9 +1099,10 @@ mod tests {
             leader_data.id,
         )));
         bank.leader_scheduler = leader_scheduler;
-
+        let vote_account_keypair = Arc::new(Keypair::new());
         let server = Fullnode::new_with_bank(
             leader_keypair,
+            vote_account_keypair,
             bank,
             0,
             0,
@@ -1207,7 +1210,7 @@ mod tests {
         let (alice, ledger_path) = create_tmp_genesis("wallet_witness_tx", 10_000_000);
         let mut bank = Bank::new(&alice);
         let bob_pubkey = Keypair::new().pubkey();
-        let leader_keypair = Keypair::new();
+        let leader_keypair = Arc::new(Keypair::new());
         let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
         let leader_data = leader.info.clone();
         let leader_data1 = leader.info.clone();
@@ -1221,9 +1224,10 @@ mod tests {
             leader_data.id,
         )));
         bank.leader_scheduler = leader_scheduler;
-
+        let vote_account_keypair = Arc::new(Keypair::new());
         let server = Fullnode::new_with_bank(
             leader_keypair,
+            vote_account_keypair,
             bank,
             0,
             0,
@@ -1329,7 +1333,7 @@ mod tests {
         let (alice, ledger_path) = create_tmp_genesis("wallet_cancel_tx", 10_000_000);
         let mut bank = Bank::new(&alice);
         let bob_pubkey = Keypair::new().pubkey();
-        let leader_keypair = Keypair::new();
+        let leader_keypair = Arc::new(Keypair::new());
         let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
         let leader_data = leader.info.clone();
         let leader_data1 = leader.info.clone();
@@ -1343,9 +1347,10 @@ mod tests {
             leader_data.id,
         )));
         bank.leader_scheduler = leader_scheduler;
-
+        let vote_account_keypair = Arc::new(Keypair::new());
         let server = Fullnode::new_with_bank(
             leader_keypair,
+            vote_account_keypair,
             bank,
             0,
             0,

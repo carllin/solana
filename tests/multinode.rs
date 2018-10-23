@@ -109,7 +109,7 @@ fn make_tiny_test_entries(start_hash: Hash, num: usize) -> Vec<Entry> {
 fn test_multi_node_ledger_window() -> result::Result<()> {
     logger::setup();
 
-    let leader_keypair = Keypair::new();
+    let leader_keypair = Arc::new(Keypair::new());
     let leader_pubkey = leader_keypair.pubkey().clone();
     let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let leader_data = leader.info.clone();
@@ -136,6 +136,7 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
         leader,
         &leader_ledger_path,
         leader_keypair,
+        Arc::new(Keypair::new()),
         None,
         false,
         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -148,7 +149,7 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
 
     // start up another validator from zero, converge and then check
     // balances
-    let keypair = Keypair::new();
+    let keypair = Arc::new(Keypair::new());
     let validator_pubkey = keypair.pubkey().clone();
     let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
     let validator_data = validator.info.clone();
@@ -156,6 +157,7 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
         validator,
         &zero_ledger_path,
         keypair,
+        Arc::new(Keypair::new()),
         Some(leader_data.contact_info.ncp),
         false,
         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -206,7 +208,7 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
     logger::setup();
     const N: usize = 5;
     trace!("test_multi_node_validator_catchup_from_zero");
-    let leader_keypair = Keypair::new();
+    let leader_keypair = Arc::new(Keypair::new());
     let leader_pubkey = leader_keypair.pubkey().clone();
     let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let leader_data = leader.info.clone();
@@ -227,6 +229,7 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
         leader,
         &leader_ledger_path,
         leader_keypair,
+        Arc::new(Keypair::new()),
         None,
         false,
         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -239,7 +242,7 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
 
     let mut nodes = vec![server];
     for _ in 0..N {
-        let keypair = Keypair::new();
+        let keypair = Arc::new(Keypair::new());
         let validator_pubkey = keypair.pubkey().clone();
         let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
         let ledger_path = tmp_copy_ledger(
@@ -258,6 +261,7 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
             validator,
             &ledger_path,
             keypair,
+            Arc::new(Keypair::new()),
             Some(leader_data.contact_info.ncp),
             false,
             LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -288,12 +292,13 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
     success = 0;
     // start up another validator from zero, converge and then check everyone's
     // balances
-    let keypair = Keypair::new();
+    let keypair = Arc::new(Keypair::new());
     let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
     let val = Fullnode::new(
         validator,
         &zero_ledger_path,
         keypair,
+        Arc::new(Keypair::new()),
         Some(leader_data.contact_info.ncp),
         false,
         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -347,7 +352,7 @@ fn test_multi_node_basic() {
     logger::setup();
     const N: usize = 5;
     trace!("test_multi_node_basic");
-    let leader_keypair = Keypair::new();
+    let leader_keypair = Arc::new(Keypair::new());
     let leader_pubkey = leader_keypair.pubkey().clone();
     let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let leader_data = leader.info.clone();
@@ -360,6 +365,7 @@ fn test_multi_node_basic() {
         leader,
         &leader_ledger_path,
         leader_keypair,
+        Arc::new(Keypair::new()),
         None,
         false,
         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -372,7 +378,7 @@ fn test_multi_node_basic() {
 
     let mut nodes = vec![server];
     for _ in 0..N {
-        let keypair = Keypair::new();
+        let keypair = Arc::new(Keypair::new());
         let validator_pubkey = keypair.pubkey().clone();
         let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
         let ledger_path = tmp_copy_ledger(&leader_ledger_path, "multi_node_basic");
@@ -388,6 +394,7 @@ fn test_multi_node_basic() {
             validator,
             &ledger_path,
             keypair,
+            Arc::new(Keypair::new()),
             Some(leader_data.contact_info.ncp),
             false,
             LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -425,7 +432,7 @@ fn test_multi_node_basic() {
 #[test]
 fn test_boot_validator_from_file() -> result::Result<()> {
     logger::setup();
-    let leader_keypair = Keypair::new();
+    let leader_keypair = Arc::new(Keypair::new());
     let leader_pubkey = leader_keypair.pubkey();
     let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let bob_pubkey = Keypair::new().pubkey();
@@ -438,6 +445,7 @@ fn test_boot_validator_from_file() -> result::Result<()> {
         leader,
         &leader_ledger_path,
         leader_keypair,
+        Arc::new(Keypair::new()),
         None,
         false,
         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -449,7 +457,7 @@ fn test_boot_validator_from_file() -> result::Result<()> {
         send_tx_and_retry_get_balance(&leader_data, &alice, &bob_pubkey, 500, Some(1000)).unwrap();
     assert_eq!(leader_balance, 1000);
 
-    let keypair = Keypair::new();
+    let keypair = Arc::new(Keypair::new());
     let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
     let validator_data = validator.info.clone();
     let ledger_path = tmp_copy_ledger(&leader_ledger_path, "boot_validator_from_file");
@@ -458,6 +466,7 @@ fn test_boot_validator_from_file() -> result::Result<()> {
         validator,
         &ledger_path,
         keypair,
+        Arc::new(Keypair::new()),
         Some(leader_data.contact_info.ncp),
         false,
         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -476,13 +485,14 @@ fn test_boot_validator_from_file() -> result::Result<()> {
 }
 
 fn create_leader(ledger_path: &str) -> (NodeInfo, Fullnode) {
-    let leader_keypair = Keypair::new();
+    let leader_keypair = Arc::new(Keypair::new());
     let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let leader_data = leader.info.clone();
     let leader_fullnode = Fullnode::new(
         leader,
         &ledger_path,
         leader_keypair,
+        Arc::new(Keypair::new()),
         None,
         false,
         LeaderScheduler::from_bootstrap_leader(leader_data.id),
@@ -530,7 +540,7 @@ fn test_leader_restart_validator_start_from_old_ledger() -> result::Result<()> {
     let (leader_data, leader_fullnode) = create_leader(&ledger_path);
 
     // start validator from old ledger
-    let keypair = Keypair::new();
+    let keypair = Arc::new(Keypair::new());
     let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
     let validator_data = validator.info.clone();
 
@@ -538,6 +548,7 @@ fn test_leader_restart_validator_start_from_old_ledger() -> result::Result<()> {
         validator,
         &stale_ledger_path,
         keypair,
+        Arc::new(Keypair::new()),
         Some(leader_data.contact_info.ncp),
         false,
         LeaderScheduler::from_bootstrap_leader(leader_data.id),
@@ -586,7 +597,7 @@ fn test_multi_node_dynamic_network() {
         Err(_) => 120,
     };
 
-    let leader_keypair = Keypair::new();
+    let leader_keypair = Arc::new(Keypair::new());
     let leader_pubkey = leader_keypair.pubkey().clone();
     let leader = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let bob_pubkey = Keypair::new().pubkey();
@@ -602,6 +613,7 @@ fn test_multi_node_dynamic_network() {
         leader,
         &leader_ledger_path,
         leader_keypair,
+        Arc::new(Keypair::new()),
         None,
         true,
         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -673,7 +685,8 @@ fn test_multi_node_dynamic_network() {
                     let val = Fullnode::new(
                         validator,
                         &ledger_path,
-                        keypair,
+                        Arc::new(keypair),
+                        Arc::new(Keypair::new()),
                         Some(leader_data.contact_info.ncp),
                         true,
                         LeaderScheduler::from_bootstrap_leader(leader_pubkey),
@@ -778,7 +791,7 @@ fn test_leader_to_validator_transition() {
     let validator_keypair = Keypair::new();
 
     // Create the leader node information
-    let leader_keypair = Keypair::new();
+    let leader_keypair = Arc::new(Keypair::new());
     let leader_node = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let leader_info = leader_node.info.clone();
 
@@ -799,7 +812,7 @@ fn test_leader_to_validator_transition() {
     // Write the bootstrap entries to the ledger that will cause leader rotation
     // after the bootstrap height
     let mut ledger_writer = LedgerWriter::open(&leader_ledger_path, false).unwrap();
-    let bootstrap_entries =
+    let (bootstrap_entries, _) =
         make_active_set_entries(&validator_keypair, &mint.keypair(), &last_id, &last_id, 0);
     ledger_writer.write_entries(bootstrap_entries).unwrap();
 
@@ -817,6 +830,7 @@ fn test_leader_to_validator_transition() {
         leader_node,
         &leader_ledger_path,
         leader_keypair,
+        Arc::new(Keypair::new()),
         Some(leader_info.contact_info.ncp),
         false,
         LeaderScheduler::new(&leader_scheduler_config),
@@ -869,7 +883,7 @@ fn test_leader_to_validator_transition() {
         _ => panic!("Expected reason for exit to be leader rotation"),
     }
 
-    // Query newly transitioned validator to make sure that he has the proper balances in
+    // Query newly transitioned validator to make sure that they have the proper balances in
     // the after the transitions
     let mut leader_client = mk_client(&leader_info);
 
@@ -903,12 +917,12 @@ fn test_leader_validator_basic() {
     let bob_pubkey = Keypair::new().pubkey();
 
     // Create the leader node information
-    let leader_keypair = Keypair::new();
+    let leader_keypair = Arc::new(Keypair::new());
     let leader_node = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
     let leader_info = leader_node.info.clone();
 
     // Create the validator node information
-    let validator_keypair = Keypair::new();
+    let validator_keypair = Arc::new(Keypair::new());
     let validator_node = Node::new_localhost_with_pubkey(validator_keypair.pubkey());
 
     // Make a common mint and a genesis entry for both leader + validator ledgers
@@ -931,7 +945,7 @@ fn test_leader_validator_basic() {
     // Write the bootstrap entries to the ledger that will cause leader rotation
     // after the bootstrap height
     let mut ledger_writer = LedgerWriter::open(&leader_ledger_path, false).unwrap();
-    let active_set_entries =
+    let (active_set_entries, vote_account_keypair) =
         make_active_set_entries(&validator_keypair, &mint.keypair(), &last_id, &last_id, 0);
     ledger_writer.write_entries(active_set_entries).unwrap();
 
@@ -946,21 +960,23 @@ fn test_leader_validator_basic() {
         Some(bootstrap_height),
     );
 
-    // Start the leader fullnode
-    let mut leader = Fullnode::new(
-        leader_node,
-        &leader_ledger_path,
-        leader_keypair,
-        Some(leader_info.contact_info.ncp),
-        false,
-        LeaderScheduler::new(&leader_scheduler_config),
-    );
-
     // Start the validator node
     let mut validator = Fullnode::new(
         validator_node,
         &validator_ledger_path,
         validator_keypair,
+        Arc::new(vote_account_keypair),
+        Some(leader_info.contact_info.ncp),
+        false,
+        LeaderScheduler::new(&leader_scheduler_config),
+    );
+
+    // Start the leader fullnode
+    let mut leader = Fullnode::new(
+        leader_node,
+        &leader_ledger_path,
+        leader_keypair,
+        Arc::new(Keypair::new()),
         Some(leader_info.contact_info.ncp),
         false,
         LeaderScheduler::new(&leader_scheduler_config),
@@ -999,7 +1015,7 @@ fn test_leader_validator_basic() {
         _ => panic!("Expected reason for exit to be leader rotation"),
     }
 
-    // Query newly transitioned validator to make sure that he has the proper balances
+    // Query newly transitioned validator to make sure they have the proper balances
     // in the bank after the transitions
     let mut leader_client = mk_client(&leader_info);
 
@@ -1071,7 +1087,7 @@ fn test_dropped_handoff_recovery() {
     logger::setup();
 
     // Create the bootstrap leader node information
-    let bootstrap_leader_keypair = Keypair::new();
+    let bootstrap_leader_keypair = Arc::new(Keypair::new());
     let bootstrap_leader_node = Node::new_localhost_with_pubkey(bootstrap_leader_keypair.pubkey());
     let bootstrap_leader_info = bootstrap_leader_node.info.clone();
 
@@ -1086,17 +1102,17 @@ fn test_dropped_handoff_recovery() {
         .id;
 
     // Create the validator keypair that will be the next leader in line
-    let next_leader_keypair = Keypair::new();
+    let next_leader_keypair = Arc::new(Keypair::new());
 
     // Create a common ledger with entries in the beginning that will add only
     // the "next_leader" validator to the active set for leader election, guaranteeing
-    // he is the next leader after bootstrap_height
+    // they are the next leader after bootstrap_height
     let mut ledger_paths = Vec::new();
     ledger_paths.push(bootstrap_leader_ledger_path.clone());
 
-    // Make the entries to give the next_leader validator some stake so that he will be in
+    // Make the entries to give the next_leader validator some stake so that they will be in
     // leader election active set
-    let active_set_entries =
+    let (active_set_entries, vote_account_keypair) =
         make_active_set_entries(&next_leader_keypair, &mint.keypair(), &last_id, &last_id, 0);
 
     // Write the entries
@@ -1131,6 +1147,7 @@ fn test_dropped_handoff_recovery() {
         bootstrap_leader_node,
         &bootstrap_leader_ledger_path,
         bootstrap_leader_keypair,
+        Arc::new(Keypair::new()),
         Some(bootstrap_leader_info.contact_info.ncp),
         false,
         LeaderScheduler::new(&leader_scheduler_config),
@@ -1140,7 +1157,7 @@ fn test_dropped_handoff_recovery() {
 
     // Start up the validators other than the "next_leader" validator
     for _ in 0..(N - 1) {
-        let kp = Keypair::new();
+        let kp = Arc::new(Keypair::new());
         let validator_ledger_path = tmp_copy_ledger(
             &bootstrap_leader_ledger_path,
             "test_dropped_handoff_recovery",
@@ -1152,6 +1169,7 @@ fn test_dropped_handoff_recovery() {
             validator_node,
             &validator_ledger_path,
             kp,
+            Arc::new(Keypair::new()),
             Some(bootstrap_leader_info.contact_info.ncp),
             false,
             LeaderScheduler::new(&leader_scheduler_config),
@@ -1176,6 +1194,7 @@ fn test_dropped_handoff_recovery() {
         next_leader_node,
         &next_leader_ledger_path,
         next_leader_keypair,
+        Arc::new(vote_account_keypair),
         Some(bootstrap_leader_info.contact_info.ncp),
         false,
         LeaderScheduler::new(&leader_scheduler_config),
@@ -1247,16 +1266,19 @@ fn test_full_leader_validator_network() {
     let mut ledger_paths = Vec::new();
     ledger_paths.push(bootstrap_leader_ledger_path.clone());
 
+    let mut vote_account_keypairs = VecDeque::new();
     for node_keypair in node_keypairs.iter() {
-        // Make entries to give the validator some stake so that he will be in
+        // Make entries to give each node some stake so that they will be in the
         // leader election active set
-        let bootstrap_entries = make_active_set_entries(
+        let (bootstrap_entries, vote_account_keypair) = make_active_set_entries(
             node_keypair,
             &mint.keypair(),
             &last_entry_id,
             &last_tick_id,
             0,
         );
+
+        vote_account_keypairs.push_back(vote_account_keypair);
 
         // Write the entries
         let mut ledger_writer = LedgerWriter::open(&bootstrap_leader_ledger_path, false).unwrap();
@@ -1286,7 +1308,8 @@ fn test_full_leader_validator_network() {
     let bootstrap_leader = Arc::new(RwLock::new(Fullnode::new(
         bootstrap_leader_node,
         &bootstrap_leader_ledger_path,
-        node_keypairs.pop_front().unwrap(),
+        Arc::new(node_keypairs.pop_front().unwrap()),
+        Arc::new(vote_account_keypairs.pop_front().unwrap()),
         Some(bootstrap_leader_info.contact_info.ncp),
         false,
         LeaderScheduler::new(&leader_scheduler_config),
@@ -1311,7 +1334,8 @@ fn test_full_leader_validator_network() {
         let validator = Arc::new(RwLock::new(Fullnode::new(
             validator_node,
             &validator_ledger_path,
-            kp,
+            Arc::new(kp),
+            Arc::new(vote_account_keypairs.pop_front().unwrap()),
             Some(bootstrap_leader_info.contact_info.ncp),
             false,
             LeaderScheduler::new(&leader_scheduler_config),

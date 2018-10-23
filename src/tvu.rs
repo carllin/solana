@@ -77,6 +77,7 @@ impl Tvu {
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn new(
         keypair: Arc<Keypair>,
+        vote_account_keypair: Arc<Keypair>,
         bank: &Arc<Bank>,
         entry_height: u64,
         cluster_info: Arc<RwLock<ClusterInfo>>,
@@ -110,6 +111,7 @@ impl Tvu {
 
         let replicate_stage = ReplicateStage::new(
             keypair,
+            vote_account_keypair,
             bank.clone(),
             cluster_info,
             blob_window_receiver,
@@ -130,7 +132,7 @@ impl Tvu {
         self.exit.load(Ordering::Relaxed)
     }
 
-    pub fn exit(&self) -> () {
+    pub fn exit(&self) {
         self.exit.store(true, Ordering::Relaxed);
     }
 
@@ -259,8 +261,10 @@ pub mod tests {
         let cref1 = Arc::new(RwLock::new(cluster_info1));
         let dr_1 = new_ncp(cref1.clone(), target1.sockets.gossip, exit.clone());
 
+        let vote_account_keypair = Arc::new(Keypair::new());
         let tvu = Tvu::new(
             Arc::new(target1_keypair),
+            vote_account_keypair,
             &bank,
             0,
             cref1,
