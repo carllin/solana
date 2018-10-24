@@ -65,7 +65,9 @@ impl JsonRpcService {
                 while !exit_.load(Ordering::Relaxed) {
                     sleep(Duration::from_millis(100));
                 }
-                server.unwrap().close();
+                let mut server = server.unwrap();
+                server.close();
+                server.wait();
                 ()
             })
             .unwrap();
