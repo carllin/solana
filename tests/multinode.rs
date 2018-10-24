@@ -609,7 +609,7 @@ fn test_multi_node_dynamic_network() {
     let alice_arc = Arc::new(RwLock::new(alice));
     let leader_data = leader.info.clone();
 
-    let server = Fullnode::new(
+    let mut server = Fullnode::new(
         leader,
         &leader_ledger_path,
         leader_keypair,
@@ -750,13 +750,12 @@ fn test_multi_node_dynamic_network() {
             info!("Verifying signature of the last transaction in the validators");
 
             let mut num_nodes_behind = 0i64;
-            validators.retain(|server| {
-                let mut client = mk_client(&server.0);
-                trace!("{} checking signature", server.0.id);
+            for (node_info, fullnode) in validators.iter_mut() {
+                let mut client = mk_client(node_info);
+                trace!("{} checking signature", node_info.id);
                 num_nodes_behind += if client.check_signature(&sig) { 0 } else { 1 };
-                server.1.exit();
-                true
-            });
+                fullnode.exit();
+            }
 
             info!(
                 "Validators lagging: {}/{}",
@@ -768,7 +767,7 @@ fn test_multi_node_dynamic_network() {
     }
 
     assert_eq!(consecutive_success, 10);
-    for (_, node) in &validators {
+    for (_, node) in validators.iter_mut() {
         node.exit();
     }
     server.exit();

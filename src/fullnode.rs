@@ -595,15 +595,15 @@ impl Fullnode {
     }
 
     //used for notifying many nodes in parallel to exit
-    pub fn exit(&self) {
+    pub fn exit(&mut self) {
         self.exit.store(true, Ordering::Relaxed);
         if let Some(ref rpu) = self.rpu {
             rpu.exit();
         }
-        if let Some(ref rpc_service) = self.rpc_service {
+        if let Some(ref mut rpc_service) = self.rpc_service {
             rpc_service.exit();
         }
-        if let Some(ref rpc_pubsub_service) = self.rpc_pubsub_service {
+        if let Some(ref mut rpc_pubsub_service) = self.rpc_pubsub_service {
             rpc_pubsub_service.exit();
         }
         match self.node_role {
@@ -613,7 +613,7 @@ impl Fullnode {
         }
     }
 
-    pub fn close(self) -> Result<(Option<FullnodeReturnType>)> {
+    pub fn close(mut self) -> Result<(Option<FullnodeReturnType>)> {
         self.exit();
         self.join()
     }
@@ -751,7 +751,7 @@ mod tests {
     #[test]
     fn validator_parallel_exit() {
         let mut ledger_paths = vec![];
-        let vals: Vec<Fullnode> = (0..2)
+        let mut vals: Vec<Fullnode> = (0..2)
             .map(|i| {
                 let keypair = Keypair::new();
                 let tn = Node::new_localhost_with_pubkey(keypair.pubkey());
@@ -785,7 +785,7 @@ mod tests {
             }).collect();
 
         //each validator can exit in parallel to speed many sequential calls to `join`
-        vals.iter().for_each(|v| v.exit());
+        vals.iter_mut().for_each(|v| v.exit());
         //while join is called sequentially, the above exit call notified all the
         //validators to exit from all their threads
         vals.into_iter().for_each(|v| {

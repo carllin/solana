@@ -203,7 +203,7 @@ mod tests {
         let network_addr = leader_node.sockets.gossip.local_addr().unwrap();
         let leader_info = leader_node.info.clone();
         let vote_account_keypair = Arc::new(Keypair::new());
-        let leader = Fullnode::new(
+        let mut leader = Fullnode::new(
             leader_node,
             &leader_ledger_path,
             leader_keypair,
