@@ -15,6 +15,7 @@ use std::mem;
 use std::net::{SocketAddr, UdpSocket};
 use std::result;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::channel;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, sleep, Builder, JoinHandle};
 use std::time::Duration;
@@ -27,6 +28,7 @@ pub const RPC_PORT: u16 = 8899;
 pub struct JsonRpcService {
     thread_hdl: JoinHandle<()>,
     exit: Arc<AtomicBool>,
+    close_handle: Option<CloseHandle>,
 }
 
 impl JsonRpcService {
@@ -39,7 +41,7 @@ impl JsonRpcService {
         let request_processor = JsonRpcRequestProcessor::new(bank.clone());
         let info = cluster_info.clone();
         let exit_pubsub = exit.clone();
-        let exit_ = exit.clone();
+        let (close_handle_sender, close_handle_receiver) = channel();
         let thread_hdl = Builder::new()
             .name("solana-jsonrpc".to_string())
             .spawn(move || {
@@ -60,25 +62,34 @@ impl JsonRpcService {
                         .start_http(&rpc_addr);
                 if server.is_err() {
                     warn!("JSON RPC service unavailable: unable to bind to RPC port {}. \nMake sure this port is not already in use by another application", rpc_addr.port());
+                    close_handle_sender.send(None).unwrap();
                     return;
                 }
-                while !exit_.load(Ordering::Relaxed) {
-                    sleep(Duration::from_millis(100));
-                }
+
                 let mut server = server.unwrap();
-                server.close();
+                let close_handle = server.close_handle();
+                close_handle_sender.send(Some(close_handle)).unwrap();
                 server.wait();
-                ()
             })
             .unwrap();
-        JsonRpcService { thread_hdl, exit }
+
+        let close_handle = close_handle_receiver.recv();
+
+        JsonRpcService {
+            thread_hdl,
+            exit,
+            close_handle: close_handle.unwrap(),
+        }
     }
 
-    pub fn exit(&self) {
+    pub fn exit(&mut self) {
+        if let Some(close_handle) = self.close_handle.take() {
+            close_handle.close();
+        }
         self.exit.store(true, Ordering::Relaxed);
     }
 
-    pub fn close(self) -> thread::Result<()> {
+    pub fn close(mut self) -> thread::Result<()> {
         self.exit();
         self.join()
     }

@@ -6,7 +6,7 @@ use jsonrpc_core::futures::Future;
 use jsonrpc_core::*;
 use jsonrpc_macros::pubsub;
 use jsonrpc_pubsub::{PubSubHandler, Session, SubscriptionId};
-use jsonrpc_ws_server::{RequestContext, Sender, ServerBuilder};
+use jsonrpc_ws_server::{CloseHandle, RequestContext, Sender, ServerBuilder};
 use rpc::{JsonRpcRequestProcessor, RpcSignatureStatus};
 use service::Service;
 use signature::{Keypair, KeypairUtil, Signature};
@@ -16,9 +16,9 @@ use std::collections::HashMap;
 use std::mem;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::channel;
 use std::sync::{atomic, Arc, RwLock};
-use std::thread::{self, sleep, Builder, JoinHandle};
-use std::time::Duration;
+use std::thread::{self, Builder, JoinHandle};
 
 pub enum ClientState {
     Uninitialized,
@@ -28,6 +28,7 @@ pub enum ClientState {
 pub struct PubSubService {
     thread_hdl: JoinHandle<()>,
     exit: Arc<AtomicBool>,
+    close_handle: Option<CloseHandle>,
 }
 
 impl Service for PubSubService {
@@ -42,7 +43,7 @@ impl PubSubService {
     pub fn new(bank: &Arc<Bank>, pubsub_addr: SocketAddr) -> Self {
         let rpc = RpcSolPubSubImpl::new(JsonRpcRequestProcessor::new(bank.clone()), bank.clone());
         let exit = Arc::new(AtomicBool::new(false));
-        let exit_ = exit.clone();
+        let (close_handle_sender, close_handle_receiver) = channel();
         let thread_hdl = Builder::new()
             .name("solana-pubsub".to_string())
             .spawn(move || {
@@ -61,23 +62,33 @@ impl PubSubService {
 
                 if server.is_err() {
                     warn!("Pubsub service unavailable: unable to bind to port {}. \nMake sure this port is not already in use by another application", pubsub_addr.port());
+                    close_handle_sender.send(None).unwrap();
                     return;
                 }
-                while !exit_.load(Ordering::Relaxed) {
-                    sleep(Duration::from_millis(100));
-                }
-                server.unwrap().close();
-                ()
+
+                let server = server.unwrap();
+                let close_handle = server.close_handle();
+                close_handle_sender.send(Some(close_handle)).unwrap();
+                server.wait().unwrap();
             })
             .unwrap();
-        PubSubService { thread_hdl, exit }
+
+        let close_handle = close_handle_receiver.recv();
+        PubSubService {
+            thread_hdl,
+            exit,
+            close_handle: close_handle.unwrap(),
+        }
     }
 
-    pub fn exit(&self) {
+    pub fn exit(&mut self) {
+        if let Some(close_handle) = self.close_handle.take() {
+            close_handle.close();
+        }
         self.exit.store(true, Ordering::Relaxed);
     }
 
-    pub fn close(self) -> thread::Result<()> {
+    pub fn close(mut self) -> thread::Result<()> {
         self.exit();
         self.join()
     }
@@ -252,6 +263,8 @@ mod tests {
     use mint::Mint;
     use signature::{Keypair, KeypairUtil};
     use std::net::{IpAddr, Ipv4Addr};
+    use std::thread::sleep;
+    use std::time::Duration;
     use system_transaction::SystemTransaction;
     use tokio::prelude::{Async, Stream};
     use transaction::Transaction;
