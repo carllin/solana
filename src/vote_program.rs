@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use transaction::Transaction;
 
 // Upper limit on the size of the Vote State
-pub const MAX_STATE_SIZE: usize = 1024;
+pub const MAX_STATE_SIZE: usize = 512;
 
 // Maximum number of votes to keep around
 const MAX_VOTE_HISTORY: usize = 32;
