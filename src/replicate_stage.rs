@@ -18,7 +18,6 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
-use std::time::Instant;
 use streamer::{responder, BlobSender};
 use vote_stage::send_validator_vote;
 
@@ -58,7 +57,7 @@ impl ReplicateStage {
         window_receiver: &EntryReceiver,
         keypair: &Arc<Keypair>,
         vote_account_keypair: &Arc<Keypair>,
-        vote_blob_sender: Option<&BlobSender>,
+        vote_blob_sender: &BlobSender,
         ledger_entry_sender: &EntrySender,
         entry_height: &mut u64,
     ) -> Result<Hash> {
@@ -97,6 +96,15 @@ impl ReplicateStage {
                     break;
                 }
 
+                if bank
+                    .leader_scheduler
+                    .read()
+                    .unwrap()
+                    .is_leader_rotation_height(bank.get_tick_height())
+                {
+                    let _ = send_validator_vote(bank, vote_account_keypair, &cluster_info, vote_blob_sender);
+                }
+
                 if res.is_err() {
                     // TODO: This will return early from the first entry that has an erroneous
                     // transaction, instad of processing the rest of the entries in the vector
@@ -115,10 +123,6 @@ impl ReplicateStage {
                 .expect("Entries cannot be empty at this point")
                 .id
         };
-
-        if let Some(sender) = vote_blob_sender {
-            send_validator_vote(bank, vote_account_keypair, &cluster_info, sender)?;
-        }
 
         inc_new_counter_info!(
             "replicate-transactions",
@@ -159,8 +163,6 @@ impl ReplicateStage {
             .name("solana-replicate-stage".to_string())
             .spawn(move || {
                 let _exit = Finalizer::new(exit);
-                let now = Instant::now();
-                let mut next_vote_secs = 1;
                 let mut entry_height_ = entry_height;
                 let mut last_entry_id = None;
                 loop {
@@ -180,21 +182,13 @@ impl ReplicateStage {
                         ));
                     }
 
-                    // Only vote once a second.
-                    let vote_sender = if now.elapsed().as_secs() > next_vote_secs {
-                        next_vote_secs += 1;
-                        Some(&vote_blob_sender)
-                    } else {
-                        None
-                    };
-
                     match Self::replicate_requests(
                         &bank,
                         &cluster_info,
                         &window_receiver,
                         &keypair,
                         &vote_account_keypair,
-                        vote_sender,
+                        &vote_blob_sender,
                         &ledger_entry_sender,
                         &mut entry_height_,
                     ) {

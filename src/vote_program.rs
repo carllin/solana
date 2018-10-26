@@ -3,6 +3,7 @@
 
 use bincode::{deserialize, serialize};
 use byteorder::{ByteOrder, LittleEndian};
+use hash::Hash,
 use solana_sdk::account::Account;
 use solana_sdk::pubkey::Pubkey;
 use std;
@@ -34,6 +35,7 @@ pub struct Vote {
     // TODO: add signature of the state here as well
     /// A vote for height tick_height
     pub tick_height: u64,
+    pub bank_hash: Hash,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]

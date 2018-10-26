@@ -1171,7 +1171,7 @@ impl Bank {
     }
 
     /// Hash the `accounts` HashMap. This represents a validator's interpretation
-    ///  of the ledger up to the `last_id`, to be sent back to the leader when voting.
+    /// of the ledger up to the `last_id`, to be sent back to the leader when voting.
     pub fn hash_internal_state(&self) -> Hash {
         let mut ordered_accounts = BTreeMap::new();
         for (pubkey, account) in self.accounts.read().unwrap().iter() {

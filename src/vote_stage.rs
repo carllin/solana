@@ -39,7 +39,8 @@ pub fn create_new_signed_vote_blob(
     let leader_tpu = get_leader_tpu(bank, cluster_info)?;
     //TODO: doesn't seem like there is a synchronous call to get height and id
     debug!("voting on {:?}", &last_id.as_ref()[..8]);
-    let vote = Vote { tick_height };
+    let bank_hash = bank.hash_internal_state();
+    let vote = Vote { tick_height, bank_hash};
     let tx = Transaction::vote_new(&vote_account, vote, *last_id, 0);
     {
         let mut blob = shared_blob.write().unwrap();
@@ -82,7 +83,6 @@ pub fn send_validator_vote(
     vote_blob_sender: &BlobSender,
 ) -> Result<()> {
     let last_id = bank.last_id();
-
     let shared_blob = create_new_signed_vote_blob(&last_id, vote_account, bank, cluster_info)?;
     inc_new_counter_info!("replicate-vote_sent", 1);
     vote_blob_sender.send(vec![shared_blob])?;

@@ -18,7 +18,7 @@ pub trait VoteTransaction {
     ) -> Self;
     fn vote_account_register(
         validator_id: &Keypair,
-        vote_account_id: Pubkey,
+        &vote_account_id: Pubkey,
         last_id: Hash,
         fee: i64,
     ) -> Self;
