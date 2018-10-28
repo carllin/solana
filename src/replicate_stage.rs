@@ -200,7 +200,7 @@ impl ReplicateStage {
                     ) {
                         Err(Error::RecvTimeoutError(RecvTimeoutError::Disconnected)) => break,
                         Err(Error::RecvTimeoutError(RecvTimeoutError::Timeout)) => (),
-                        Err(e) => error!("{:?}", e),
+                        Err(e) => info!("REPLICATE ERROR: {:?}", e),
                         Ok(last_entry_id_) => {
                             last_entry_id = Some(last_entry_id_);
                         }

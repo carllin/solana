@@ -74,7 +74,7 @@ impl VoteProgram {
             Err(Error::InvalidUserdata)
         } else {
             deserialize(&input[2..=len + 1]).map_err(|err| {
-                error!("Unable to deserialize vote state: {:?}", err);
+                info!("Unable to deserialize vote state: {:?}", err);
                 Error::InvalidUserdata
             })
         }
@@ -84,7 +84,7 @@ impl VoteProgram {
         let self_serialized = serialize(self).unwrap();
 
         if output.len() + 2 < self_serialized.len() {
-            warn!(
+            info!(
                 "{} bytes required to serialize but only have {} bytes",
                 self_serialized.len(),
                 output.len() + 2,
@@ -120,7 +120,7 @@ impl VoteProgram {
             }
             Ok(VoteInstruction::NewVote(vote)) => {
                 if !Self::check_id(&accounts[0].program_id) {
-                    error!("accounts[0] is not assigned to the VOTE_PROGRAM");
+                    info!("accounts[0] is not assigned to the VOTE_PROGRAM");
                     Err(Error::InvalidArguments)?;
                 }
 

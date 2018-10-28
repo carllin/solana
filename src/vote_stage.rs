@@ -71,6 +71,7 @@ fn get_leader_tpu(bank: &Bank, cluster_info: &Arc<RwLock<ClusterInfo>>) -> Resul
     if let Some(leader_tpu) = leader_tpu {
         Ok(leader_tpu)
     } else {
+        info!("LEADER NOT FOUND");
         Err(Error::VoteError(VoteError::LeaderInfoNotFound))
     }
 }
