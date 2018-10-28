@@ -119,7 +119,8 @@ impl VoteProgram {
                 Ok(())
             }
             Ok(VoteInstruction::NewVote(vote)) => {
-                if !Self::check_id(&accounts[0].program_id) {
+                Ok(())
+                /*if !Self::check_id(&accounts[0].program_id) {
                     info!("accounts[0] is not assigned to the VOTE_PROGRAM");
                     Err(Error::InvalidArguments)?;
                 }
@@ -138,7 +139,7 @@ impl VoteProgram {
                 vote_state.votes.push_back(vote);
                 vote_state.serialize(&mut accounts[0].userdata)?;
 
-                Ok(())
+                Ok(())*/
             }
             Err(_) => {
                 info!(
