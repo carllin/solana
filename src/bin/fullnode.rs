@@ -138,6 +138,7 @@ fn main() {
 
     // Create the vote account
     loop {
+        info!("CREATING VOTE ACCOUNT");
         let last_id = client.get_last_id();
         if client
             .create_vote_account(&keypair, vote_account_id, &last_id, 1)
@@ -158,6 +159,7 @@ fn main() {
 
     // Register the vote account to this node
     loop {
+        info!("WAITING TO REGISTER ACCOUNT");
         let last_id = client.get_last_id();
         if client
             .register_vote_account(&keypair, vote_account_id, &last_id)
@@ -179,6 +181,7 @@ fn main() {
         sleep(Duration::from_secs(2));
     }
 
+    info!("STARTING UP FULLNODE");
     loop {
         let status = fullnode.handle_role_transition();
         match status {
