@@ -134,7 +134,13 @@ impl VoteProgram {
                     vote_state.votes.pop_front();
                 }
 
+                info!("GOT VOTE: {:?}", vote);
                 vote_state.votes.push_back(vote);
+                info!(
+                    "ID: {}, votes_length: {}",
+                    vote_state.node_id,
+                    vote_state.votes.len()
+                );
                 vote_state.serialize(&mut accounts[0].userdata)?;
 
                 Ok(())
