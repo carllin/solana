@@ -552,6 +552,7 @@ impl Fullnode {
         match node_role {
             Some(NodeRole::Leader(leader_services)) => match leader_services.join()? {
                 Some(TpuReturnType::LeaderRotation) => {
+                    info!("TRANSITIONING LEADER TO VALIDATOR");
                     self.leader_to_validator()?;
                     Ok(Some(FullnodeReturnType::LeaderToValidatorRotation))
                 }
@@ -559,6 +560,7 @@ impl Fullnode {
             },
             Some(NodeRole::Validator(validator_services)) => match validator_services.join()? {
                 Some(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
+                    info!("TRANSITIONING VALIDAOTR TO LEADER");
                     //TODO: Fix this to return actual poh height.
                     self.validator_to_leader(tick_height, entry_height, last_entry_id);
                     Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation))

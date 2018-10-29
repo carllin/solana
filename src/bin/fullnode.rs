@@ -183,7 +183,9 @@ fn main() {
 
     info!("STARTING UP FULLNODE");
     loop {
+        info!("HANDLING ROLE TRANSITION");
         let status = fullnode.handle_role_transition();
+        info!("ROLE TRANSITIONED UNEXPECTEDLY");
         match status {
             Ok(Some(FullnodeReturnType::LeaderToValidatorRotation)) => (),
             Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation)) => (),

@@ -69,8 +69,10 @@ impl VoteProgram {
 
     pub fn deserialize(input: &[u8]) -> Result<VoteProgram> {
         let len = LittleEndian::read_u16(&input[0..2]) as usize;
+        info!("deserialized vote state length: {}", len);
 
         if len == 0 || input.len() < len + 1 {
+            info!("Invalid userdata for deserializing");
             Err(Error::InvalidUserdata)
         } else {
             deserialize(&input[2..=len + 1]).map_err(|err| {
@@ -105,6 +107,7 @@ impl VoteProgram {
     ) -> Result<()> {
         match deserialize(tx.userdata(instruction_index)) {
             Ok(VoteInstruction::RegisterAccount) => {
+                info!("REGISTERING NEW ACCOUNT");
                 // TODO: a single validator could register multiple "vote accounts"
                 // which would clutter the "accounts" structure.
                 accounts[1].program_id = Self::id();
@@ -119,12 +122,14 @@ impl VoteProgram {
                 Ok(())
             }
             Ok(VoteInstruction::NewVote(vote)) => {
-                /*
+                info!("GOT NEW VOTE");
+
                 if !Self::check_id(&accounts[0].program_id) {
                     info!("accounts[0] is not assigned to the VOTE_PROGRAM");
                     Err(Error::InvalidArguments)?;
                 }
 
+                info!("DESERIALZIING NEW VOTE");
                 let mut vote_state = Self::deserialize(&accounts[0].userdata)?;
 
                 // TODO: Integrity checks
@@ -137,8 +142,10 @@ impl VoteProgram {
                 }
 
                 vote_state.votes.push_back(vote);
-                vote_state.serialize(&mut accounts[0].userdata)?;*/
+                info!("SERIALIZE NEW VOTE");
+                vote_state.serialize(&mut accounts[0].userdata)?;
 
+                info!("FINISHED PROCESSING NEW VOTE");
                 Ok(())
             }
             Err(_) => {
