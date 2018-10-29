@@ -343,7 +343,7 @@ impl ClusterInfo {
         if self.table.get(&v.id).is_none() || (v.version > self.table[&v.id].version) {
             //somehow we signed a message for our own identity with a higher version than
             // we have stored ourselves
-            trace!("{}: insert v.id: {} version: {}", self.id, v.id, v.version);
+            info!("{}: insert v.id: {} version: {}", self.id, v.id, v.version);
             if self.table.get(&v.id).is_none() {
                 inc_new_counter_info!("cluster_info-insert-new_entry", 1, 1);
             }
@@ -390,7 +390,7 @@ impl ClusterInfo {
             .alive
             .iter()
             .filter_map(|(&k, v)| {
-                if k != self.id && (now - v) > limit {
+                if k != self.id && (now - v) > limit && k != leader_id {
                     Some(k)
                 } else {
                     trace!("{} purge skipped {} {} {}", self.id, k, now - v, limit);
