@@ -177,8 +177,8 @@ fn recv_window(
             .to_owned(),
     );
 
-    trace!(
-        "{}: RECV_WINDOW {} {}: got packets {}",
+    info!(
+        "{}: RECV_WINDOW consumed: {} received: {}: got packets {}",
         id,
         *consumed,
         *received,
@@ -217,7 +217,7 @@ fn recv_window(
             continue;
         }
 
-        trace!("{} window pix: {} size: {}", id, pix, meta_size);
+        info!("{} window pix: {} size: {}", id, pix, meta_size);
 
         window.write().unwrap().process_blob(
             id,
@@ -237,7 +237,7 @@ fn recv_window(
     }
     if log_enabled!(Level::Trace) {
         trace!("{}", window.read().unwrap().print(id, *consumed));
-        trace!(
+        info!(
             "{}: consumed: {} received: {} sending consume.len: {} pixs: {:?} took {} ms",
             id,
             *consumed,
@@ -312,21 +312,19 @@ pub fn window_service(
                 );
 
                 if received <= consumed {
-                    trace!(
+                    info!(
                         "{} we have everything received:{} consumed:{}",
-                        id,
-                        received,
-                        consumed
+                        id, received, consumed
                     );
                     continue;
                 }
 
                 //exponential backoff
                 if !repair_backoff(&mut last, &mut times, consumed) {
-                    trace!("{} !repair_backoff() times = {}", id, times);
+                    info!("{} !repair_backoff() times = {}", id, times);
                     continue;
                 }
-                trace!("{} let's repair! times = {}", id, times);
+                info!("{} let's repair! times = {}", id, times);
 
                 let mut window = window.write().unwrap();
                 let reqs = window.repair(

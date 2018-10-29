@@ -159,6 +159,16 @@ impl WindowUtil for Window {
 
         inc_new_counter_info!("streamer-repair_window-repair", reqs.len());
 
+        info!(
+            "IN REPAIR {}: repair_window counter times: {} consumed: {} received: {} max_repair: {} missing: {}",
+            id,
+            times,
+            consumed,
+            received,
+            max_repair,
+            reqs.len()
+        );
+
         if log_enabled!(Level::Trace) {
             trace!(
                 "{}: repair_window counter times: {} consumed: {} received: {} max_repair: {} missing: {}",

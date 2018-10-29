@@ -117,7 +117,7 @@ impl ReplicateStage {
         };
 
         if let Some(sender) = vote_blob_sender {
-            //send_validator_vote(bank, vote_account_keypair, &cluster_info, sender)?;
+            send_validator_vote(bank, vote_account_keypair, &cluster_info, sender)?;
         }
 
         inc_new_counter_info!(
