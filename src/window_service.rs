@@ -156,11 +156,7 @@ fn recv_window(
 ) -> Result<()> {
     let timer = Duration::from_millis(200);
     let mut dq = r.recv_timeout(timer)?;
-    let maybe_leader: Option<NodeInfo> = cluster_info
-        .read()
-        .expect("'cluster_info' read lock in fn recv_window")
-        .leader_data()
-        .cloned();
+    let maybe_leader: Option<NodeInfo> = leader_scheduler.read().unwrap().get_scheduled_leader();
     let leader_unknown = maybe_leader.is_none();
     while let Ok(mut nq) = r.try_recv() {
         dq.append(&mut nq)

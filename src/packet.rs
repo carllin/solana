@@ -253,7 +253,10 @@ pub fn to_blobs<T: Serialize>(rsps: Vec<(T, SocketAddr)>) -> Result<SharedBlobs>
 const BLOB_SLOT_END: usize = size_of::<u64>();
 const BLOB_INDEX_END: usize = BLOB_SLOT_END + size_of::<u64>();
 const BLOB_ID_END: usize = BLOB_INDEX_END + size_of::<Pubkey>();
-const BLOB_FLAGS_END: usize = BLOB_ID_END + size_of::<u32>();
+const BLOB_EPOCH_HEIGHT_END: usize = BLOB_ID_END + size_of::<u64>();
+const BLOB_TICK_HEIGHT_END: usize = BLOB_EPOCH_HEIGHT_END + size_of::<u64>();
+const BLOB_INDEX_WITHIN_EPOCH_END: usize = BLOB_TICK_HEIGHT_END + size_of::<u64>();
+const BLOB_FLAGS_END: usize = BLOB_INDEX_WITHIN_EPOCH_END + size_of::<u32>();
 const BLOB_SIZE_END: usize = BLOB_FLAGS_END + size_of::<u64>();
 
 macro_rules! align {
@@ -277,11 +280,25 @@ impl Blob {
         self.data[..BLOB_SLOT_END].clone_from_slice(&wtr);
         Ok(())
     }
+
+    pub fn get_index_within_epoch(&self) -> Result<u64> {
+        let e = deserialize(&self.data[BLOB_TICK_HEIGHT_END..BLOB_INDEX_WITHIN_EPOCH_END])?;
+        Ok(e)
+    }
+
+    pub fn set_index_within_epoch(&self, index: u64) -> Result<()> {
+        let mut wtr = vec![];
+        wtr.write_u64::<LittleEndian>(index)?;
+        self.data[BLOB_TICK_HEIGHT_END..BLOB_INDEX_WITHIN_EPOCH_END].clone_from_slice(&wtr);
+        Ok(())
+    }
+
     pub fn index(&self) -> Result<u64> {
         let mut rdr = io::Cursor::new(&self.data[BLOB_SLOT_END..BLOB_INDEX_END]);
         let r = rdr.read_u64::<LittleEndian>()?;
         Ok(r)
     }
+
     pub fn set_index(&mut self, ix: u64) -> Result<()> {
         let mut wtr = vec![];
         wtr.write_u64::<LittleEndian>(ix)?;
@@ -302,7 +319,7 @@ impl Blob {
     }
 
     pub fn flags(&self) -> Result<u32> {
-        let mut rdr = io::Cursor::new(&self.data[BLOB_ID_END..BLOB_FLAGS_END]);
+        let mut rdr = io::Cursor::new(&self.data[BLOB_INDEX_WITHIN_EPOCH_END..BLOB_FLAGS_END]);
         let r = rdr.read_u32::<LittleEndian>()?;
         Ok(r)
     }
@@ -310,7 +327,7 @@ impl Blob {
     pub fn set_flags(&mut self, ix: u32) -> Result<()> {
         let mut wtr = vec![];
         wtr.write_u32::<LittleEndian>(ix)?;
-        self.data[BLOB_ID_END..BLOB_FLAGS_END].clone_from_slice(&wtr);
+        self.data[BLOB_INDEX_WITHIN_EPOCH_END..BLOB_FLAGS_END].clone_from_slice(&wtr);
         Ok(())
     }
 
