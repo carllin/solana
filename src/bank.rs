@@ -564,6 +564,7 @@ impl Bank {
         last_ids.tick_height += 1;
         let tick_height = last_ids.tick_height;
 
+        info!("TICK HEIGHT: {}, id: {:?}", last_ids.tick_height, last_id);
         // this clean up can be deferred until sigs gets larger
         //  because we verify entry.nth every place we check for validity
         if last_ids.entries.len() >= MAX_ENTRY_IDS as usize {
@@ -1085,6 +1086,7 @@ impl Bank {
 
     pub fn process_entry(&self, entry: &Entry) -> Result<()> {
         if !entry.is_tick() {
+            println!("PROCESSING NONTICK: {}", entry.id);
             for result in self.process_transactions(&entry.transactions) {
                 result?;
             }
@@ -1162,8 +1164,13 @@ impl Bank {
 
     /// Process an ordered list of entries, populating a circular buffer "tail"
     /// as we go.
-    fn process_block(&self, entries: &[Entry]) -> Result<()> {
-        for entry in entries {
+    fn process_block(&self, entries: &[Entry], start_height: u64) -> Result<()> {
+        for (entry, i) in entries.iter().zip(1..(entries.len() + 1)) {
+            println!(
+                "Entry height: {}, id: {:?}",
+                start_height + i as u64,
+                entry.id
+            );
             self.process_entry(entry)?;
         }
 
@@ -1190,12 +1197,14 @@ impl Bank {
         for block in &entries.into_iter().chunks(VERIFY_BLOCK_SIZE) {
             let block: Vec<_> = block.collect();
 
+            /*let ids: Vec<_> = block.iter().map(|x| x.id).collect();
+            info!("VERIFYING BLOCK: {:?}", ids);
             if !block.verify(&last_id) {
                 warn!("Ledger proof of history failed at entry: {}", entry_height);
                 return Err(BankError::LedgerVerificationFailed);
-            }
+            }*/
 
-            self.process_block(&block)?;
+            self.process_block(&block, entry_height)?;
 
             last_id = block.last().unwrap().id;
             entry_height += block.len() as u64;
@@ -1282,10 +1291,9 @@ impl Bank {
 
                 self.leader_scheduler.write().unwrap().bootstrap_leader = bootstrap_leader_id;
 
-                trace!(
+                info!(
                     "applied genesis payment to bootstrap leader {:?} => {:?}",
-                    leader_payment,
-                    account
+                    leader_payment, account
                 );
             }
         }

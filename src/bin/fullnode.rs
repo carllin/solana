@@ -179,6 +179,8 @@ fn main() {
         sleep(Duration::from_secs(2));
     }
 
+    info!("VOTE ACCOUNT CREATED");
+
     // Register the vote account to this node
     loop {
         let last_id = client.get_last_id();
@@ -202,11 +204,17 @@ fn main() {
         sleep(Duration::from_secs(2));
     }
 
+    info!("VOTE ACCOUNT REGISTERED");
+
     loop {
         let status = fullnode.handle_role_transition();
         match status {
-            Ok(Some(FullnodeReturnType::LeaderToValidatorRotation)) => (),
-            Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation)) => (),
+            Ok(Some(FullnodeReturnType::LeaderToValidatorRotation)) => {
+                info!("BIN/FULLNODE: LEADER ROTATED TO VALIDATOR");
+            }
+            Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation)) => {
+                info!("BIN/FULLNODE: VALIDATOR ROTATED TO LEADER");
+            }
             _ => {
                 // Fullnode tpu/tvu exited for some unexpected
                 // reason, so exit

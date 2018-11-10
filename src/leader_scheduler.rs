@@ -17,7 +17,7 @@ use transaction::Transaction;
 use vote_program::{Vote, VoteProgram};
 use vote_transaction::VoteTransaction;
 
-pub const DEFAULT_BOOTSTRAP_HEIGHT: u64 = 1000;
+pub const DEFAULT_BOOTSTRAP_HEIGHT: u64 = 300;
 pub const DEFAULT_LEADER_ROTATION_INTERVAL: u64 = 100;
 pub const DEFAULT_SEED_ROTATION_INTERVAL: u64 = 1000;
 pub const DEFAULT_ACTIVE_WINDOW_LENGTH: u64 = 1000;
@@ -372,6 +372,10 @@ impl LeaderScheduler {
             }
         }
 
+        info!(
+            "LEADER SCHEDULE FOR HEIGHT {}: {:?}",
+            height, validator_rankings
+        );
         self.leader_schedule = validator_rankings;
         self.last_seed_height = Some(height);
     }

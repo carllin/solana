@@ -40,7 +40,10 @@ impl LedgerWriteStage {
         }
 
         if let Some(ledger_writer) = ledger_writer {
-            ledger_writer.write_entries(ventries.iter().flatten())?;
+            for entry in ventries.iter().flatten() {
+                info!("Ledger write stage: Received entry with id: {}", entry.id);
+            }
+		ledger_writer.write_entries(ventries.iter().flatten())?;
         }
 
         inc_new_counter_info!("ledger_writer_stage-entries_received", num_new_entries);
