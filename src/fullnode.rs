@@ -251,7 +251,6 @@ impl Fullnode {
                 entry_height,
                 *last_entry_id,
                 cluster_info.clone(),
-                shared_window.clone(),
                 node.sockets
                     .replicate
                     .iter()
@@ -266,6 +265,8 @@ impl Fullnode {
                     .try_clone()
                     .expect("Failed to clone retransmit socket"),
                 Some(ledger_path),
+                //TODO: pass db path as argument
+                format!("{}/db_ledger", ledger_path),
             );
             let validator_state = ValidatorServices::new(tvu);
             Some(NodeRole::Validator(validator_state))
@@ -398,7 +399,6 @@ impl Fullnode {
                 entry_height,
                 last_entry_id,
                 self.cluster_info.clone(),
-                self.shared_window.clone(),
                 self.replicate_socket
                     .iter()
                     .map(|s| s.try_clone().expect("Failed to clone replicate sockets"))
@@ -410,6 +410,7 @@ impl Fullnode {
                     .try_clone()
                     .expect("Failed to clone retransmit socket"),
                 Some(&self.ledger_path),
+                format!("{}/db_ledger", self.ledger_path),
             );
             let validator_state = ValidatorServices::new(tvu);
             self.node_role = Some(NodeRole::Validator(validator_state));
