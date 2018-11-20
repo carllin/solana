@@ -3,15 +3,17 @@
 //! access read to a persistent file-based ledger.
 
 use bincode::{deserialize, serialize};
-use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
 use entry::Entry;
-use ledger::Block;
 use packet::{Blob, SharedBlob, BLOB_HEADER_SIZE};
 use result::{Error, Result};
 use rocksdb::{ColumnFamily, Options, WriteBatch, DB};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use solana_sdk::pubkey::Pubkey;
+use std::borrow::Borrow;
 use std::io;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub const DB_LEDGER_DIRECTORY: &str = "db_ledger";
 
@@ -103,7 +105,7 @@ pub struct MetaCf {}
 impl MetaCf {
     pub fn key(slot_height: u64) -> Vec<u8> {
         let mut key = vec![0u8; 8];
-        LittleEndian::write_u64(&mut key[0..8], slot_height);
+        BigEndian::write_u64(&mut key[0..8], slot_height);
         key
     }
 }
@@ -144,20 +146,20 @@ impl DataCf {
 
     pub fn key(slot_height: u64, index: u64) -> Vec<u8> {
         let mut key = vec![0u8; 16];
-        LittleEndian::write_u64(&mut key[0..8], slot_height);
-        LittleEndian::write_u64(&mut key[8..16], index);
+        BigEndian::write_u64(&mut key[0..8], slot_height);
+        BigEndian::write_u64(&mut key[8..16], index);
         key
     }
 
     pub fn slot_height_from_key(key: &[u8]) -> Result<u64> {
         let mut rdr = io::Cursor::new(&key[0..8]);
-        let height = rdr.read_u64::<LittleEndian>()?;
+        let height = rdr.read_u64::<BigEndian>()?;
         Ok(height)
     }
 
     pub fn index_from_key(key: &[u8]) -> Result<u64> {
         let mut rdr = io::Cursor::new(&key[8..16]);
-        let index = rdr.read_u64::<LittleEndian>()?;
+        let index = rdr.read_u64::<BigEndian>()?;
         Ok(index)
     }
 }
@@ -260,10 +262,19 @@ impl DbLedger {
         })
     }
 
-    pub fn write_shared_blobs(&mut self, slot: u64, shared_blobs: &[SharedBlob]) -> Result<()> {
-        let blob_locks: Vec<_> = shared_blobs.iter().map(|b| b.read().unwrap()).collect();
-        let blobs: Vec<&Blob> = blob_locks.iter().map(|b| &**b).collect();
-        self.write_blobs(slot, &blobs)
+    pub fn write_shared_blobs<I>(&mut self, slot: u64, shared_blobs: I) -> Result<()>
+    where
+        I: IntoIterator,
+        I::Item: Borrow<SharedBlob>,
+    {
+        for b in shared_blobs {
+            let bl = b.borrow().read().unwrap();
+            let index = bl.index()?;
+            let key = DataCf::key(slot, index);
+            self.insert_data_blob(&key, &*bl)?;
+        }
+
+        Ok(())
     }
 
     pub fn write_blobs<'a, I>(&mut self, slot: u64, blobs: I) -> Result<()>
@@ -278,12 +289,15 @@ impl DbLedger {
         Ok(())
     }
 
-    pub fn write_entries(&mut self, slot: u64, entries: &[Entry]) -> Result<()> {
-        let shared_blobs = entries.to_blobs();
-        let blob_locks: Vec<_> = shared_blobs.iter().map(|b| b.read().unwrap()).collect();
-        let blobs: Vec<&Blob> = blob_locks.iter().map(|b| &**b).collect();
-        self.write_blobs(slot, &blobs)?;
-        Ok(())
+    pub fn write_entries<'a, I>(&mut self, slot: u64, entries: I) -> Result<()>
+    where
+        I: IntoIterator<Item = &'a Entry>,
+    {
+        let default_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+        let shared_blobs = entries.into_iter().zip(0..).map(|(entry, idx)| {
+            entry.to_blob(Some(idx), Some(Pubkey::default()), Some(&default_addr))
+        });
+        self.write_shared_blobs(slot, shared_blobs)
     }
 
     pub fn insert_data_blob(&self, key: &[u8], new_blob: &Blob) -> Result<Vec<Entry>> {
@@ -421,12 +435,15 @@ impl DbLedger {
     }
 }
 
-pub fn write_entries_to_ledger(ledger_paths: &[String], entries: &[Entry]) {
+pub fn write_entries_to_ledger<'a, I>(ledger_paths: &[String], entries: I)
+where
+    I: IntoIterator<Item = &'a Entry> + Copy,
+{
     for ledger_path in ledger_paths {
         let mut db_ledger =
             DbLedger::open(ledger_path).expect("Expected to be able to open database ledger");
         db_ledger
-            .write_entries(DEFAULT_SLOT_HEIGHT, &entries)
+            .write_entries(DEFAULT_SLOT_HEIGHT, entries)
             .expect("Expected successful write of genesis entries");
     }
 }
@@ -629,6 +646,46 @@ mod tests {
         // Destroying database without closing it first is undefined behavior
         drop(ledger);
         DB::destroy(&Options::default(), &ledger_path)
+            .expect("Expected successful database destruction");
+    }
+
+    #[test]
+    pub fn test_iteration_order() {
+        let slot = 0;
+        // Create RocksDb ledger
+        let db_ledger_path = get_tmp_ledger_path("test_iteration_order");
+        {
+            let mut db_ledger = DbLedger::open(&db_ledger_path).unwrap();
+
+            // Write entries
+            let num_entries = 8;
+            let shared_blobs = make_tiny_test_entries(num_entries).to_blobs();
+
+            for (b, i) in shared_blobs.iter().zip(0..num_entries) {
+                b.write().unwrap().set_index(1 << (i * 8)).unwrap();
+            }
+
+            db_ledger
+                .write_shared_blobs(DEFAULT_SLOT_HEIGHT, &shared_blobs)
+                .expect("Expected successful write of blobs");
+            let mut db_iterator = db_ledger
+                .db
+                .raw_iterator_cf(db_ledger.data_cf.handle(&db_ledger.db))
+                .expect("Expected to be able to open database iterator");
+
+            db_iterator.seek(&DataCf::key(slot, 1));
+
+            // Iterate through ledger
+            for i in 0..num_entries {
+                assert!(db_iterator.valid());
+                let current_key = db_iterator.key().expect("Expected a valid key");
+                let current_index = DataCf::index_from_key(&current_key)
+                    .expect("Expect to be able to parse index from valid key");
+                assert_eq!(current_index, (1 as u64) << (i * 8));
+                db_iterator.next();
+            }
+        }
+        DB::destroy(&Options::default(), &db_ledger_path)
             .expect("Expected successful database destruction");
     }
 }
