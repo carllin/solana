@@ -258,12 +258,13 @@ pub fn process_blob(
     let is_coding = blob.read().unwrap().is_coding();
 
     // Check if the blob is in the range of our known leaders. If not, we return.
-    let slot = blob.read().unwrap().slot()?;
+    /*let slot = blob.read().unwrap().slot()?;
     let leader = leader_scheduler.get_leader_for_slot(slot);
 
     if leader.is_none() {
         return Ok(());
-    }
+    }*/
+    let slot = DEFAULT_SLOT_HEIGHT;
 
     // Insert the new blob into the window
     let mut consumed_entries = if is_coding {
@@ -277,7 +278,7 @@ pub fn process_blob(
         )?;
         vec![]
     } else {
-        let data_key = ErasureCf::key(slot, pix);
+        let data_key = DataCf::key(slot, pix);
         db_ledger.insert_data_blob(&data_key, &blob.read().unwrap())?
     };
 
