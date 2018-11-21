@@ -13,14 +13,8 @@
 use bank::Bank;
 use blob_fetch_stage::BlobFetchStage;
 use cluster_info::ClusterInfo;
-<<<<<<< HEAD
-=======
 use db_ledger::DbLedger;
-<<<<<<< HEAD
->>>>>>> d83117da... Replace window with db_window functions in window_service
 use hash::Hash;
-=======
->>>>>>> d8c5595f... Fix tests
 use ledger_write_stage::LedgerWriteStage;
 use replicate_stage::{ReplicateStage, ReplicateStageReturnType};
 use retransmit_stage::RetransmitStage;
@@ -190,11 +184,8 @@ pub mod tests {
     use rocksdb::{Options, DB};
     use service::Service;
     use signature::{Keypair, KeypairUtil};
-<<<<<<< HEAD
-=======
     use solana_sdk::hash::Hash;
     use std::fs::remove_dir_all;
->>>>>>> d8c5595f... Fix tests
     use std::net::UdpSocket;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::channel;

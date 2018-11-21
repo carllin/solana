@@ -4,6 +4,7 @@ use bank::Bank;
 use broadcast_stage::BroadcastStage;
 use cluster_info::{ClusterInfo, Node, NodeInfo};
 use db_ledger::DB_LEDGER_DIRECTORY;
+use hash::Hash;
 use leader_scheduler::LeaderScheduler;
 use ledger::read_ledger;
 use ncp::Ncp;

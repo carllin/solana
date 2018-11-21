@@ -27,6 +27,8 @@ pub mod client;
 pub mod cluster_info;
 pub mod budget_program;
 pub mod compute_leader_finality_service;
+pub mod db_ledger;
+pub mod db_window;
 pub mod drone;
 pub mod entry;
 #[cfg(feature = "erasure")]
@@ -132,3 +134,4 @@ extern crate matches;
 
 extern crate influx_db_client;
 extern crate rand;
+extern crate rocksdb;

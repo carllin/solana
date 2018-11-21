@@ -6,9 +6,9 @@ use bank::Bank;
 use bincode::serialize;
 use byteorder::{LittleEndian, ReadBytesExt};
 use entry::Entry;
-use hash::{hash, Hash};
 use ledger::create_ticks;
 use signature::{Keypair, KeypairUtil};
+use hash::{hash, Hash};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashSet;
 use std::io::Cursor;
@@ -279,6 +279,21 @@ impl LeaderScheduler {
         Some((self.leader_schedule[validator_index], leader_slot))
     }
 
+    pub fn get_leader_for_slot(&self, slot_height: u64) -> Option<Pubkey> {
+        let tick_height = self.slot_height_to_first_tick_height(slot_height);
+        self.get_scheduled_leader(tick_height).map(|(id, _)| id)
+    }
+
+    // Maps the nth slot (where n == slot_height) to the tick height of
+    // the first tick for that slot
+    fn slot_height_to_first_tick_height(&self, slot_height: u64) -> u64 {
+        if slot_height == 0 {
+            0
+        } else {
+            (slot_height - 1) * self.leader_rotation_interval + self.bootstrap_height
+        }
+    }
+
     // TODO: We use a HashSet for now because a single validator could potentially register
     // multiple vote account. Once that is no longer possible (see the TODO in vote_program.rs,
     // process_transaction(), case VoteInstruction::RegisterAccount), we can use a vector.
@@ -493,13 +508,13 @@ pub fn make_active_set_entries(
 #[cfg(test)]
 mod tests {
     use bank::Bank;
-    use hash::Hash;
     use leader_scheduler::{
         LeaderScheduler, LeaderSchedulerConfig, DEFAULT_BOOTSTRAP_HEIGHT,
         DEFAULT_LEADER_ROTATION_INTERVAL, DEFAULT_SEED_ROTATION_INTERVAL,
     };
     use mint::Mint;
     use signature::{Keypair, KeypairUtil};
+    use solana_sdk::hash::Hash;
     use solana_sdk::pubkey::Pubkey;
     use std::collections::HashSet;
     use std::hash::Hash as StdHash;

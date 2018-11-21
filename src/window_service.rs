@@ -6,12 +6,13 @@ use db_ledger::{DbLedger, LedgerColumnFamily, MetaCf, DEFAULT_SLOT_HEIGHT};
 use db_window::*;
 use entry::EntrySender;
 use influx_db_client as influxdb;
+use metrics::submit;
 use leader_scheduler::LeaderScheduler;
 use log::Level;
 use rand::{thread_rng, Rng};
 use result::{Error, Result};
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::timing::duration_as_ms;
+use timing::duration_as_ms;
 use std::borrow::{Borrow, BorrowMut};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -132,7 +133,7 @@ pub fn window_service(
             let mut tick_height_ = tick_height;
             let mut last = entry_height;
             let mut times = 0;
-            let id = cluster_info.read().unwrap().id();
+            let id = cluster_info.read().unwrap().id;
             trace!("{}: RECV_WINDOW started", id);
             loop {
                 if let Err(e) = recv_window(

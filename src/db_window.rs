@@ -8,7 +8,8 @@ use log::Level;
 use packet::{SharedBlob, BLOB_HEADER_SIZE};
 use result::Result;
 use rocksdb::DBRawIterator;
-use solana_metrics::{influxdb, submit};
+use influx_db_client as influxdb;
+use metrics::submit;
 use solana_sdk::pubkey::Pubkey;
 use std::cmp;
 use std::net::SocketAddr;
@@ -70,7 +71,7 @@ pub fn repair(
         }
     }
 
-    let num_peers = rcluster_info.tvu_peers().len() as u64;
+    let num_peers = rcluster_info.table.len() as u64;
 
     // Check if there's a max_entry_height limitation
     let max_repair_entry_height = if max_entry_height == 0 {
