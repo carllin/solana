@@ -241,6 +241,7 @@ impl Fullnode {
             .get_current_leader()
             .expect("Leader not known after processing bank");
 
+        let db_ledger_path = format!("{}/{}", ledger_path, DB_LEDGER_DIRECTORY);
         cluster_info.write().unwrap().set_leader(scheduled_leader);
         let node_role = if scheduled_leader != keypair.pubkey() {
             // Start in validator mode.
@@ -265,7 +266,7 @@ impl Fullnode {
                     .try_clone()
                     .expect("Failed to clone retransmit socket"),
                 Some(ledger_path),
-                format!("{}/{}", ledger_path, DB_LEDGER_DIRECTORY),
+                db_ledger_path.clone(),
             );
             let validator_state = ValidatorServices::new(tvu);
             Some(NodeRole::Validator(validator_state))
@@ -290,6 +291,7 @@ impl Fullnode {
             );
 
             let broadcast_stage = BroadcastStage::new(
+                db_ledger_path,
                 node.sockets
                     .broadcast
                     .try_clone()
@@ -391,6 +393,7 @@ impl Fullnode {
             self.validator_to_leader(tick_height, entry_height, last_entry_id);
             Ok(())
         } else {
+            let db_ledger_path = format!("{}/{}", self.ledger_path, DB_LEDGER_DIRECTORY);
             let tvu = Tvu::new(
                 self.keypair.clone(),
                 self.vote_account_keypair.clone(),
@@ -409,7 +412,7 @@ impl Fullnode {
                     .try_clone()
                     .expect("Failed to clone retransmit socket"),
                 Some(&self.ledger_path),
-                format!("{}/{}", self.ledger_path, DB_LEDGER_DIRECTORY),
+                db_ledger_path,
             );
             let validator_state = ValidatorServices::new(tvu);
             self.node_role = Some(NodeRole::Validator(validator_state));
@@ -445,6 +448,7 @@ impl Fullnode {
         );
 
         let broadcast_stage = BroadcastStage::new(
+            format!("{}/{}", self.ledger_path, DB_LEDGER_DIRECTORY),
             self.broadcast_socket
                 .try_clone()
                 .expect("Failed to clone broadcast socket"),

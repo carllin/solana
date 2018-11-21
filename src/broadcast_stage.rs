@@ -2,6 +2,7 @@
 //!
 use cluster_info::{ClusterInfo, ClusterInfoError, NodeInfo};
 use counter::Counter;
+use db_ledger::{DbLedger, DEFAULT_SLOT_HEIGHT};
 use entry::Entry;
 #[cfg(feature = "erasure")]
 use erasure;
@@ -30,6 +31,7 @@ pub enum BroadcastStageReturnType {
 
 #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
 fn broadcast(
+    db_ledger: &mut DbLedger,
     max_tick_height: Option<u64>,
     tick_height: &mut u64,
     node_info: &NodeInfo,
@@ -121,6 +123,8 @@ fn broadcast(
                 assert!(win[pos].data.is_none());
                 win[pos].data = Some(b.clone());
             }
+
+            db_ledger.write_shared_blobs(DEFAULT_SLOT_HEIGHT, &blobs);
         }
 
         // Fill in the coding blob data from the window data blobs
@@ -194,6 +198,7 @@ pub struct BroadcastStage {
 
 impl BroadcastStage {
     fn run(
+        db_ledger_path: String,
         sock: &UdpSocket,
         cluster_info: &Arc<RwLock<ClusterInfo>>,
         window: &SharedWindow,
@@ -203,6 +208,8 @@ impl BroadcastStage {
         max_tick_height: Option<u64>,
         tick_height: u64,
     ) -> BroadcastStageReturnType {
+        let mut db_ledger =
+            DbLedger::open(&db_ledger_path).expect("Expected to be able to open database ledger");
         let mut transmit_index = WindowIndex {
             data: entry_height,
             coding: entry_height,
@@ -213,6 +220,7 @@ impl BroadcastStage {
         loop {
             let broadcast_table = cluster_info.read().unwrap().compute_broadcast_table();
             if let Err(e) = broadcast(
+                &mut db_ledger,
                 max_tick_height,
                 &mut tick_height_,
                 &me,
@@ -226,7 +234,7 @@ impl BroadcastStage {
             ) {
                 match e {
                     Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
-                        return BroadcastStageReturnType::ChannelDisconnected
+                        return BroadcastStageReturnType::ChannelDisconnected;
                     }
                     Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
                     Error::ClusterInfoError(ClusterInfoError::NoPeers) => (), // TODO: Why are the unit-tests throwing hundreds of these?
@@ -255,6 +263,7 @@ impl BroadcastStage {
     /// which will then close FetchStage in the Tpu, and then the rest of the Tpu,
     /// completing the cycle.
     pub fn new(
+        db_ledger_path: String,
         sock: UdpSocket,
         cluster_info: Arc<RwLock<ClusterInfo>>,
         window: SharedWindow,
@@ -270,6 +279,7 @@ impl BroadcastStage {
             .spawn(move || {
                 let _exit = Finalizer::new(exit_sender);
                 Self::run(
+                    db_ledger_path,
                     &sock,
                     &cluster_info,
                     &window,
