@@ -302,13 +302,19 @@ impl DbLedger {
         };
 
         let mut index = DataCf::index_from_key(key)?;
-        println!("INSERTING INDEX: {}", index);
 
         // TODO: Handle if leader sends different blob for same index when the index > consumed
         // The old window implementation would just replace that index.
         if index < meta.consumed {
+            info!(
+                "ALREADY HAVE INDEX: {} IN LEDGER, from: {:?}",
+                index,
+                new_blob.id()
+            );
             return Err(Error::DbLedgerError(DbLedgerError::BlobForIndexExists));
         }
+
+        info!("INSERTING INDEX: {} from: {:?}", index, new_blob.id());
 
         // Index is zero-indexed, while the "received" height starts from 1,
         // so received = index + 1 for the same blob.

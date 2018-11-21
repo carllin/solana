@@ -3,13 +3,13 @@ use cluster_info::ClusterInfo;
 use counter::Counter;
 use db_ledger::*;
 use entry::Entry;
+use influx_db_client as influxdb;
 use leader_scheduler::LeaderScheduler;
 use log::Level;
+use metrics::submit;
 use packet::{SharedBlob, BLOB_HEADER_SIZE};
 use result::Result;
 use rocksdb::DBRawIterator;
-use influx_db_client as influxdb;
-use metrics::submit;
 use solana_sdk::pubkey::Pubkey;
 use std::cmp;
 use std::net::SocketAddr;
@@ -82,6 +82,7 @@ pub fn repair(
 
     let idxs = find_missing_data_indexes(slot, db_ledger, consumed, max_repair_entry_height - 1);
 
+    println!("REPAIRING: {:?}", idxs);
     let reqs: Vec<_> = idxs
         .into_iter()
         .filter_map(|pix| rcluster_info.window_index_request(pix).ok())
@@ -123,6 +124,10 @@ pub fn find_missing_indexes(
         return vec![];
     }
 
+    info!(
+        "FIND MISSING INDEXES: Start index: {}, end index: {}",
+        start_index, end_index
+    );
     let mut missing_indexes = vec![];
 
     // Seek to the first blob with index >= start_index
@@ -138,6 +143,10 @@ pub fn find_missing_indexes(
         let current_index =
             index_from_key(&current_key).expect("Expect to be able to parse index from valid key");
         let upper_index = cmp::min(current_index, end_index);
+        info!(
+            "current_index: {}, upper_index: {}",
+            current_index, upper_index
+        );
         for i in prev_index..upper_index {
             missing_indexes.push(i);
         }
@@ -204,6 +213,7 @@ pub fn retransmit_all_leader_blocks(
         // Check if the blob is from the scheduled leader for its slot. If so,
         // add to the retransmit_queue
         if let Ok(slot) = b.read().unwrap().slot() {
+            info!("Slot is {}", slot);
             if let Some(leader_id) = leader_scheduler.get_leader_for_slot(slot) {
                 add_blob_to_retransmit_queue(b, leader_id, &mut retransmit_queue);
             }
@@ -219,6 +229,7 @@ pub fn retransmit_all_leader_blocks(
     );
 
     if !retransmit_queue.is_empty() {
+        info!("Retransmit queue len: {}", retransmit_queue.len());
         inc_new_counter_info!("streamer-recv_window-retransmit", retransmit_queue.len());
         retransmit.send(retransmit_queue)?;
     }
@@ -327,7 +338,7 @@ pub fn process_blob(
 
     //
     let consumed_ids: Vec<_> = consumed_entries.iter().map(|e| e.id).collect();
-    println!("id: {}, CONSUMED IDS: {:?}", id, consumed_ids);
+    info!("id: {}, CONSUMED IDS: {:?}", id, consumed_ids);
     //
     consume_queue.extend(consumed_entries);
     Ok(())

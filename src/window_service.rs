@@ -6,13 +6,12 @@ use db_ledger::{DbLedger, LedgerColumnFamily, MetaCf, DEFAULT_SLOT_HEIGHT};
 use db_window::*;
 use entry::EntrySender;
 use influx_db_client as influxdb;
-use metrics::submit;
 use leader_scheduler::LeaderScheduler;
 use log::Level;
+use metrics::submit;
 use rand::{thread_rng, Rng};
 use result::{Error, Result};
 use solana_sdk::pubkey::Pubkey;
-use timing::duration_as_ms;
 use std::borrow::{Borrow, BorrowMut};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -21,6 +20,7 @@ use std::sync::{Arc, RwLock};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use streamer::{BlobReceiver, BlobSender};
+use timing::duration_as_ms;
 
 pub const MAX_REPAIR_BACKOFF: usize = 128;
 

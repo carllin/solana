@@ -475,7 +475,7 @@ impl ClusterInfo {
             inc_new_counter_info!("cluster_info-broadcast-not_enough_peers_error", 1);
             Err(ClusterInfoError::NoPeers)?;
         }
-        println!(
+        info!(
             "{} transmit_index: {:?} received_index: {} broadcast_len: {}",
             me.id,
             *transmit_index,
@@ -499,7 +499,7 @@ impl ClusterInfo {
 
         for e in errs {
             if let Err(e) = &e {
-                trace!("broadcast result {:?}", e);
+                info!("broadcast result {:?}", e);
             }
             e?;
             if transmit_index.data < received_index {
@@ -598,7 +598,7 @@ impl ClusterInfo {
                     let tvus = vs.iter().map(|v| v.contact_info.tvu);
                     let ids_and_tvus = v_ids.zip(tvus).collect();
 
-                    println!(
+                    info!(
                         "{}: BROADCAST idx: {} sz: {} to {:?} coding: {}",
                         me.id,
                         blob.index().unwrap(),
@@ -646,7 +646,7 @@ impl ClusterInfo {
         for idx in transmit_index.data..received_index {
             let w_idx = idx as usize % window_l.len();
 
-            println!(
+            info!(
                 "{} broadcast order data w_idx {} br_idx {}",
                 me.id, w_idx, br_idx
             );

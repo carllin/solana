@@ -2,6 +2,7 @@ use blob_fetch_stage::BlobFetchStage;
 use cluster_info::{ClusterInfo, Node, NodeInfo};
 use db_ledger::DbLedger;
 use hash::Hash;
+use hash::Hasher;
 use leader_scheduler::LeaderScheduler;
 use ncp::Ncp;
 use service::Service;
@@ -26,7 +27,6 @@ use streamer::BlobReceiver;
 use thin_client::poll_gossip_for_leader;
 use window;
 use window_service::window_service;
-use hash::Hasher;
 
 pub struct Replicator {
     ncp: Ncp,
