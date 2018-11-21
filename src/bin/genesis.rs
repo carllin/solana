@@ -8,6 +8,7 @@ extern crate solana;
 extern crate untrusted;
 
 use clap::{App, Arg};
+use solana::db_ledger::{write_entries_to_ledger, DB_LEDGER_DIRECTORY};
 use solana::fullnode::Config;
 use solana::ledger::LedgerWriter;
 use solana::mint::Mint;
@@ -69,5 +70,8 @@ fn main() -> Result<(), Box<error::Error>> {
     let mut ledger_writer = LedgerWriter::open(&ledger_path, true)?;
     ledger_writer.write_entries(&mint.create_entries())?;
 
+    // Create the RocksDb ledger
+    let db_ledger_path = format!("{}/{}", ledger_path, DB_LEDGER_DIRECTORY);
+    write_entries_to_ledger(&vec![db_ledger_path], &mint.create_entries());
     Ok(())
 }
