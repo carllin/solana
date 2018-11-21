@@ -43,6 +43,7 @@ impl PohRecorder {
         // This guarantees PoH order and Entry production and banks LastId queue is the same
         let mut poh = self.poh.lock().unwrap();
         if self.is_max_tick_height_reached(&poh) {
+            println!("EXITING BANKING STAGE DUE TO LEADER ROTATION IN TICK");
             Err(Error::PohRecorderError(PohRecorderError::MaxHeightReached))
         } else {
             self.register_and_send_tick(&mut *poh)?;
@@ -55,6 +56,7 @@ impl PohRecorder {
         // This guarantees PoH order and Entry production and banks LastId queue is the same.
         let mut poh = self.poh.lock().unwrap();
         if self.is_max_tick_height_reached(&poh) {
+            println!("EXITING BANKING STAGE DUE TO LEADER ROTATION IN ENTRY");
             Err(Error::PohRecorderError(PohRecorderError::MaxHeightReached))
         } else {
             self.record_and_send_txs(&mut *poh, mixin, txs)?;

@@ -77,7 +77,7 @@ fn recv_window(
     //send a contiguous set of blocks
     let mut consume_queue = Vec::new();
 
-    trace!("{} num blobs received: {}", id, dq.len());
+    println!("{} num blobs received: {}", id, dq.len());
 
     for b in dq {
         let (pix, meta_size) = {
@@ -87,9 +87,10 @@ fn recv_window(
 
         pixs.push(pix);
 
-        trace!("{} window pix: {} size: {}", id, pix, meta_size);
+        println!("{} window pix: {} size: {}", id, pix, meta_size);
 
         let _ = process_blob(
+            *id,
             leader_scheduler,
             db_ledger,
             &b,
@@ -169,6 +170,11 @@ pub fn window_service(
                     let received = meta.received;
                     let consumed = meta.consumed;
 
+                    println!(
+                        "id: {}, consumed: {}, recieved: {}",
+                        id, meta.consumed, meta.received
+                    );
+
                     submit(
                         influxdb::Point::new("window-stage")
                             .add_field("consumed", influxdb::Value::Integer(consumed as i64))
@@ -178,11 +184,9 @@ pub fn window_service(
                     // Consumed should never be bigger than received
                     assert!(consumed <= received);
                     if received == consumed {
-                        trace!(
+                        println!(
                             "{} we have everything received: {} consumed: {}",
-                            id,
-                            received,
-                            consumed
+                            id, received, consumed
                         );
                         continue;
                     }

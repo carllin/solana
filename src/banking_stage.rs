@@ -94,6 +94,9 @@ impl BankingStage {
                                         break Some(BankingStageReturnType::ChannelDisconnected);
                                     }
                                     Error::PohRecorderError(PohRecorderError::MaxHeightReached) => {
+                                        println!(
+                                            "BANKING STAGE THREAD EXITED DUE TO LEADER ROTATION"
+                                        );
                                         break Some(BankingStageReturnType::LeaderRotation);
                                     }
                                     _ => error!("solana-banking-stage-tx {:?}", e),

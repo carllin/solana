@@ -56,7 +56,6 @@ impl LedgerWriteStage {
 
     pub fn new(ledger_path: Option<&str>, entry_receiver: EntryReceiver) -> (Self, EntryReceiver) {
         let mut ledger_writer = ledger_path.map(|p| LedgerWriter::open(p, false).unwrap());
-
         let (entry_sender, entry_forwarder) = channel();
         let write_thread = Builder::new()
             .name("solana-ledger-writer".to_string())

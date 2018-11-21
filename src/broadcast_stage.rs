@@ -54,6 +54,13 @@ fn broadcast(
         num_entries += entries.len();
         ventries.push(entries);
     }
+    //
+    let entry_ids: Vec<_> = ventries
+        .iter()
+        .flat_map(|x| x.iter().map(|e| e.id))
+        .collect();
+    info!("BROADCAST ENTRY IDS: {:?}", entry_ids);
+    //
     inc_new_counter_info!("broadcast_stage-entries_received", num_entries);
 
     let to_blobs_start = Instant::now();
@@ -234,6 +241,7 @@ impl BroadcastStage {
             ) {
                 match e {
                     Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
+                        info!("RETURNING FROM BROADCAST STAGE, DISCONNECTED CHANNEL");
                         return BroadcastStageReturnType::ChannelDisconnected;
                     }
                     Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),

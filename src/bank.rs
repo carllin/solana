@@ -1079,6 +1079,8 @@ impl Bank {
             }
         } else {
             self.register_tick(&entry.id);
+
+            println!("Updating tick height in bank: {}", self.tick_height());
             self.leader_scheduler
                 .write()
                 .unwrap()

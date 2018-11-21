@@ -227,6 +227,10 @@ impl LeaderScheduler {
     }
 
     pub fn update_height(&mut self, height: u64, bank: &Bank) {
+        println!(
+            "UPDATE HEIGHT, height: {}, uobl: {}, bootstrap_height: {}, last_seed_height: {:?}",
+            height, self.use_only_bootstrap_leader, self.bootstrap_height, self.last_seed_height
+        );
         if self.use_only_bootstrap_leader {
             return;
         }
@@ -315,6 +319,10 @@ impl LeaderScheduler {
                                 .votes
                                 .back()
                                 .filter(|vote| {
+                                    println!(
+                                        "get active set: lb: {}, up: {}, tick_height: {}",
+                                        lower_bound, upper_bound, vote.tick_height
+                                    );
                                     vote.tick_height > lower_bound
                                         && vote.tick_height <= upper_bound
                                 }).map(|_| vote_state.node_id);
@@ -334,8 +342,9 @@ impl LeaderScheduler {
         let seed = Self::calculate_seed(height);
         self.seed = seed;
         let active_set = self.get_active_set(height, &bank);
+        println!("active set: {:?}", active_set);
         let ranked_active_set = Self::rank_active_set(bank, active_set.iter());
-
+        println!("ranked set: {:?}", ranked_active_set);
         // Handle case where there are no active validators with
         // non-zero stake. In this case, use the bootstrap leader for
         // the upcoming rounds
@@ -389,6 +398,7 @@ impl LeaderScheduler {
         }
 
         self.leader_schedule = validator_rankings;
+        println!("leader schedule: {:?}", self.leader_schedule);
         self.last_seed_height = Some(height);
     }
 

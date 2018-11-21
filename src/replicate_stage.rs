@@ -82,7 +82,14 @@ impl ReplicateStage {
         let mut res = Ok(());
         let mut num_entries_to_write = entries.len();
         let now = Instant::now();
+        //
+        let id = cluster_info.read().unwrap().id;
+        //
         if !entries.as_slice().verify(last_entry_id) {
+            info!(
+                "id: {} VERIFICATION FAILED. Last entry id: {}, entries: {:?}",
+                id, last_entry_id, entries
+            );
             inc_new_counter_info!("replicate_stage-verify-fail", entries.len());
             return Err(Error::BlobError(BlobError::VerificationFailed));
         }
@@ -120,6 +127,11 @@ impl ReplicateStage {
             }
         }
 
+        //
+        let tick_height = bank.tick_height();
+        info!("id: {}, replicate stage tick_height: {}", id, tick_height);
+        //
+
         // If leader rotation happened, only write the entries up to leader rotation.
         entries.truncate(num_entries_to_write);
         *last_entry_id = entries
@@ -143,7 +155,14 @@ impl ReplicateStage {
 
         *entry_height += entries_len;
         res?;
+        if vote_blob_sender.is_none() {
+            info!(
+                "id: {}, NOT SENDING VALIDATOR VOTE FOR TICK HEIGHT: {}",
+                id, tick_height
+            );
+        }
         if let Some(sender) = vote_blob_sender {
+            info!("id: {}, SENDING VALIDATOR VOTE", id);
             send_validator_vote(bank, vote_account_keypair, &cluster_info, sender)?;
         }
 
@@ -160,6 +179,11 @@ impl ReplicateStage {
         entry_height: u64,
         last_entry_id: Hash,
     ) -> (Self, EntryReceiver) {
+        info!(
+            "id: {}, first last_entry_id: {}",
+            keypair.pubkey(),
+            last_entry_id
+        );
         let (vote_blob_sender, vote_blob_receiver) = channel();
         let (ledger_entry_sender, ledger_entry_receiver) = channel();
         let send = UdpSocket::bind("0.0.0.0:0").expect("bind");
@@ -176,11 +200,17 @@ impl ReplicateStage {
                 let mut entry_height_ = entry_height;
                 let mut last_entry_id = last_entry_id;
                 loop {
+                    info!(
+                        "Replicate stage id: {}, entry_height: {}",
+                        keypair.pubkey(),
+                        entry_height_
+                    );
                     let (leader_id, _) = bank
                         .get_current_leader()
                         .expect("Scheduled leader id should never be unknown at this point");
 
                     if leader_id == keypair.pubkey() {
+                        info!("Id: {}, exiting replicate_stage", keypair.pubkey());
                         return Some(ReplicateStageReturnType::LeaderRotation(
                             bank.tick_height(),
                             entry_height_,

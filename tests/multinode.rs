@@ -913,6 +913,7 @@ fn test_leader_to_validator_transition() {
     }
 
     // Wait for leader to shut down tpu and restart tvu
+    println!("HANDLING ROLE TRANSITION");
     match leader.handle_role_transition().unwrap() {
         Some(FullnodeReturnType::LeaderToValidatorRotation) => (),
         _ => panic!("Expected reason for exit to be leader rotation"),
@@ -1284,7 +1285,6 @@ fn test_dropped_handoff_recovery() {
 }
 
 #[test]
-#[ignore]
 //TODO: Ignore for now due to bug exposed by the test "test_dropped_handoff_recovery"
 fn test_full_leader_validator_network() {
     logger::setup();
@@ -1363,6 +1363,11 @@ fn test_full_leader_validator_network() {
         format!("{}/{}", bootstrap_leader_ledger_path, DB_LEDGER_DIRECTORY);
 
     // Write the validator entries to the validator databases.
+    println!(
+        "genesis entries len: {}, last_id: {}",
+        genesis_entries.len(),
+        genesis_entries.last().unwrap().id
+    );
     write_entries_to_ledger(
         &vec![db_bootstrap_leader_ledger_path.clone()],
         &genesis_entries,
@@ -1458,14 +1463,17 @@ fn test_full_leader_validator_network() {
     // next leader node exits first, and stops generating entries. (We don't
     // have a timeout mechanism).
     let target_height = bootstrap_height + seed_rotation_interval;
+    println!("target height: {}", target_height);
     let mut num_reached_target_height = 0;
 
     while num_reached_target_height != N + 1 {
+        println!("NUM REACHED GOAL: {}", num_reached_target_height);
         num_reached_target_height = 0;
         for n in nodes.iter() {
             let node_lock = n.read().unwrap();
             let ls_lock = node_lock.get_leader_scheduler();
             if let Some(sh) = ls_lock.read().unwrap().last_seed_height {
+                println!("LSH: {}", sh);
                 if sh >= target_height {
                     num_reached_target_height += 1;
                 }

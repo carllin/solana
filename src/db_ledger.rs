@@ -302,6 +302,7 @@ impl DbLedger {
         };
 
         let mut index = DataCf::index_from_key(key)?;
+        println!("INSERTING INDEX: {}", index);
 
         // TODO: Handle if leader sends different blob for same index when the index > consumed
         // The old window implementation would just replace that index.

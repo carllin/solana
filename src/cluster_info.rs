@@ -475,7 +475,7 @@ impl ClusterInfo {
             inc_new_counter_info!("cluster_info-broadcast-not_enough_peers_error", 1);
             Err(ClusterInfoError::NoPeers)?;
         }
-        trace!(
+        println!(
             "{} transmit_index: {:?} received_index: {} broadcast_len: {}",
             me.id,
             *transmit_index,
@@ -598,7 +598,7 @@ impl ClusterInfo {
                     let tvus = vs.iter().map(|v| v.contact_info.tvu);
                     let ids_and_tvus = v_ids.zip(tvus).collect();
 
-                    trace!(
+                    println!(
                         "{}: BROADCAST idx: {} sz: {} to {:?} coding: {}",
                         me.id,
                         blob.index().unwrap(),
@@ -646,11 +646,9 @@ impl ClusterInfo {
         for idx in transmit_index.data..received_index {
             let w_idx = idx as usize % window_l.len();
 
-            trace!(
+            println!(
                 "{} broadcast order data w_idx {} br_idx {}",
-                me.id,
-                w_idx,
-                br_idx
+                me.id, w_idx, br_idx
             );
 
             // Broadcast the last tick to everyone on the network so it doesn't get dropped

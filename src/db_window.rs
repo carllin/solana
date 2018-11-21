@@ -247,6 +247,7 @@ pub fn add_blob_to_retransmit_queue(
 /// starting from consumed is thereby formed, add that continuous
 /// range of blobs to a queue to be sent on to the next stage.
 pub fn process_blob(
+    id: Pubkey,
     leader_scheduler: &LeaderScheduler,
     db_ledger: &mut DbLedger,
     blob: &SharedBlob,
@@ -324,6 +325,10 @@ pub fn process_blob(
         }
     }
 
+    //
+    let consumed_ids: Vec<_> = consumed_entries.iter().map(|e| e.id).collect();
+    println!("id: {}, CONSUMED IDS: {:?}", id, consumed_ids);
+    //
     consume_queue.extend(consumed_entries);
     Ok(())
 }
