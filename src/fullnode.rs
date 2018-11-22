@@ -325,6 +325,7 @@ impl Fullnode {
             );
 
             let broadcast_stage = BroadcastStage::new(
+                db_ledger.clone(),
                 node.sockets
                     .broadcast
                     .try_clone()
@@ -489,6 +490,7 @@ impl Fullnode {
         );
 
         let broadcast_stage = BroadcastStage::new(
+            self.db_ledger.clone(),
             self.broadcast_socket
                 .try_clone()
                 .expect("Failed to clone broadcast socket"),
