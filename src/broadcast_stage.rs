@@ -2,6 +2,7 @@
 //!
 use cluster_info::{ClusterInfo, ClusterInfoError, NodeInfo};
 use counter::Counter;
+use db_ledger::{DbLedger, DEFAULT_SLOT_HEIGHT};
 use entry::Entry;
 #[cfg(feature = "erasure")]
 use erasure;
@@ -31,6 +32,7 @@ pub enum BroadcastStageReturnType {
 
 #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
 fn broadcast(
+    db_ledger: &Arc<RwLock<DbLedger>>,
     max_tick_height: Option<u64>,
     tick_height: &mut u64,
     leader_id: Pubkey,
@@ -123,6 +125,8 @@ fn broadcast(
                 assert!(win[pos].data.is_none());
                 win[pos].data = Some(b.clone());
             }
+
+            db_ledger.write().unwrap().write_shared_blobs(DEFAULT_SLOT_HEIGHT, &blobs)?;
         }
 
         // Fill in the coding blob data from the window data blobs
@@ -197,6 +201,7 @@ pub struct BroadcastStage {
 
 impl BroadcastStage {
     fn run(
+        db_ledger: Arc<RwLock<DbLedger>>,
         sock: &UdpSocket,
         cluster_info: &Arc<RwLock<ClusterInfo>>,
         window: &SharedWindow,
@@ -217,6 +222,7 @@ impl BroadcastStage {
             let broadcast_table = cluster_info.read().unwrap().tvu_peers();
             let leader_id = cluster_info.read().unwrap().leader_id();
             if let Err(e) = broadcast(
+                &db_ledger,
                 max_tick_height,
                 &mut tick_height_,
                 leader_id,
@@ -231,7 +237,7 @@ impl BroadcastStage {
             ) {
                 match e {
                     Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
-                        return BroadcastStageReturnType::ChannelDisconnected
+                        return BroadcastStageReturnType::ChannelDisconnected;
                     }
                     Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
                     Error::ClusterInfoError(ClusterInfoError::NoPeers) => (), // TODO: Why are the unit-tests throwing hundreds of these?
@@ -260,6 +266,7 @@ impl BroadcastStage {
     /// which will then close FetchStage in the Tpu, and then the rest of the Tpu,
     /// completing the cycle.
     pub fn new(
+        db_ledger: Arc<RwLock<DbLedger>>,
         sock: UdpSocket,
         cluster_info: Arc<RwLock<ClusterInfo>>,
         window: SharedWindow,
@@ -275,6 +282,7 @@ impl BroadcastStage {
             .spawn(move || {
                 let _exit = Finalizer::new(exit_sender);
                 Self::run(
+                    db_ledger,
                     &sock,
                     &cluster_info,
                     &window,
