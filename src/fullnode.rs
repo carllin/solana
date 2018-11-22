@@ -322,6 +322,7 @@ impl Fullnode {
             );
 
             let broadcast_stage = BroadcastStage::new(
+                db_ledger.clone(),
                 node.sockets
                     .broadcast
                     .try_clone()
@@ -466,7 +467,7 @@ impl Fullnode {
 
         let max_tick_height = {
             let ls_lock = self.bank.leader_scheduler.read().unwrap();
-            ls_lock.max_height_for_leader(tick_height)
+            ls_lock.max_height_for_leader(tick_height + 1)
         };
 
         let (tpu, blob_receiver, tpu_exit) = Tpu::new(
@@ -486,6 +487,7 @@ impl Fullnode {
         );
 
         let broadcast_stage = BroadcastStage::new(
+            self.db_ledger.clone(),
             self.broadcast_socket
                 .try_clone()
                 .expect("Failed to clone broadcast socket"),
@@ -523,7 +525,7 @@ impl Fullnode {
             Some(NodeRole::Validator(validator_services)) => match validator_services.join()? {
                 Some(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
                     //TODO: Fix this to return actual poh height.
-                    self.validator_to_leader(tick_height + 1, entry_height, last_entry_id);
+                    self.validator_to_leader(tick_height, entry_height, last_entry_id);
                     Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation))
                 }
                 _ => Ok(None),
