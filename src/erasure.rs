@@ -377,11 +377,15 @@ pub fn recover(
         "start_idx: {}, bstart: {}, bend: {}",
         start_idx, block_start_idx, block_end_idx
     );
-    let data_missing =
-        find_missing_data_indexes(slot, db_ledger, block_start_idx, block_end_idx).len();
+    let data_missing = find_missing_data_indexes(slot, db_ledger, block_start_idx, block_end_idx);
     let coding_missing =
-        find_missing_coding_indexes(slot, db_ledger, block_start_idx, block_end_idx).len();
+        find_missing_coding_indexes(slot, db_ledger, coding_start_idx, block_end_idx);
 
+    println!("data missing: {:?}", data_missing);
+    println!("coding missing: {:?}", coding_missing);
+
+    let data_missing = data_missing.len();
+    let coding_missing = coding_missing.len();
     // if we're not missing data, or if we have too much missing but have enough coding
     if data_missing == 0 {
         // nothing to do...
@@ -410,8 +414,8 @@ pub fn recover(
         data_missing,
         coding_missing
     );
-    let mut data: Vec<Option<Vec<u8>>> = Vec::with_capacity(NUM_DATA - data_missing);
-    let mut coding: Vec<Option<Vec<u8>>> = Vec::with_capacity(NUM_CODING - coding_missing);
+    let mut data: Vec<Option<Blob>> = Vec::with_capacity(NUM_DATA - data_missing);
+    let mut coding: Vec<Option<Blob>> = Vec::with_capacity(NUM_CODING - coding_missing);
     let mut missing_data: Vec<Blob> = Vec::with_capacity(data_missing);
     let mut missing_coding: Vec<Blob> = Vec::with_capacity(coding_missing);
 
@@ -432,7 +436,7 @@ pub fn recover(
                 if b.len() <= BLOB_HEADER_SIZE {
                     return Err(ErasureError::InvalidBlobData);
                 }
-                data.push(Some(b));
+                data.push(Some(Blob::new(&b)));
                 /*
                 let len = existing_data.len();
                 existing_data[len] = b;
@@ -474,7 +478,7 @@ pub fn recover(
                         i as u64 + block_start_idx
                     );
                 }
-                coding.push(Some(b));
+                coding.push(Some(Blob::new(&b)));
                 //&mut coding.last_mut().unwrap()[BLOB_HEADER_SIZE..]
             }
             Ok(None) => {
@@ -574,9 +578,9 @@ pub fn recover(
 // missing blobs
 fn make_erasure_ptrs<'a>(
     size: usize,
-    data: &'a mut [Option<Vec<u8>>],
+    data: &'a mut [Option<Blob>],
     missing_data: &'a mut [Blob],
-    coding: &'a mut [Option<Vec<u8>>],
+    coding: &'a mut [Option<Blob>],
     missing_coding: &'a mut [Blob],
 ) -> Result<(Vec<&'a mut [u8]>, Vec<&'a mut [u8]>)> {
     let mut coding_ptrs: Vec<&mut [u8]> = Vec::with_capacity(NUM_CODING);
@@ -585,10 +589,7 @@ fn make_erasure_ptrs<'a>(
     let mut missing_data_iter = missing_data.iter_mut();
     for d in data {
         if let Some(d) = d {
-            if d.len() < BLOB_HEADER_SIZE + size {
-                return Err(ErasureError::InvalidBlobData);
-            }
-            data_ptrs.push(&mut d[BLOB_HEADER_SIZE..BLOB_HEADER_SIZE + size]);
+            data_ptrs.push(&mut d.data_mut()[..size]);
         } else {
             let mut missing_data_blob = missing_data_iter
                 .next()
@@ -600,10 +601,23 @@ fn make_erasure_ptrs<'a>(
     let mut missing_coding_iter = missing_coding.iter_mut();
     for c in coding {
         if let Some(c) = c {
-            if c.len() < BLOB_HEADER_SIZE + size {
-                return Err(ErasureError::InvalidBlobData);
+            match c.size() {
+                Ok(coding_size) => {
+                    if coding_size < size {
+                        println!(
+                            "INVALID CODING, coding len(): {}, expected: {}",
+                            coding_size,
+                            BLOB_HEADER_SIZE + size
+                        );
+                        return Err(ErasureError::InvalidBlobData);
+                    }
+                    coding_ptrs.push(&mut c.data_mut()[..size]);
+                }
+                Err(e) => {
+                    error!("error: {:?}", e);
+                    return Err(ErasureError::InvalidBlobData);
+                }
             }
-            coding_ptrs.push(&mut c[BLOB_HEADER_SIZE..BLOB_HEADER_SIZE + size]);
         } else {
             let mut missing_coding_blob = missing_coding_iter
                 .next()
@@ -889,7 +903,7 @@ mod test {
         assert_eq!(index, (erasure::NUM_DATA - erasure::NUM_CODING) as u64);
 
         println!("** after-gen-coding:");
-        print_window(&window);
+        //print_window(&window);
 
         println!("** whack data block:");
 
@@ -897,6 +911,8 @@ mod test {
         let erase_offset = offset;
         // Create a hole in the window
         let refwindow = window[erase_offset].data.clone();
+        let g = refwindow.as_ref().unwrap();
+        println!("ERASING: {}", g.read().unwrap().index().unwrap());
         window[erase_offset].data = None;
         print_window(&window);
 
