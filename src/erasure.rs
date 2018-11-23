@@ -373,6 +373,10 @@ pub fn recover(
         block_end_idx
     );
 
+    println!(
+        "start_idx: {}, bstart: {}, bend: {}",
+        start_idx, block_start_idx, block_end_idx
+    );
     let data_missing =
         find_missing_data_indexes(slot, db_ledger, block_start_idx, block_end_idx).len();
     let coding_missing =
@@ -384,6 +388,10 @@ pub fn recover(
         return Ok((vec![], vec![]));
     }
 
+    println!(
+        "data_missing: {}, coding_missing: {}",
+        data_missing, coding_missing
+    );
     if (data_missing + coding_missing) > NUM_CODING {
         trace!(
             "recover {}: start: {} skipping recovery data: {} coding: {}",
@@ -807,6 +815,8 @@ mod test {
                 db_ledger
                     .write_shared_blobs(slot_height, vec![data].into_iter())
                     .unwrap();
+
+                println!("FOUND DATA: index: {}", index);
             }
 
             if let Some(ref coding) = slot.coding {
@@ -820,6 +830,7 @@ mod test {
                     .size()
                     .expect("Expected coding blob to have valid ata size");
 
+                println!("FOUND CODING: index: {}", index);
                 db_ledger
                     .erasure_cf
                     .put_by_slot_index(
