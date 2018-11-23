@@ -949,7 +949,7 @@ mod tests {
         // Create RocksDb ledger, write genesis entries to it
         let db_ledger_path = format!("{}/{}", validator_ledger_path, DB_LEDGER_DIRECTORY);
         genesis_entries.extend(active_set_entries);
-        write_entries_to_ledger(&vec![db_ledger_path.clone()], &genesis_entries);
+        write_entries_to_ledger(&[&db_ledger_path], &genesis_entries);
 
         // Set the leader scheduler for the validator
         let leader_rotation_interval = 10;

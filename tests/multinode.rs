@@ -996,14 +996,11 @@ fn test_leader_validator_basic() {
 
     // Write the validator entries to the validator database, they
     // will have repair the missing leader "active_set_entries"
-    write_entries_to_ledger(
-        &vec![db_validator_leader_ledger_path.clone()],
-        &genesis_entries,
-    );
+    write_entries_to_ledger(&[&db_validator_leader_ledger_path], &genesis_entries);
 
     // Next write the leader entries to the leader
     genesis_entries.extend(active_set_entries);
-    write_entries_to_ledger(&vec![db_leader_ledger_path.clone()], &genesis_entries);
+    write_entries_to_ledger(&[&db_leader_ledger_path.clone()], &genesis_entries);
 
     let db_ledger_paths = vec![db_leader_ledger_path, db_validator_leader_ledger_path];
 

@@ -5,6 +5,7 @@ use packet::{Blob, SharedBlob, BLOB_DATA_SIZE, BLOB_HEADER_SIZE};
 use solana_sdk::pubkey::Pubkey;
 use std::cmp;
 use std::result;
+use std::sync::{Arc, RwLock};
 use window::WindowSlot;
 
 //TODO(sakridge) pick these values
@@ -155,7 +156,22 @@ pub fn decode_blocks(
         }
         data_arg.push(x.as_mut_ptr());
     }
+    println!("RIGHT BEFORE DECODE");
     let ret = unsafe {
+        println!("calculating distance between data pointers");
+        for i in 0..data_arg.len() - 1 {
+            let max = cmp::max(data_arg[i] as usize, data_arg[i + 1] as usize);
+            let min = cmp::min(data_arg[i] as usize, data_arg[i + 1] as usize);
+            println!("DISTANCE: {}", max - min,);
+        }
+        println!("calculating distance between erasure pointers");
+        for i in 0..coding_arg.len() - 1 {
+            let max = cmp::max(coding_arg[i] as usize, coding_arg[i + 1] as usize);
+            let min = cmp::min(coding_arg[i] as usize, coding_arg[i + 1] as usize);
+            println!("DISTANCE: {}", max - min,);
+        }
+        println!("data_arg: {:?}, coding_arg {:?}", data_arg, coding_arg,);
+
         jerasure_matrix_decode(
             data.len() as i32,
             coding.len() as i32,
@@ -168,7 +184,7 @@ pub fn decode_blocks(
             data[0].len() as i32,
         )
     };
-    trace!("jerasure_matrix_decode ret: {}", ret);
+    println!("jerasure_matrix_decode ret: {}", ret);
     for x in data[erasures[0] as usize][0..8].iter() {
         trace!("{} ", x)
     }
@@ -258,8 +274,6 @@ pub fn generate_coding(
         // round up to the nearest jerasure alignment
         max_data_size = align!(max_data_size, JERASURE_ALIGN);
 
-        trace!("{} max_data_size: {}", id, max_data_size);
-
         let mut data_blobs = Vec::with_capacity(NUM_DATA);
         for i in block_start..block_end {
             let n = i % window.len();
@@ -312,6 +326,7 @@ pub fn generate_coding(
                 coding_wl.set_id(&id).unwrap();
             }
             coding_wl.set_size(max_data_size);
+            println!("{} max_data_size: {}", id, max_data_size);
             if coding_wl.set_coding().is_err() {
                 return Err(ErasureError::EncodeError);
             }
@@ -359,7 +374,7 @@ pub fn recover(
     db_ledger: &mut DbLedger,
     slot: u64,
     start_idx: u64,
-) -> Result<(Vec<Blob>, Vec<Blob>)> {
+) -> Result<(Vec<SharedBlob>, Vec<SharedBlob>)> {
     let block_start_idx = start_idx - (start_idx % NUM_DATA as u64);
 
     debug!("block_start_idx: {}", block_start_idx);
@@ -414,12 +429,12 @@ pub fn recover(
         data_missing,
         coding_missing
     );
-    let mut data: Vec<Option<Blob>> = Vec::with_capacity(NUM_DATA - data_missing);
-    let mut coding: Vec<Option<Blob>> = Vec::with_capacity(NUM_CODING - coding_missing);
-    let mut missing_data: Vec<Blob> = Vec::with_capacity(data_missing);
-    let mut missing_coding: Vec<Blob> = Vec::with_capacity(coding_missing);
 
+    let mut blobs: Vec<SharedBlob> = Vec::with_capacity(NUM_DATA + NUM_CODING);
     let mut erasures: Vec<i32> = Vec::with_capacity(NUM_CODING);
+
+    let mut missing_data: Vec<SharedBlob> = vec![];
+    let mut missing_coding: Vec<SharedBlob> = vec![];
     let mut size = None;
 
     // Add the data blobs we have into the recovery vector, mark the missing ones
@@ -430,24 +445,20 @@ pub fn recover(
                     "error getting data blob at slot: {}, index: {}, error: {:?}",
                     slot, i, err
                 );
-                continue;
+                return Err(ErasureError::InvalidBlobData);
             }
             Ok(Some(b)) => {
                 if b.len() <= BLOB_HEADER_SIZE {
                     return Err(ErasureError::InvalidBlobData);
                 }
-                data.push(Some(Blob::new(&b)));
-                /*
-                let len = existing_data.len();
-                existing_data[len] = b;
-                &mut existing_data[len][BLOB_HEADER_SIZE..]*/
+                blobs.push(Arc::new(RwLock::new(Blob::new(&b))));
             }
             Ok(None) => {
                 // Mark the missing memory
-                missing_data.push(Blob::default());
+                println!("PUSHING MISSING DATA: {}", i - block_start_idx);
                 erasures.push((i - block_start_idx) as i32);
-                data.push(None);
-                //&mut missing_data.last_mut().unwrap().data[..]
+                blobs.push(SharedBlob::default());
+                missing_data.push(blobs.last_mut().unwrap().clone());
             }
         }
     }
@@ -463,7 +474,7 @@ pub fn recover(
                     "error getting coding blob at slot: {}, index: {}, error: {:?}",
                     slot, i, err
                 );
-                continue;
+                return Err(ErasureError::InvalidBlobData);
             }
             Ok(Some(b)) => {
                 if b.len() <= BLOB_HEADER_SIZE {
@@ -478,15 +489,17 @@ pub fn recover(
                         i as u64 + block_start_idx
                     );
                 }
-                coding.push(Some(Blob::new(&b)));
-                //&mut coding.last_mut().unwrap()[BLOB_HEADER_SIZE..]
+                blobs.push(Arc::new(RwLock::new(Blob::new(&b))));
             }
             Ok(None) => {
                 // Mark the missing memory
-                missing_coding.push(Blob::default());
+                println!(
+                    "PUSHING MISSING CODING: {}",
+                    (i - coding_start_idx) + NUM_DATA as u64
+                );
                 erasures.push(((i - coding_start_idx) + NUM_DATA as u64) as i32);
-                coding.push(None);
-                //&mut missing_coding.last_mut().unwrap().data[..]
+                blobs.push(SharedBlob::default());
+                missing_coding.push(blobs.last_mut().unwrap().clone());
             }
         }
     }
@@ -495,20 +508,27 @@ pub fn recover(
     // we know at least one coding block must exist, so "size" will not remain None after the
     // below processing.
     let size = size.unwrap();
-
+    println!("DECODE SIZE: {}", size);
     // marks end of erasures
     erasures.push(-1);
     trace!("erasures[]: {} {:?} data_size: {}", id, erasures, size,);
 
+    let mut locks = Vec::with_capacity(NUM_DATA + NUM_CODING);
     {
-        // Resize the erasure pointers based on the expected erasure "size"
-        let (mut data_ptrs, mut coding_ptrs) = make_erasure_ptrs(
-            size,
-            &mut data,
-            &mut missing_data,
-            &mut coding,
-            &mut missing_coding,
-        )?;
+        let mut coding_ptrs: Vec<&mut [u8]> = Vec::with_capacity(NUM_CODING);
+        let mut data_ptrs: Vec<&mut [u8]> = Vec::with_capacity(NUM_DATA);
+
+        for b in &blobs {
+            locks.push(b.write().unwrap());
+        }
+
+        for (i, l) in locks.iter_mut().enumerate() {
+            if i < NUM_DATA {
+                data_ptrs.push(&mut l.data[..size]);
+            } else {
+                coding_ptrs.push(&mut l.data_mut()[..size]);
+            }
+        }
 
         // Decode the blocks
         decode_blocks(
@@ -520,25 +540,65 @@ pub fn recover(
 
     // Create the missing blobs from the reconstructed data
     let mut corrupt = false;
+
+    for i in &erasures[..erasures.len() - 1] {
+        let n = *i as usize;
+        let mut idx = n as u64 + block_start_idx;
+
+        let mut data_size;
+        if n < NUM_DATA {
+            data_size = locks[n].data_size().unwrap() as usize;
+            data_size -= BLOB_HEADER_SIZE;
+            if data_size > BLOB_DATA_SIZE {
+                error!("{} corrupt data blob[{}] data_size: {}", id, idx, data_size);
+                corrupt = true;
+            }
+        } else {
+            data_size = size;
+            idx -= NUM_CODING as u64;
+            locks[n].set_index(idx).unwrap();
+
+            if data_size - BLOB_HEADER_SIZE > BLOB_DATA_SIZE {
+                error!(
+                    "{} corrupt coding blob[{}] data_size: {}",
+                    id, idx, data_size
+                );
+                corrupt = true;
+            }
+        }
+
+        locks[n].set_size(data_size);
+        trace!(
+            "{} erasures[{}] ({}) size: {} data[0]: {}",
+            id,
+            *i,
+            idx,
+            data_size,
+            locks[n].data()[0]
+        );
+    }
+    /*
     // repopulate header data size from recovered blob contents
     for (b, i) in missing_data.iter_mut().zip(erasures.iter()) {
+        let mut bl = b.write().unwrap();
         let data_index = block_start_idx + *i as u64;
-        let data_size = b.data_size().unwrap() as usize;
-        if data_size - BLOB_HEADER_SIZE > BLOB_DATA_SIZE {
+        let mut data_size = bl.data_size().unwrap() as usize;
+        data_size -= BLOB_HEADER_SIZE;
+        if data_size > BLOB_DATA_SIZE {
             error!(
                 "{} corrupt data blob[{}] data_size: {}",
                 id, data_index, data_size
             );
             corrupt = true;
         }
-        b.set_size(data_size);
-        trace!(
+        bl.set_size(data_size);
+        println!(
             "{} erasures[{}] ({}) size: {} data[0]: {}",
             id,
             *i,
             data_index,
             data_size,
-            b.data()[0]
+            bl.data()[0]
         );
     }
 
@@ -546,10 +606,11 @@ pub fn recover(
         .iter_mut()
         .zip((&erasures[missing_data.len()..]).iter())
     {
+        let mut bl = b.write().unwrap();
         // Calculate the index of this coding blob
         let coding_index = block_start_idx + *i as u64 - NUM_CODING as u64;
         let data_size = size;
-        b.set_index(coding_index).unwrap();
+        bl.set_index(coding_index).unwrap();
 
         if data_size - BLOB_HEADER_SIZE > BLOB_DATA_SIZE {
             error!(
@@ -559,115 +620,24 @@ pub fn recover(
             corrupt = true;
         }
 
-        b.set_size(data_size);
-        trace!(
+        bl.set_size(data_size);
+        println!(
             "{} erasures[{}] ({}) size: {} data[0]: {}",
             id,
             *i,
             coding_index,
             data_size,
-            b.data()[0]
+            bl.data()[0]
         );
-    }
+    }*/
 
     assert!(!corrupt, " {} ", id);
     Ok((missing_data, missing_coding))
 }
 
-// Creates the pointers to data blobs taht are fed to the decoder to reconstruct
-// missing blobs
-fn make_erasure_ptrs<'a>(
-    size: usize,
-    data: &'a mut [Option<Blob>],
-    missing_data: &'a mut [Blob],
-    coding: &'a mut [Option<Blob>],
-    missing_coding: &'a mut [Blob],
-) -> Result<(Vec<&'a mut [u8]>, Vec<&'a mut [u8]>)> {
-    let mut coding_ptrs: Vec<&mut [u8]> = Vec::with_capacity(NUM_CODING);
-    let mut data_ptrs: Vec<&mut [u8]> = Vec::with_capacity(NUM_DATA);
-
-    let mut missing_data_iter = missing_data.iter_mut();
-    for d in data {
-        if let Some(d) = d {
-            data_ptrs.push(&mut d.data_mut()[..size]);
-        } else {
-            let mut missing_data_blob = missing_data_iter
-                .next()
-                .expect("Expected missing data blob to exist here");
-            data_ptrs.push(&mut missing_data_blob.data_mut()[..size]);
-        }
-    }
-
-    let mut missing_coding_iter = missing_coding.iter_mut();
-    for c in coding {
-        if let Some(c) = c {
-            match c.size() {
-                Ok(coding_size) => {
-                    if coding_size < size {
-                        println!(
-                            "INVALID CODING, coding len(): {}, expected: {}",
-                            coding_size,
-                            BLOB_HEADER_SIZE + size
-                        );
-                        return Err(ErasureError::InvalidBlobData);
-                    }
-                    coding_ptrs.push(&mut c.data_mut()[..size]);
-                }
-                Err(e) => {
-                    error!("error: {:?}", e);
-                    return Err(ErasureError::InvalidBlobData);
-                }
-            }
-        } else {
-            let mut missing_coding_blob = missing_coding_iter
-                .next()
-                .expect("Expected missing coding blob to exist here");
-            coding_ptrs.push(&mut missing_coding_blob.data_mut()[..size]);
-        }
-    }
-
-    Ok((data_ptrs, coding_ptrs))
-}
-/*fn make_erasure_ptrs(
-    size: usize,
-    existing_data: &[Vec<u8>],
-    missing_data: &[Blob],
-    existing_coding: &[Vec<u8>],
-    missing_coding: &[Blob],
-    erasures: Vec<i32>,
-) -> Result<(Vec<&mut [u8]>, Vec<&mut [u8]>)> {
-    // Fed to the decoder to reconstruct the missing blobs
-    let mut coding_ptrs: Vec<&mut [u8]> = Vec::with_capacity(NUM_CODING);
-    let mut data_ptrs: Vec<&mut [u8]> = Vec::with_capacity(NUM_DATA);
-    let mut current_index = 0;
-    for i in 0..erasures.len() {
-        let missing_index = erasures[i];
-        // Insert sequential blobs
-        for j in current_index..missing_index {
-            if j < NUM_DATA as i32 {
-                let data = 
-                if ptr.len() < size {
-                    return Err(ErasureError::InvalidBlobData);
-                }
-                data_ptrs.push(&mut existing_data[BLOB_HEADER_SIZE..BLOB_HEADER_SIZE + size])
-            }
-        }
-        data_ptrs.push(missing_index)
-
-    }
-    for ptr in data_ptrs.iter_mut().chain(coding_ptrs.iter_mut()) {
-        if ptr.len() < size {
-            return Err(ErasureError::InvalidBlobData);
-        }
-        ptr.take(size as u64);
-    }
-
-    Ok(())
-}*/
-
 #[cfg(test)]
 mod test {
-    use db_ledger::DbLedger;
+    use db_ledger::{DbLedger, DEFAULT_SLOT_HEIGHT};
     use erasure;
     use ledger::get_tmp_ledger_path;
     use logger;
@@ -851,7 +821,7 @@ mod test {
                         &db_ledger.db,
                         slot_height,
                         index,
-                        &coding_lock.data()[..data_size as usize],
+                        &coding_lock.data[..data_size as usize + BLOB_HEADER_SIZE],
                     ).unwrap();
             }
         }
@@ -891,7 +861,7 @@ mod test {
         }
 
         println!("** after-gen-window:");
-        print_window(&window);
+        //print_window(&window);
 
         // Generate the coding blocks
         let mut index = (erasure::NUM_DATA + 2) as u64;
@@ -911,23 +881,23 @@ mod test {
         let erase_offset = offset;
         // Create a hole in the window
         let refwindow = window[erase_offset].data.clone();
-        let g = refwindow.as_ref().unwrap();
-        println!("ERASING: {}", g.read().unwrap().index().unwrap());
         window[erase_offset].data = None;
-        print_window(&window);
+        //print_window(&window);
 
         // put junk in the tails, simulates re-used blobs
         scramble_window_tails(&mut window, num_blobs);
 
         // Generate the db_ledger from the window
         let ledger_path = get_tmp_ledger_path("test_window_recover_basic");
-        let mut db_ledger = generate_db_ledger_from_window(&ledger_path, &window, 0);
+        let mut db_ledger =
+            generate_db_ledger_from_window(&ledger_path, &window, DEFAULT_SLOT_HEIGHT);
 
         // Recover it from coding
         let (recovered_data, recovered_coding) =
             erasure::recover(&id, &mut db_ledger, 0, (offset + WINDOW_SIZE) as u64)
                 .expect("Expected successful recovery of erased blobs");
 
+        assert!(recovered_coding.is_empty());
         {
             // Check the result, block is here to drop locks
             let recovered_blob = recovered_data
@@ -935,59 +905,75 @@ mod test {
                 .expect("Expected recovered data blob to exist");
             let ref_l = refwindow.clone().unwrap();
             let ref_l2 = ref_l.read().unwrap();
+            let result = recovered_blob.read().unwrap();
 
-            assert_eq!(recovered_blob.meta.size, ref_l2.meta.size);
+            assert_eq!(result.size().unwrap(), ref_l2.size().unwrap());
             assert_eq!(
-                recovered_blob.data[..recovered_blob.meta.size],
-                ref_l2.data[..recovered_blob.meta.size]
+                result.data[..ref_l2.data_size().unwrap() as usize],
+                ref_l2.data[..ref_l2.data_size().unwrap() as usize]
             );
-            assert_eq!(recovered_blob.meta.addr, ref_l2.meta.addr);
-            assert_eq!(recovered_blob.meta.port, ref_l2.meta.port);
-            assert_eq!(recovered_blob.meta.v6, ref_l2.meta.v6);
-            assert_eq!(
-                recovered_blob.index().unwrap(),
-                (erase_offset + WINDOW_SIZE) as u64
-            );
+            assert_eq!(result.index().unwrap(), (erase_offset + WINDOW_SIZE) as u64);
+            window[erase_offset].data = Some(recovered_blob.clone());
         }
-    }
+        drop(db_ledger);
+        DbLedger::destroy(&ledger_path)
+            .expect("Expected successful destruction of database ledger");
 
-    // UNCOMMENT HERE
-        /*println!("** whack coding block and data block");
+        println!("** whack coding block and data block");
         // tests erasing a coding block and a data block
         let erase_offset = offset + erasure::NUM_DATA - erasure::NUM_CODING;
         // Create a hole in the window
-        let refwindow = window[erase_offset].data.clone();
+        let refwindowdata = window[erase_offset].data.clone();
+        let refwindowcoding = window[erase_offset].coding.clone();
+        println!("erase offset: {}", erase_offset);
         window[erase_offset].data = None;
         window[erase_offset].coding = None;
-
-        print_window(&window);
+        let mut db_ledger =
+            generate_db_ledger_from_window(&ledger_path, &window, DEFAULT_SLOT_HEIGHT);
 
         // Recover it from coding
-        assert!(erasure::recover(&id, &mut window, (offset + WINDOW_SIZE) as u64, offset,).is_ok());
-        println!("** after-recover:");
-        print_window(&window);
+        let (recovered_data, recovered_coding) =
+            erasure::recover(&id, &mut db_ledger, 0, (offset + WINDOW_SIZE) as u64)
+                .expect("Expected successful recovery of erased blobs");
 
         {
-            // Check the result, block is here to drop locks
-            let window_l = window[erase_offset].data.clone().unwrap();
-            let window_l2 = window_l.read().unwrap();
-            let ref_l = refwindow.clone().unwrap();
-            let ref_l2 = ref_l.read().unwrap();
-            assert_eq!(window_l2.meta.size, ref_l2.meta.size);
-            assert_eq!(
-                window_l2.data[..window_l2.meta.size],
-                ref_l2.data[..window_l2.meta.size]
-            );
-            assert_eq!(window_l2.meta.addr, ref_l2.meta.addr);
-            assert_eq!(window_l2.meta.port, ref_l2.meta.port);
-            assert_eq!(window_l2.meta.v6, ref_l2.meta.v6);
-            assert_eq!(
-                window_l2.index().unwrap(),
-                (erase_offset + WINDOW_SIZE) as u64
-            );
-        }
+            let recovered_data_blob = recovered_data
+                .first()
+                .expect("Expected recovered data blob to exist");
 
-        println!("** make stale data block index");
+            let recovered_coding_blob = recovered_coding
+                .first()
+                .expect("Expected recovered coding blob to exist");
+
+            // Check the data result
+            let ref_l = refwindowdata.clone().unwrap();
+            let ref_l2 = ref_l.read().unwrap();
+            let result = recovered_data_blob.read().unwrap();
+
+            assert_eq!(result.size().unwrap(), ref_l2.size().unwrap());
+            assert_eq!(
+                result.data[..ref_l2.data_size().unwrap() as usize],
+                ref_l2.data[..ref_l2.data_size().unwrap() as usize]
+            );
+            assert_eq!(result.index().unwrap(), (erase_offset + WINDOW_SIZE) as u64);
+
+            // Check the erasure result
+            let ref_l = refwindowcoding.clone().unwrap();
+            let ref_l2 = ref_l.read().unwrap();
+            let result = recovered_coding_blob.read().unwrap();
+
+            assert_eq!(result.size().unwrap(), ref_l2.size().unwrap());
+            assert_eq!(
+                result.data[..ref_l2.data_size().unwrap() as usize],
+                ref_l2.data[..ref_l2.data_size().unwrap() as usize]
+            );
+            assert_eq!(result.index().unwrap(), (erase_offset + WINDOW_SIZE) as u64);
+        }
+        drop(db_ledger);
+        DbLedger::destroy(&ledger_path)
+            .expect("Expected successful destruction of database ledger");
+
+        /*println!("** make stale data block index");
         // tests erasing a coding block
         let erase_offset = offset;
         // Create a hole in the window by making the blob's index stale
@@ -1033,8 +1019,8 @@ mod test {
                 window_l2.index().unwrap(),
                 (erase_offset + WINDOW_SIZE) as u64
             );
-        }
-    }*/
+        }*/
+    }
 
     //    //TODO This needs to be reworked
     //    #[test]
