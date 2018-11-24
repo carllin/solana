@@ -156,22 +156,7 @@ pub fn decode_blocks(
         }
         data_arg.push(x.as_mut_ptr());
     }
-    println!("RIGHT BEFORE DECODE");
     let ret = unsafe {
-        println!("calculating distance between data pointers");
-        for i in 0..data_arg.len() - 1 {
-            let max = cmp::max(data_arg[i] as usize, data_arg[i + 1] as usize);
-            let min = cmp::min(data_arg[i] as usize, data_arg[i + 1] as usize);
-            println!("DISTANCE: {}", max - min,);
-        }
-        println!("calculating distance between erasure pointers");
-        for i in 0..coding_arg.len() - 1 {
-            let max = cmp::max(coding_arg[i] as usize, coding_arg[i + 1] as usize);
-            let min = cmp::min(coding_arg[i] as usize, coding_arg[i + 1] as usize);
-            println!("DISTANCE: {}", max - min,);
-        }
-        println!("data_arg: {:?}, coding_arg {:?}", data_arg, coding_arg,);
-
         jerasure_matrix_decode(
             data.len() as i32,
             coding.len() as i32,
@@ -184,7 +169,7 @@ pub fn decode_blocks(
             data[0].len() as i32,
         )
     };
-    println!("jerasure_matrix_decode ret: {}", ret);
+    trace!("jerasure_matrix_decode ret: {}", ret);
     for x in data[erasures[0] as usize][0..8].iter() {
         trace!("{} ", x)
     }
@@ -326,7 +311,6 @@ pub fn generate_coding(
                 coding_wl.set_id(&id).unwrap();
             }
             coding_wl.set_size(max_data_size);
-            println!("{} max_data_size: {}", id, max_data_size);
             if coding_wl.set_coding().is_err() {
                 return Err(ErasureError::EncodeError);
             }
@@ -388,16 +372,9 @@ pub fn recover(
         block_end_idx
     );
 
-    println!(
-        "start_idx: {}, bstart: {}, bend: {}",
-        start_idx, block_start_idx, block_end_idx
-    );
     let data_missing = find_missing_data_indexes(slot, db_ledger, block_start_idx, block_end_idx);
     let coding_missing =
         find_missing_coding_indexes(slot, db_ledger, coding_start_idx, block_end_idx);
-
-    println!("data missing: {:?}", data_missing);
-    println!("coding missing: {:?}", coding_missing);
 
     let data_missing = data_missing.len();
     let coding_missing = coding_missing.len();
@@ -407,10 +384,6 @@ pub fn recover(
         return Ok((vec![], vec![]));
     }
 
-    println!(
-        "data_missing: {}, coding_missing: {}",
-        data_missing, coding_missing
-    );
     if (data_missing + coding_missing) > NUM_CODING {
         trace!(
             "recover {}: start: {} skipping recovery data: {} coding: {}",
@@ -455,7 +428,6 @@ pub fn recover(
             }
             Ok(None) => {
                 // Mark the missing memory
-                println!("PUSHING MISSING DATA: {}", i - block_start_idx);
                 erasures.push((i - block_start_idx) as i32);
                 blobs.push(SharedBlob::default());
                 missing_data.push(blobs.last_mut().unwrap().clone());
@@ -493,10 +465,6 @@ pub fn recover(
             }
             Ok(None) => {
                 // Mark the missing memory
-                println!(
-                    "PUSHING MISSING CODING: {}",
-                    (i - coding_start_idx) + NUM_DATA as u64
-                );
                 erasures.push(((i - coding_start_idx) + NUM_DATA as u64) as i32);
                 blobs.push(SharedBlob::default());
                 missing_coding.push(blobs.last_mut().unwrap().clone());
@@ -508,7 +476,6 @@ pub fn recover(
     // we know at least one coding block must exist, so "size" will not remain None after the
     // below processing.
     let size = size.unwrap();
-    println!("DECODE SIZE: {}", size);
     // marks end of erasures
     erasures.push(-1);
     trace!("erasures[]: {} {:?} data_size: {}", id, erasures, size,);
@@ -699,43 +666,6 @@ mod test {
         assert_eq!(v_orig, vs[0]);
     }
 
-    fn print_window(window: &[WindowSlot]) {
-        for (i, w) in window.iter().enumerate() {
-            print!("window({:>w$}): ", i, w = 2);
-            if w.data.is_some() {
-                let window_l1 = w.data.clone().unwrap();
-                let window_l2 = window_l1.read().unwrap();
-                print!(
-                    "data index: {:?} meta.size: {} data: ",
-                    window_l2.index(),
-                    window_l2.meta.size
-                );
-                for i in 0..64 {
-                    print!("{:>w$} ", window_l2.data()[i], w = 3);
-                }
-            } else {
-                print!("data null ");
-            }
-            println!();
-            print!("window({:>w$}): ", i, w = 2);
-            if w.coding.is_some() {
-                let window_l1 = w.coding.clone().unwrap();
-                let window_l2 = window_l1.read().unwrap();
-                print!(
-                    "coding index: {:?} meta.size: {} data: ",
-                    window_l2.index(),
-                    window_l2.meta.size
-                );
-                for i in 0..8 {
-                    print!("{:>w$} ", window_l2.data()[i], w = 3);
-                }
-            } else {
-                print!("coding null");
-            }
-            println!();
-        }
-    }
-
     const WINDOW_SIZE: usize = 64;
     fn generate_window(offset: usize, num_blobs: usize) -> Vec<WindowSlot> {
         let mut window = vec![
@@ -799,8 +729,6 @@ mod test {
                 db_ledger
                     .write_shared_blobs(slot_height, vec![data].into_iter())
                     .unwrap();
-
-                println!("FOUND DATA: index: {}", index);
             }
 
             if let Some(ref coding) = slot.coding {
@@ -814,7 +742,6 @@ mod test {
                     .size()
                     .expect("Expected coding blob to have valid ata size");
 
-                println!("FOUND CODING: index: {}", index);
                 db_ledger
                     .erasure_cf
                     .put_by_slot_index(
@@ -845,12 +772,8 @@ mod test {
         }
     }
 
-    #[test]
-    pub fn test_window_recover_basic() {
-        logger::setup();
+    fn setup_window_ledger(offset: usize, num_blobs: usize) -> Vec<WindowSlot> {
         // Generate a window
-        let offset = 0;
-        let num_blobs = erasure::NUM_DATA + 2;
         let mut window = generate_window(WINDOW_SIZE, num_blobs);
 
         for slot in &window {
@@ -860,31 +783,44 @@ mod test {
             }
         }
 
-        println!("** after-gen-window:");
-        //print_window(&window);
-
         // Generate the coding blocks
         let mut index = (erasure::NUM_DATA + 2) as u64;
-        let id = Pubkey::default();
         assert!(
-            erasure::generate_coding(&id, &mut window, offset as u64, num_blobs, &mut index)
-                .is_ok()
+            erasure::generate_coding(
+                &Pubkey::default(),
+                &mut window,
+                offset as u64,
+                num_blobs,
+                &mut index
+            ).is_ok()
         );
         assert_eq!(index, (erasure::NUM_DATA - erasure::NUM_CODING) as u64);
 
-        println!("** after-gen-coding:");
-        //print_window(&window);
+        // put junk in the tails, simulates re-used blobs
+        scramble_window_tails(&mut window, num_blobs);
+
+        window
+    }
+
+    // Remove a data block, test for successful recovery
+    #[test]
+    pub fn test_window_recover_basic() {
+        logger::setup();
+
+        // Setup the window
+        let offset = 0;
+        let num_blobs = erasure::NUM_DATA + 2;
+        let mut window = setup_window_ledger(offset, num_blobs);
 
         println!("** whack data block:");
-
-        // test erasing a data block
+        // Test erasing a data block
         let erase_offset = offset;
+
         // Create a hole in the window
         let refwindow = window[erase_offset].data.clone();
         window[erase_offset].data = None;
-        //print_window(&window);
 
-        // put junk in the tails, simulates re-used blobs
+        // Put junk in the tails, simulates re-used blobs
         scramble_window_tails(&mut window, num_blobs);
 
         // Generate the db_ledger from the window
@@ -893,9 +829,12 @@ mod test {
             generate_db_ledger_from_window(&ledger_path, &window, DEFAULT_SLOT_HEIGHT);
 
         // Recover it from coding
-        let (recovered_data, recovered_coding) =
-            erasure::recover(&id, &mut db_ledger, 0, (offset + WINDOW_SIZE) as u64)
-                .expect("Expected successful recovery of erased blobs");
+        let (recovered_data, recovered_coding) = erasure::recover(
+            &Pubkey::default(),
+            &mut db_ledger,
+            0,
+            (offset + WINDOW_SIZE) as u64,
+        ).expect("Expected successful recovery of erased blobs");
 
         assert!(recovered_coding.is_empty());
         {
@@ -913,28 +852,43 @@ mod test {
                 ref_l2.data[..ref_l2.data_size().unwrap() as usize]
             );
             assert_eq!(result.index().unwrap(), (erase_offset + WINDOW_SIZE) as u64);
-            window[erase_offset].data = Some(recovered_blob.clone());
         }
         drop(db_ledger);
         DbLedger::destroy(&ledger_path)
             .expect("Expected successful destruction of database ledger");
+    }
+
+    // Remove a data and coding block, test for successful recovery
+    #[test]
+    pub fn test_window_recover_basic2() {
+        logger::setup();
+
+        // Setup the window
+        let offset = 0;
+        let num_blobs = erasure::NUM_DATA + 2;
+        let mut window = setup_window_ledger(offset, num_blobs);
 
         println!("** whack coding block and data block");
-        // tests erasing a coding block and a data block
+        // Tests erasing a coding block and a data block
         let erase_offset = offset + erasure::NUM_DATA - erasure::NUM_CODING;
+
         // Create a hole in the window
         let refwindowdata = window[erase_offset].data.clone();
         let refwindowcoding = window[erase_offset].coding.clone();
         println!("erase offset: {}", erase_offset);
         window[erase_offset].data = None;
         window[erase_offset].coding = None;
+        let ledger_path = get_tmp_ledger_path("test_window_recover_basic2");
         let mut db_ledger =
             generate_db_ledger_from_window(&ledger_path, &window, DEFAULT_SLOT_HEIGHT);
 
         // Recover it from coding
-        let (recovered_data, recovered_coding) =
-            erasure::recover(&id, &mut db_ledger, 0, (offset + WINDOW_SIZE) as u64)
-                .expect("Expected successful recovery of erased blobs");
+        let (recovered_data, recovered_coding) = erasure::recover(
+            &Pubkey::default(),
+            &mut db_ledger,
+            0,
+            (offset + WINDOW_SIZE) as u64,
+        ).expect("Expected successful recovery of erased blobs");
 
         {
             let recovered_data_blob = recovered_data
@@ -945,7 +899,7 @@ mod test {
                 .first()
                 .expect("Expected recovered coding blob to exist");
 
-            // Check the data result
+            // Check the recovered data result
             let ref_l = refwindowdata.clone().unwrap();
             let ref_l2 = ref_l.read().unwrap();
             let result = recovered_data_blob.read().unwrap();
@@ -957,69 +911,21 @@ mod test {
             );
             assert_eq!(result.index().unwrap(), (erase_offset + WINDOW_SIZE) as u64);
 
-            // Check the erasure result
+            // Check the recovered erasure result
             let ref_l = refwindowcoding.clone().unwrap();
             let ref_l2 = ref_l.read().unwrap();
             let result = recovered_coding_blob.read().unwrap();
 
             assert_eq!(result.size().unwrap(), ref_l2.size().unwrap());
             assert_eq!(
-                result.data[..ref_l2.data_size().unwrap() as usize],
-                ref_l2.data[..ref_l2.data_size().unwrap() as usize]
+                result.data()[..ref_l2.size().unwrap() as usize],
+                ref_l2.data()[..ref_l2.size().unwrap() as usize]
             );
             assert_eq!(result.index().unwrap(), (erase_offset + WINDOW_SIZE) as u64);
         }
         drop(db_ledger);
         DbLedger::destroy(&ledger_path)
             .expect("Expected successful destruction of database ledger");
-
-        /*println!("** make stale data block index");
-        // tests erasing a coding block
-        let erase_offset = offset;
-        // Create a hole in the window by making the blob's index stale
-        let refwindow = window[offset].data.clone();
-        if let Some(blob) = &window[erase_offset].data {
-            blob.write()
-                .unwrap()
-                .set_index(erase_offset as u64)
-                .unwrap(); // this also writes to refwindow...
-        }
-        print_window(&window);
-
-        // Recover it from coding
-        assert!(erasure::recover(&id, &mut window, (offset + WINDOW_SIZE) as u64, offset,).is_ok());
-        println!("** after-recover:");
-        print_window(&window);
-
-        // fix refwindow, we wrote to it above...
-        if let Some(blob) = &refwindow {
-            blob.write()
-                .unwrap()
-                .set_index((erase_offset + WINDOW_SIZE) as u64)
-                .unwrap(); // this also writes to refwindow...
-        }
-
-        {
-            // Check the result, block is here to drop locks
-            let window_l = window[erase_offset].data.clone().unwrap();
-            let window_l2 = window_l.read().unwrap();
-            let ref_l = refwindow.clone().unwrap();
-            let ref_l2 = ref_l.read().unwrap();
-            assert_eq!(window_l2.meta.size, ref_l2.meta.size);
-            assert_eq!(
-                window_l2.data[..window_l2.meta.size],
-                ref_l2.data[..window_l2.meta.size]
-            );
-            assert_eq!(window_l2.index().unwrap(), ref_l2.index().unwrap());
-            assert_eq!(window_l2.slot().unwrap(), ref_l2.slot().unwrap());
-            assert_eq!(window_l2.meta.addr, ref_l2.meta.addr);
-            assert_eq!(window_l2.meta.port, ref_l2.meta.port);
-            assert_eq!(window_l2.meta.v6, ref_l2.meta.v6);
-            assert_eq!(
-                window_l2.index().unwrap(),
-                (erase_offset + WINDOW_SIZE) as u64
-            );
-        }*/
     }
 
     //    //TODO This needs to be reworked
