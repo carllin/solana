@@ -66,14 +66,8 @@ impl Tvu {
         repair_socket: UdpSocket,
         retransmit_socket: UdpSocket,
         ledger_path: Option<&str>,
-        db_ledger_path: String,
+        db_ledger: Arc<RwLock<DbLedger>>,
     ) -> Self {
-        // Eventually will be passed into LedgerWriteStage as well, so wrap the object
-        // in a Arc<RwLock>
-        let db_ledger = Arc::new(RwLock::new(
-            DbLedger::open(&db_ledger_path).expect("Expected to be able to open database ledger"),
-        ));
-
         let exit = Arc::new(AtomicBool::new(false));
 
         let repair_socket = Arc::new(repair_socket);
@@ -173,6 +167,7 @@ pub mod tests {
     use bank::Bank;
     use bincode::serialize;
     use cluster_info::{ClusterInfo, Node};
+    use db_ledger::DbLedger;
     use entry::Entry;
     use hash::Hash;
     use leader_scheduler::LeaderScheduler;
@@ -274,6 +269,8 @@ pub mod tests {
         let vote_account_keypair = Arc::new(Keypair::new());
         let mut cur_hash = Hash::default();
         let db_ledger_path = get_tmp_ledger_path("test_replicate");
+        let db_ledger =
+            DbLedger::open(&db_ledger_path).expect("Expected to successfully open ledger");
         let tvu = Tvu::new(
             Arc::new(target1_keypair),
             vote_account_keypair,
@@ -285,7 +282,7 @@ pub mod tests {
             target1.sockets.repair,
             target1.sockets.retransmit,
             None,
-            db_ledger_path.clone(),
+            Arc::new(RwLock::new(db_ledger)),
         );
 
         let mut alice_ref_balance = starting_balance;

@@ -10,6 +10,7 @@ use solana::chacha::{chacha_cbc_encrypt_file, CHACHA_BLOCK_SIZE};
 use solana::client::mk_client;
 use solana::cluster_info::Node;
 use solana::drone::DRONE_PORT;
+use solana::db_ledger::DbLedger;
 use solana::fullnode::Config;
 use solana::ledger::LEDGER_DATA_FILE;
 use solana::logger;
@@ -94,6 +95,11 @@ fn main() {
     // TODO: ask network what slice we should store
     let entry_height = 0;
 
+    // Create the RocksDb ledger, eventually will simply repurpose the input
+    // ledger path as the RocksDb ledger path
+    let db_ledger = Arc::new(RwLock::new(
+        DbLedger::open(&ledger_path).expect("Expected to be able to open database ledger"),
+    ));
     let (replicator, leader_info) = Replicator::new(
         entry_height,
         5,
