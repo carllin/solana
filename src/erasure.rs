@@ -553,12 +553,14 @@ fn categorize_blob(
 pub mod test {
     use super::*;
     use db_ledger::{DbLedger, DEFAULT_SLOT_HEIGHT};
+    use leader_scheduler::LeaderScheduler;
     use ledger::{get_tmp_ledger_path, make_tiny_test_entries, Block};
     use logger;
     use packet::{index_blobs, SharedBlob, BLOB_DATA_SIZE, BLOB_SIZE};
     use rand::{thread_rng, Rng};
     use solana_sdk::pubkey::Pubkey;
     use solana_sdk::signature::{Keypair, KeypairUtil};
+    use std::sync::{Arc, RwLock};
     use window::WindowSlot;
 
     #[test]
@@ -746,7 +748,17 @@ pub mod test {
             blobs.push(b_);
         }
 
-        index_blobs(&blobs, &Keypair::new().pubkey(), offset as u64, slot);
+        {
+            // Make some dummy slots
+            let blob_tick_height: Vec<(&SharedBlob, u64)> =
+                blobs.iter().zip(vec![slot; blobs.len()]).collect();
+            index_blobs(
+                blob_tick_height,
+                &Keypair::new().pubkey(),
+                offset as u64,
+                &Arc::new(RwLock::new(LeaderScheduler::default())),
+            );
+        }
         for b in blobs {
             let idx = b.read().unwrap().index().unwrap() as usize % WINDOW_SIZE;
 
@@ -767,7 +779,18 @@ pub mod test {
         let entries = make_tiny_test_entries(num_blobs);
         let blobs = entries.to_blobs();
 
-        index_blobs(&blobs, &Keypair::new().pubkey(), offset as u64, 13);
+        {
+            // Make some dummy slots
+            let blob_tick_height: Vec<(&SharedBlob, u64)> =
+                blobs.iter().zip(vec![0; blobs.len()]).collect();
+            index_blobs(
+                blob_tick_height,
+                &Keypair::new().pubkey(),
+                offset as u64,
+                &Arc::new(RwLock::new(LeaderScheduler::default())),
+            );
+        }
+
         for b in blobs.into_iter() {
             let idx = b.read().unwrap().index().unwrap() as usize % WINDOW_SIZE;
 
