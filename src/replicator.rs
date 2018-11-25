@@ -278,7 +278,7 @@ mod tests {
             assert!(num_entries > 0);
             exit.store(true, Ordering::Relaxed);
             replicator.join();
-            leader.exit();
+            leader.close().expect("Expect successful leader close");
         }
 
         DbLedger::destroy(&leader_ledger_path).expect("Expected successful database destuction");

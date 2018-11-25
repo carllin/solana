@@ -595,11 +595,13 @@ pub fn recover(id: &Pubkey, window: &mut [WindowSlot], start_idx: u64, start: us
 #[cfg(test)]
 mod test {
     use erasure;
+    use leader_scheduler::LeaderScheduler;
     use logger;
     use packet::{index_blobs, SharedBlob, BLOB_DATA_SIZE, BLOB_HEADER_SIZE, BLOB_SIZE};
     use rand::{thread_rng, Rng};
     use signature::{Keypair, KeypairUtil};
     use solana_sdk::pubkey::Pubkey;
+    use std::sync::{Arc, RwLock};
     //    use std::sync::{Arc, RwLock};
     use window::WindowSlot;
 
@@ -728,7 +730,16 @@ mod test {
             blobs.push(b_);
         }
 
-        index_blobs(&blobs, &Keypair::new().pubkey(), offset as u64, 13);
+        {
+            let blob_tick_height: Vec<(&SharedBlob, u64)> =
+                blobs.iter().zip(vec![0; blobs.len()]).collect();
+            index_blobs(
+                blob_tick_height,
+                &Keypair::new().pubkey(),
+                offset as u64,
+                &Arc::new(RwLock::new(LeaderScheduler::default())),
+            );
+        }
         for b in blobs {
             let idx = b.read().unwrap().index().unwrap() as usize % WINDOW_SIZE;
 
