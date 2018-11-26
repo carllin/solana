@@ -303,8 +303,9 @@ impl Fullnode {
         } else {
             let max_tick_height = {
                 let ls_lock = bank.leader_scheduler.read().unwrap();
-                ls_lock.max_height_for_leader(bank.tick_height())
+                ls_lock.max_height_for_leader(bank.tick_height() + 1)
             };
+
             // Start in leader mode.
             let (tpu, entry_receiver, tpu_exit) = Tpu::new(
                 &bank,
@@ -522,7 +523,7 @@ impl Fullnode {
             Some(NodeRole::Validator(validator_services)) => match validator_services.join()? {
                 Some(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
                     //TODO: Fix this to return actual poh height.
-                    self.validator_to_leader(tick_height, entry_height, last_entry_id);
+                    self.validator_to_leader(tick_height + 1, entry_height, last_entry_id);
                     Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation))
                 }
                 _ => Ok(None),

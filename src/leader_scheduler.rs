@@ -155,7 +155,8 @@ impl LeaderScheduler {
         }
     }
 
-    pub fn is_leader_rotation_height(&self, height: u64) -> bool {
+    // Returns true if the given height is the first tick of a slot
+    pub fn is_first_slot_tick(&self, height: u64) -> bool {
         if self.use_only_bootstrap_leader {
             return false;
         }
@@ -164,21 +165,26 @@ impl LeaderScheduler {
             return false;
         }
 
-        (height - self.bootstrap_height) % self.leader_rotation_interval == 0
+        (height - self.bootstrap_height) % self.leader_rotation_interval == 1
     }
 
-    pub fn count_until_next_leader_rotation(&self, height: u64) -> Option<u64> {
+    // Returns the number of ticks until the last tick the current slot
+    pub fn num_ticks_left_in_slot(&self, height: u64) -> Option<u64> {
         if self.use_only_bootstrap_leader {
             return None;
         }
 
-        if height < self.bootstrap_height {
+        if height <= self.bootstrap_height {
             Some(self.bootstrap_height - height)
         } else {
-            Some(
-                self.leader_rotation_interval
-                    - ((height - self.bootstrap_height) % self.leader_rotation_interval),
-            )
+            if (height - self.bootstrap_height) % self.leader_rotation_interval == 0 {
+                return Some(0);
+            } else {
+                Some(
+                    self.leader_rotation_interval
+                        - ((height - self.bootstrap_height) % self.leader_rotation_interval),
+                )
+            }
         }
     }
 
@@ -190,7 +196,7 @@ impl LeaderScheduler {
         }
 
         let result = {
-            if height < self.bootstrap_height || self.leader_schedule.len() > 1 {
+            if height <= self.bootstrap_height || self.leader_schedule.len() > 1 {
                 // Two cases to consider:
                 //
                 // 1) If height is less than the bootstrap height, then the current leader's
@@ -202,8 +208,8 @@ impl LeaderScheduler {
                 // to take over)
                 //
                 // Both above cases are calculated by the function:
-                // count_until_next_leader_rotation() + height
-                self.count_until_next_leader_rotation(height).expect(
+                // num_ticks_left_in_slot() + height
+                self.num_ticks_left_in_slot(height).expect(
                     "Should return some value when not using default implementation
                      of LeaderScheduler",
                 ) + height
@@ -255,7 +261,7 @@ impl LeaderScheduler {
 
         // This covers cases where the schedule isn't yet generated.
         if self.last_seed_height == None {
-            if height < self.bootstrap_height {
+            if height <= self.bootstrap_height {
                 return Some((self.bootstrap_leader, 0));
             } else {
                 // If there's been no schedule generated yet before we reach the end of the
@@ -265,16 +271,23 @@ impl LeaderScheduler {
         }
 
         // If we have a schedule, then just check that we are within the bounds of that
-        // schedule [last_seed_height, last_seed_height + seed_rotation_interval).
+        // schedule (last_seed_height, last_seed_height + seed_rotation_interval].
         // Leaders outside of this bound are undefined.
         let last_seed_height = self.last_seed_height.unwrap();
-        if height >= last_seed_height + self.seed_rotation_interval || height < last_seed_height {
+
+        if height > last_seed_height + self.seed_rotation_interval || height <= last_seed_height {
             return None;
         }
 
-        // Find index into the leader_schedule that this PoH height maps to
-        let leader_slot = (height - self.bootstrap_height) / self.leader_rotation_interval + 1;
-        let index = (height - last_seed_height) / self.leader_rotation_interval;
+        // Find index into the leader_schedule that this PoH height maps to. Note by the time
+        // we reach here, last_seed_height is not None, which implies:
+        //
+        // last_seed_height >= self.bootstrap_height
+        //
+        // Also we know from the recent range check that height > last_seed_height, so
+        // height - self.bootstrap_height >= 1, so the below logic is safe.
+        let leader_slot = (height - self.bootstrap_height - 1) / self.leader_rotation_interval + 1;
+        let index = (height - last_seed_height - 1) / self.leader_rotation_interval;
         let validator_index = index as usize % self.leader_schedule.len();
         Some((self.leader_schedule[validator_index], leader_slot))
     }
@@ -290,7 +303,7 @@ impl LeaderScheduler {
         if slot_height == 0 {
             0
         } else {
-            (slot_height - 1) * self.leader_rotation_interval + self.bootstrap_height
+            (slot_height - 1) * self.leader_rotation_interval + self.bootstrap_height + 1
         }
     }
 
@@ -327,7 +340,7 @@ impl LeaderScheduler {
     }
 
     // Called every seed_rotation_interval entries, generates the leader schedule
-    // for the range of entries: [height, height + seed_rotation_interval)
+    // for the range of entries: (height, height + seed_rotation_interval]
     fn generate_schedule(&mut self, height: u64, bank: &Bank) {
         assert!(height >= self.bootstrap_height);
         assert!((height - self.bootstrap_height) % self.seed_rotation_interval == 0);
@@ -611,6 +624,10 @@ mod tests {
         );
         assert_eq!(
             leader_scheduler.get_scheduled_leader(bootstrap_height),
+            Some((bootstrap_leader_id, 0))
+        );
+        assert_eq!(
+            leader_scheduler.get_scheduled_leader(bootstrap_height + 1),
             None
         );
 
@@ -619,15 +636,15 @@ mod tests {
         leader_scheduler.generate_schedule(bootstrap_height, &bank);
 
         // The leader outside of the newly generated schedule window:
-        // [bootstrap_height, bootstrap_height + seed_rotation_interval)
+        // (bootstrap_height, bootstrap_height + seed_rotation_interval]
         // should be undefined
         assert_eq!(
-            leader_scheduler.get_scheduled_leader(bootstrap_height - 1),
+            leader_scheduler.get_scheduled_leader(bootstrap_height),
             None,
         );
 
         assert_eq!(
-            leader_scheduler.get_scheduled_leader(bootstrap_height + seed_rotation_interval),
+            leader_scheduler.get_scheduled_leader(bootstrap_height + seed_rotation_interval + 1),
             None,
         );
 
@@ -640,7 +657,7 @@ mod tests {
         let num_rounds = seed_rotation_interval / leader_rotation_interval;
         let mut start_leader_index = None;
         for i in 0..num_rounds {
-            let begin_height = bootstrap_height + i * leader_rotation_interval;
+            let begin_height = bootstrap_height + i * leader_rotation_interval + 1;
             let (current_leader, slot) = leader_scheduler
                 .get_scheduled_leader(begin_height)
                 .expect("Expected a leader from scheduler");
@@ -662,7 +679,7 @@ mod tests {
                 validators[(start_leader_index.unwrap() + i as usize) % num_validators];
             assert_eq!(current_leader, expected_leader);
             assert_eq!(slot, i + 1);
-            // Check that the same leader is in power for the next leader_rotation_interval entries
+            // Check that the same leader is in power for the next leader_rotation_interval - 1 entries
             assert_eq!(
                 leader_scheduler.get_scheduled_leader(begin_height + leader_rotation_interval - 1),
                 Some((current_leader, slot))
@@ -1294,8 +1311,8 @@ mod tests {
             .id;
         let initial_vote_height = 1;
 
-        // No schedule generated yet, so for all heights < bootstrap height, the
-        // max height will be bootstrap leader
+        // No schedule generated yet, so for all heights <= bootstrap height, the
+        // max height will be bootstrap height
         assert_eq!(
             leader_scheduler.max_height_for_leader(0),
             Some(bootstrap_height)
@@ -1306,6 +1323,10 @@ mod tests {
         );
         assert_eq!(
             leader_scheduler.max_height_for_leader(bootstrap_height),
+            Some(bootstrap_height)
+        );
+        assert_eq!(
+            leader_scheduler.max_height_for_leader(bootstrap_height + 1),
             None
         );
 
@@ -1319,19 +1340,23 @@ mod tests {
         leader_scheduler.generate_schedule(bootstrap_height, &bank);
         assert_eq!(
             leader_scheduler.max_height_for_leader(bootstrap_height),
-            Some(bootstrap_height + seed_rotation_interval)
+            None
         );
         assert_eq!(
             leader_scheduler.max_height_for_leader(bootstrap_height - 1),
             None
         );
+        assert_eq!(
+            leader_scheduler.max_height_for_leader(bootstrap_height + 1),
+            Some(bootstrap_height + seed_rotation_interval)
+        );
         leader_scheduler.generate_schedule(bootstrap_height + seed_rotation_interval, &bank);
         assert_eq!(
-            leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval),
+            leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval + 1),
             Some(bootstrap_height + 2 * seed_rotation_interval)
         );
         assert_eq!(
-            leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval - 1),
+            leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval),
             None
         );
 
@@ -1374,33 +1399,55 @@ mod tests {
 
         assert_eq!(
             leader_scheduler.max_height_for_leader(bootstrap_height),
-            Some(bootstrap_height + leader_rotation_interval)
-        );
-        assert_eq!(
-            leader_scheduler.max_height_for_leader(bootstrap_height - 1),
             None
         );
         assert_eq!(
+            leader_scheduler.max_height_for_leader(bootstrap_height + 1),
+            Some(bootstrap_height + leader_rotation_interval)
+        );
+        assert_eq!(
+            leader_scheduler.max_height_for_leader(bootstrap_height + leader_rotation_interval - 1),
+            Some(bootstrap_height + leader_rotation_interval)
+        );
+        assert_eq!(
             leader_scheduler.max_height_for_leader(bootstrap_height + leader_rotation_interval),
+            Some(bootstrap_height + leader_rotation_interval)
+        );
+        assert_eq!(
+            leader_scheduler.max_height_for_leader(bootstrap_height + leader_rotation_interval + 1),
             Some(bootstrap_height + 2 * leader_rotation_interval)
         );
         assert_eq!(
+            leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval - 1),
+            Some(bootstrap_height + seed_rotation_interval),
+        );
+        assert_eq!(
             leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval),
+            Some(bootstrap_height + seed_rotation_interval),
+        );
+        assert_eq!(
+            leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval + 1),
             None,
         );
 
+        // Generate another schedule
         leader_scheduler.generate_schedule(bootstrap_height + seed_rotation_interval, &bank);
 
         assert_eq!(
             leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval),
-            Some(bootstrap_height + seed_rotation_interval + leader_rotation_interval)
-        );
-        assert_eq!(
-            leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval - 1),
             None
         );
         assert_eq!(
+            leader_scheduler.max_height_for_leader(bootstrap_height + seed_rotation_interval + 1),
+            Some(bootstrap_height + seed_rotation_interval + leader_rotation_interval)
+        );
+        assert_eq!(
             leader_scheduler.max_height_for_leader(bootstrap_height + 2 * seed_rotation_interval),
+            Some(bootstrap_height + 2 * seed_rotation_interval)
+        );
+        assert_eq!(
+            leader_scheduler
+                .max_height_for_leader(bootstrap_height + 2 * seed_rotation_interval + 1),
             None
         );
     }
