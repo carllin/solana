@@ -3,7 +3,7 @@
 use bank::Bank;
 use broadcast_stage::BroadcastStage;
 use cluster_info::{ClusterInfo, Node, NodeInfo};
-use db_ledger::{write_entries_to_ledger, DbLedger};
+use db_ledger::{write_entries_to_ledger, DbLedger, DEFAULT_SLOT_HEIGHT};
 use leader_scheduler::LeaderScheduler;
 use ledger::read_ledger;
 use ncp::Ncp;
@@ -610,7 +610,7 @@ impl Fullnode {
             .expect("opening ledger")
             .map(|entry| entry.unwrap());
 
-        write_entries_to_ledger(&[ledger_path], ledger_entries);
+        write_entries_to_ledger(&[ledger_path], ledger_entries, DEFAULT_SLOT_HEIGHT);
         let db =
             DbLedger::open(ledger_path).expect("Expected to successfully open database ledger");
         Arc::new(RwLock::new(db))
