@@ -2,7 +2,7 @@
 //!
 use cluster_info::{ClusterInfo, ClusterInfoError, NodeInfo};
 use counter::Counter;
-use db_ledger::{DbLedger, DEFAULT_SLOT_HEIGHT};
+use db_ledger::DbLedger;
 use entry::Entry;
 #[cfg(feature = "erasure")]
 use erasure;
@@ -110,8 +110,7 @@ fn broadcast(
         {
             let mut win = window.write().unwrap();
             assert!(blobs.len() <= win.len());
-            let blobs: Vec<SharedBlob> = blobs.into_iter().map(|b| b.0).collect();
-            for b in &blobs {
+            for (b, _) in &blobs {
                 let ix = b.read().unwrap().index().expect("blob index");
                 let pos = (ix % window_size) as usize;
                 if let Some(x) = win[pos].data.take() {
@@ -133,18 +132,19 @@ fn broadcast(
 
                 trace!("{} null {}", id, pos);
             }
-            for b in &blobs {
-                let ix = b.read().unwrap().index().expect("blob index");
-                let pos = (ix % window_size) as usize;
-                trace!("{} caching {} at {}", id, ix, pos);
-                assert!(win[pos].data.is_none());
-                win[pos].data = Some(b.clone());
+            for (b, slot) in &blobs {
+                {
+                    let ix = b.read().unwrap().index().expect("blob index");
+                    let pos = (ix % window_size) as usize;
+                    trace!("{} caching {} at {}", id, ix, pos);
+                    assert!(win[pos].data.is_none());
+                    win[pos].data = Some(b.clone());
+                }
+                db_ledger
+                    .write()
+                    .unwrap()
+                    .write_shared_blobs(*slot, vec![b])?;
             }
-
-            db_ledger
-                .write()
-                .unwrap()
-                .write_shared_blobs(DEFAULT_SLOT_HEIGHT, &blobs)?;
         }
 
         // Fill in the coding blob data from the window data blobs
