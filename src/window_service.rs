@@ -9,6 +9,7 @@ use entry::EntrySender;
 use leader_scheduler::LeaderScheduler;
 use log::Level;
 use rand::{thread_rng, Rng};
+use repair_cache::RepairCache;
 use result::{Error, Result};
 use solana_metrics::{influxdb, submit};
 use solana_sdk::pubkey::Pubkey;
@@ -61,7 +62,7 @@ fn recv_window(
     s: &EntrySender,
     retransmit: &BlobSender,
     done: &Arc<AtomicBool>,
-) -> Result<()> {
+) -> Result<Vec<u64>> {
     let timer = Duration::from_millis(200);
     let mut dq = r.recv_timeout(timer)?;
 
@@ -91,11 +92,9 @@ fn recv_window(
             (p.index()?, p.meta.size)
         };
 
-        pixs.push(pix);
-
         trace!("{} window pix: {} size: {}", id, pix, meta_size);
 
-        let _ = process_blob(
+        if process_blob(
             leader_scheduler,
             db_ledger,
             &b,
@@ -104,7 +103,10 @@ fn recv_window(
             &mut consume_queue,
             tick_height,
             done,
-        );
+        ).is_ok()
+        {
+            pixs.push(pix);
+        }
     }
 
     trace!(
@@ -116,7 +118,7 @@ fn recv_window(
         inc_new_counter_info!("streamer-recv_window-consume", consume_queue.len());
         s.send(consume_queue)?;
     }
-    Ok(())
+    Ok(pixs)
 }
 
 #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
@@ -140,9 +142,9 @@ pub fn window_service(
             let mut last = entry_height;
             let mut times = 0;
             let id = cluster_info.read().unwrap().id();
-            trace!("{}: RECV_WINDOW started", id);
+            let mut repair_cache: Option<RepairCache> = None;
             loop {
-                if let Err(e) = recv_window(
+                match recv_window(
                     db_ledger.write().unwrap().borrow_mut(),
                     &id,
                     leader_scheduler.read().unwrap().borrow(),
@@ -153,12 +155,15 @@ pub fn window_service(
                     &retransmit,
                     &done,
                 ) {
-                    match e {
-                        Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
-                        Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
-                        _ => {
-                            inc_new_counter_info!("streamer-window-error", 1, 1);
-                            error!("window error: {:?}", e);
+                    Err(Error::RecvTimeoutError(RecvTimeoutError::Disconnected)) => break,
+                    Err(Error::RecvTimeoutError(RecvTimeoutError::Timeout)) => (),
+                    Err(e) => {
+                        inc_new_counter_info!("streamer-window-error", 1, 1);
+                        error!("window error: {:?}", e);
+                    }
+                    Ok(pixs) => {
+                        if let Some(ref mut repair_cache) = repair_cache {
+                            repair_cache.record_received(&pixs);
                         }
                     }
                 }
@@ -171,7 +176,12 @@ pub fn window_service(
                         .get(&rlock.db, &MetaCf::key(DEFAULT_SLOT_HEIGHT))
                 };
 
+                // Meta might not exist in replicator because it doesn't initialize
+                // the ledger first, so we have to check
                 if let Ok(Some(meta)) = meta {
+                    if repair_cache.is_none() {
+                        repair_cache = Some(RepairCache::new(&meta));
+                    }
                     let received = meta.received;
                     let consumed = meta.consumed;
 
@@ -201,14 +211,15 @@ pub fn window_service(
                     trace!("{} let's repair! times = {}", id, times);
 
                     let reqs = repair(
-                        DEFAULT_SLOT_HEIGHT,
                         db_ledger.read().unwrap().borrow(),
+                        &meta,
                         &cluster_info,
                         &id,
                         times,
                         tick_height_,
                         max_entry_height,
                         &leader_scheduler,
+                        repair_cache.as_mut().unwrap(),
                     );
 
                     if let Ok(reqs) = reqs {

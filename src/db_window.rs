@@ -8,6 +8,7 @@ use erasure;
 use leader_scheduler::LeaderScheduler;
 use log::Level;
 use packet::{SharedBlob, BLOB_HEADER_SIZE};
+use repair_cache::RepairCache;
 use result::Result;
 use rocksdb::DBRawIterator;
 use solana_metrics::{influxdb, submit};
@@ -19,29 +20,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use streamer::BlobSender;
 
-pub const MAX_REPAIR_LENGTH: usize = 128;
-
 pub fn repair(
     db_ledger: &DbLedger,
+    ledger_meta: &SlotMeta,
     cluster_info: &Arc<RwLock<ClusterInfo>>,
     id: &Pubkey,
     times: usize,
     tick_height: u64,
     max_entry_height: u64,
     leader_scheduler_option: &Arc<RwLock<LeaderScheduler>>,
+    repair_cache: &mut RepairCache,
 ) -> Result<Vec<(SocketAddr, Vec<u8>)>> {
     let rcluster_info = cluster_info.read().unwrap();
     let mut is_next_leader = false;
-    let meta = db_ledger
-        .meta_cf
-        .get(&db_ledger.db, &MetaCf::key(DEFAULT_SLOT_HEIGHT))?;
-    if meta.is_none() {
-        return Ok(vec![]);
-    }
-    let meta = meta.unwrap();
 
-    let consumed = meta.consumed;
-    let received = meta.received;
+    let consumed = ledger_meta.consumed;
+    let received = ledger_meta.received;
 
     // Repair should only be called when received > consumed, enforced in window_service
     assert!(received > consumed);
@@ -81,20 +75,15 @@ pub fn repair(
     let max_repair_entry_height = if max_entry_height == 0 {
         calculate_max_repair_entry_height(num_peers, consumed, received, times, is_next_leader)
     } else {
-        max_entry_height + 2
+        max_entry_height + 1
     };
 
-    let idxs = find_missing_data_indexes(
-        slot,
-        db_ledger,
-        consumed,
-        max_repair_entry_height - 1,
-        MAX_REPAIR_LENGTH,
-    );
+    repair_cache.update_cache(db_ledger, ledger_meta, max_repair_entry_height);
 
-    let reqs: Vec<_> = idxs
-        .into_iter()
-        .filter_map(|pix| rcluster_info.window_index_request(pix).ok())
+    let reqs: Vec<_> = repair_cache
+        .missing_indexes
+        .iter()
+        .filter_map(|pix| rcluster_info.window_index_request(*pix).ok())
         .collect();
 
     drop(rcluster_info);
@@ -334,7 +323,7 @@ pub fn process_blob(
     if max_ix != 0 && !consumed_entries.is_empty() {
         let meta = db_ledger
             .meta_cf
-            .get(&db_ledger.db, &MetaCf::key(slot))?
+            .get(&db_ledger.db, &MetaCf::key(DEFAULT_SLOT_HEIGHT))?
             .expect("Expect metadata to exist if consumed entries is nonzero");
 
         let consumed = meta.consumed;

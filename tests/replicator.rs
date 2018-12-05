@@ -99,7 +99,7 @@ fn test_replicator_startup() {
         assert!(num_entries > 0);
         exit.store(true, Ordering::Relaxed);
         replicator.join();
-        leader.exit();
+        leader.close();
     }
 
     DbLedger::destroy(&leader_ledger_path).expect("Expected successful database destuction");

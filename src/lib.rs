@@ -50,6 +50,7 @@ pub mod poh;
 pub mod poh_recorder;
 pub mod poh_service;
 pub mod recvmmsg;
+pub mod repair_cache;
 pub mod replicate_stage;
 pub mod replicator;
 pub mod result;
