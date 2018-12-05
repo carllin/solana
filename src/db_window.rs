@@ -117,8 +117,10 @@ pub fn find_missing_indexes(
     end_index: u64,
     key: &Fn(u64, u64) -> Vec<u8>,
     index_from_key: &Fn(&[u8]) -> Result<u64>,
+    slot_from_key: &Fn(&[u8]) -> Result<u64>,
     max_missing: usize,
 ) -> Vec<u64> {
+    println!("start_index: {}, end_index: {}", start_index, end_index);
     if start_index >= end_index || max_missing == 0 {
         return vec![];
     }
@@ -141,8 +143,20 @@ pub fn find_missing_indexes(
             break;
         }
         let current_key = db_iterator.key().expect("Expect a valid key");
+        let current_slot =
+            slot_from_key(&current_key).expect("Expect to be able to parse slot from valid key");
+
+        if current_slot > slot {
+            break;
+        }
+
         let current_index =
             index_from_key(&current_key).expect("Expect to be able to parse index from valid key");
+
+        println!(
+            "current slot: {}, current_index: {}",
+            current_slot, current_index
+        );
         let upper_index = cmp::min(current_index, end_index);
         for i in prev_index..upper_index {
             missing_indexes.push(i);
@@ -180,6 +194,7 @@ pub fn find_missing_data_indexes(
         end_index,
         &DataCf::key,
         &DataCf::index_from_key,
+        &DataCf::slot_height_from_key,
         max_missing,
     )
 }
@@ -203,6 +218,7 @@ pub fn find_missing_coding_indexes(
         end_index,
         &ErasureCf::key,
         &ErasureCf::index_from_key,
+        &ErasureCf::slot_height_from_key,
         max_missing,
     )
 }

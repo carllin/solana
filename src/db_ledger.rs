@@ -211,6 +211,10 @@ impl ErasureCf {
         DataCf::key(slot_height, index)
     }
 
+    pub fn slot_height_from_key(key: &[u8]) -> Result<u64> {
+        DataCf::slot_height_from_key(key)
+    }
+
     pub fn index_from_key(key: &[u8]) -> Result<u64> {
         DataCf::index_from_key(key)
     }
