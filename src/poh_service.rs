@@ -78,9 +78,9 @@ impl PohService {
                 }
             }
             poh.tick()?;
-            println!("GENERATING TICK");
+            info!("GENERATING TICK");
             if poh_exit.load(Ordering::Relaxed) {
-                println!("Tick service exited");
+                info!("Tick service exited");
                 return Ok(());
             }
         }

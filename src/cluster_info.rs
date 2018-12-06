@@ -323,7 +323,7 @@ impl ClusterInfo {
             received_index,
             me,
         );
-        println!(
+        info!(
             "{} broadcast orders table {}, clt: {}",
             me.id,
             orders.len(),
@@ -408,7 +408,7 @@ impl ClusterInfo {
                 let tvus = vs.iter().map(|v| v.tvu);
                 let ids_and_tvus: Vec<_> = v_ids.zip(tvus).collect();
 
-                println!(
+                info!(
                     "{}: BROADCAST idx: {} sz: {} to {:?} coding: {}",
                     me.id,
                     blob.index().unwrap(),
@@ -451,7 +451,7 @@ impl ClusterInfo {
         for idx in transmit_index.data..received_index {
             let w_idx = idx as usize % window_l.len();
 
-            println!(
+            info!(
                 "{} broadcast order data w_idx {} br_idx {}",
                 me.id, w_idx, br_idx
             );

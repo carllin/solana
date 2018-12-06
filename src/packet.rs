@@ -457,7 +457,6 @@ pub fn index_blobs<I, J, K>(
             .get_scheduled_leader(*tick_height)
             .expect("Leader schedule should never be unknown while indexing blobs");
         let mut blob = b.borrow().write().unwrap();
-        println!("tick_height: {}", tick_height);
 
         blob.set_index(index).expect("set_index");
         blob.set_slot(slot).expect("set_slot");

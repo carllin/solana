@@ -200,7 +200,7 @@ impl ReplicateStage {
                         None
                     };
 
-                    println!(
+                    info!(
                         "Replicate stage: {}: tick height: {}",
                         keypair.pubkey(),
                         bank.tick_height()
