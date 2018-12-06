@@ -61,6 +61,7 @@ impl LedgerWriteStage {
         let write_thread = Builder::new()
             .name("solana-ledger-writer".to_string())
             .spawn(move || loop {
+                info!("ENTRY WRITE STAGE STILL WRITING");
                 if let Err(e) = Self::write(ledger_writer.as_mut(), &entry_receiver, &entry_sender)
                 {
                     match e {

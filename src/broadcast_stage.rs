@@ -45,9 +45,12 @@ fn broadcast(
     receive_index: &mut u64,
     leader_scheduler: &Arc<RwLock<LeaderScheduler>>,
 ) -> Result<()> {
+    info!("BROADCAST STAGE CALLED");
     let id = node_info.id;
     let timer = Duration::new(1, 0);
+    info!("CHECK BROADCAST TIMEOUT");
     let entries = receiver.recv_timeout(timer)?;
+    info!("BROADCAST DIDN'T TIMEOUT");
     let now = Instant::now();
     let mut num_entries = entries.len();
     let mut ventries = Vec::new();
@@ -242,6 +245,7 @@ impl BroadcastStage {
         let me = cluster_info.read().unwrap().my_data().clone();
         let mut tick_height_ = tick_height;
         loop {
+            info!("LOOPING IN BROADCAST STAGE");
             let broadcast_table = cluster_info.read().unwrap().tvu_peers();
             let leader_id = cluster_info.read().unwrap().leader_id();
             if let Err(e) = broadcast(
