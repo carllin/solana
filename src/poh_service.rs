@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
-pub const NUM_TICKS_PER_SECOND: usize = 10;
+pub const NUM_TICKS_PER_SECOND: usize = 1;
 
 #[derive(Copy, Clone)]
 pub enum Config {
@@ -43,6 +43,7 @@ impl PohService {
     }
 
     pub fn new(poh_recorder: PohRecorder, config: Config) -> Self {
+        println!("STARTING UP POH SERVICE");
         // PohService is a headless producer, so when it exits it should notify the banking stage.
         // Since channel are not used to talk between these threads an AtomicBool is used as a
         // signal.

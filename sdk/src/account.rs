@@ -34,7 +34,7 @@ impl Account {
 #[derive(Debug)]
 pub struct KeyedAccount<'a> {
     is_signer: bool, // Transaction was signed by this account's key
-    key: &'a Pubkey,
+    pub key: &'a Pubkey,
     pub account: &'a mut Account,
 }
 

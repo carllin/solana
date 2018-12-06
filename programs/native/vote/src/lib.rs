@@ -25,12 +25,14 @@ fn entrypoint(
     data: &[u8],
     _tick_height: u64,
 ) -> Result<(), ProgramError> {
+    println!("VOTE ENTRY POINT CALLED");
     static INIT: Once = ONCE_INIT;
     INIT.call_once(|| {
         // env_logger can only be initialized once
         env_logger::init();
     });
 
+    println!("VOTE ENTRY POINT CALLED2");
     trace!("process_instruction: {:?}", data);
     trace!("keyed_accounts: {:?}", keyed_accounts);
 
@@ -42,6 +44,7 @@ fn entrypoint(
 
     match deserialize(data) {
         Ok(VoteInstruction::RegisterAccount) => {
+            println!("REGISTERING VOTE ACCOUNT");
             if !check_id(&keyed_accounts[1].account.owner) {
                 error!("account[1] is not assigned to the VOTE_PROGRAM");
                 Err(ProgramError::InvalidArgument)?;
@@ -56,10 +59,12 @@ fn entrypoint(
 
             vote_state.serialize(&mut keyed_accounts[1].account.userdata)?;
 
+            println!("VOTE ACCOUNT REGISTERED");
             Ok(())
         }
         Ok(VoteInstruction::NewVote(vote)) => {
             if !check_id(&keyed_accounts[0].account.owner) {
+                println!("GOT VOTE FOR ACCOUNT: {}", keyed_accounts[0].key);
                 error!("account[0] is not assigned to the VOTE_PROGRAM");
                 Err(ProgramError::InvalidArgument)?;
             }
@@ -70,6 +75,7 @@ fn entrypoint(
                     .to_owned(),
             );
 
+            println!("DESERIALIZING VOTE FOR ACCOUNT: {}", keyed_accounts[0].key);
             let mut vote_state = VoteProgram::deserialize(&keyed_accounts[0].account.userdata)?;
 
             // TODO: Integrity checks
@@ -82,7 +88,9 @@ fn entrypoint(
             }
 
             vote_state.votes.push_back(vote);
+            println!("RESERIALIZING VOTE FOR ACCOUNT: {}", keyed_accounts[0].key);
             vote_state.serialize(&mut keyed_accounts[0].account.userdata)?;
+            println!("SUCCESS: NEW VOTE FOR ACCOUNT: {}", keyed_accounts[0].key);
 
             Ok(())
         }

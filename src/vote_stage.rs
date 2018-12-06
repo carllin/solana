@@ -78,5 +78,6 @@ pub fn send_validator_vote(
     inc_new_counter_info!("validator-vote_sent", 1);
     vote_blob_sender.send(vec![shared_blob])?;
 
+    println!("SENDING VALIDATOR VOTE");
     Ok(())
 }

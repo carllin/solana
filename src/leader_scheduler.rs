@@ -17,7 +17,7 @@ use solana_sdk::vote_transaction::VoteTransaction;
 use std::collections::HashSet;
 use std::io::Cursor;
 
-pub const DEFAULT_BOOTSTRAP_HEIGHT: u64 = 1000;
+pub const DEFAULT_BOOTSTRAP_HEIGHT: u64 = 500;
 pub const DEFAULT_LEADER_ROTATION_INTERVAL: u64 = 100;
 pub const DEFAULT_SEED_ROTATION_INTERVAL: u64 = 1000;
 pub const DEFAULT_ACTIVE_WINDOW_LENGTH: u64 = 1000;
@@ -254,8 +254,8 @@ impl LeaderScheduler {
     // leader for a given PoH height in round-robin fashion
     pub fn get_scheduled_leader(&self, height: u64) -> Option<(Pubkey, u64)> {
         println!(
-            "get_scheduled_leader: lsh: {:?}, height: {}",
-            self.last_seed_height, height
+            "get_scheduled_leader: lsh: {:?}, height: {}, uobs: {}, schedule: {:?}",
+            self.last_seed_height, height, self.use_only_bootstrap_leader, self.leader_schedule
         );
         if self.use_only_bootstrap_leader {
             return Some((self.bootstrap_leader, 0));
@@ -330,7 +330,9 @@ impl LeaderScheduler {
                 .values()
                 .filter_map(|account| {
                     if vote_program::check_id(&account.owner) {
+                        println!("FOUND VOTE ACCOUNT: {:?}", account.owner);
                         if let Ok(vote_state) = VoteProgram::deserialize(&account.userdata) {
+                            println!("FOUND OK VOTE STATE: {:?}", vote_state);
                             return vote_state
                                 .votes
                                 .back()
@@ -410,6 +412,7 @@ impl LeaderScheduler {
             }
         }
 
+        println!("LEADER SCHEDULE GENERATED: {:?}", validator_rankings);
         self.leader_schedule = validator_rankings;
         self.last_seed_height = Some(height);
     }

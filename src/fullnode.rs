@@ -439,6 +439,7 @@ impl Fullnode {
         // check for that
         if scheduled_leader == self.keypair.pubkey() {
             let tick_height = self.bank.tick_height();
+            println!("TRANSITIONING BACK TO LEADER");
             self.validator_to_leader(tick_height, entry_height, last_entry_id);
             Ok(())
         } else {
@@ -538,11 +539,11 @@ impl Fullnode {
         match node_role {
             Some(NodeRole::Leader(leader_services)) => match leader_services.join()? {
                 Some(TpuReturnType::LeaderRotation) => {
-                    self.leader_to_validator()?;
                     println!(
                         "TRANSITIONING LEADER TO VALIDATOR: {}",
                         self.keypair.pubkey()
                     );
+                    self.leader_to_validator()?;
                     Ok(Some(FullnodeReturnType::LeaderToValidatorRotation))
                 }
                 _ => Ok(None),
@@ -550,11 +551,11 @@ impl Fullnode {
             Some(NodeRole::Validator(validator_services)) => match validator_services.join()? {
                 Some(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
                     //TODO: Fix this to return actual poh height.
-                    self.validator_to_leader(tick_height, entry_height, last_entry_id);
                     println!(
                         "TRANSITIONING VALIDATOR TO LEADER: {}",
                         self.keypair.pubkey()
                     );
+                    self.validator_to_leader(tick_height, entry_height, last_entry_id);
                     Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation))
                 }
                 _ => Ok(None),

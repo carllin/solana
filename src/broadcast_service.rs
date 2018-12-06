@@ -45,9 +45,12 @@ fn broadcast(
     receive_index: &mut u64,
     leader_scheduler: &Arc<RwLock<LeaderScheduler>>,
 ) -> Result<()> {
+    info!("BROADCAST STAGE CALLED");
     let id = node_info.id;
     let timer = Duration::new(1, 0);
+    info!("CHECK BROADCAST TIMEOUT");
     let entries = receiver.recv_timeout(timer)?;
+    info!("BROADCAST DIDN'T TIMEOUT");
     let now = Instant::now();
     let mut num_entries = entries.len();
     let mut ventries = Vec::new();
