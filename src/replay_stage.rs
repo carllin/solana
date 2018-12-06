@@ -183,6 +183,7 @@ impl ReplayStage {
                         .expect("Scheduled leader should be calculated by this point");
 
                     if leader_id == keypair.pubkey() {
+                        println!("{:?} EXITING REPLICATE STAGE", keypair.pubkey());
                         return Some(ReplayStageReturnType::LeaderRotation(
                             bank.tick_height(),
                             entry_height_,
@@ -201,6 +202,12 @@ impl ReplayStage {
                     } else {
                         None
                     };
+
+                    println!(
+                        "Replicate stage: {}: tick height: {}",
+                        keypair.pubkey(),
+                        bank.tick_height()
+                    );
 
                     match Self::process_entries(
                         &bank,

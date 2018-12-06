@@ -52,6 +52,8 @@ impl TpuForwarder {
                 for m in msgs.write().unwrap().packets.iter_mut() {
                     m.meta.set_addr(&leader_data.tpu);
                 }
+
+                println!("Forwarding TRANSACTIONS TO {}", leader_data.id);
                 msgs.read().unwrap().send_to(&socket)?
             }
         }
@@ -115,6 +117,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    #[ignore]
     pub fn test_tpu_forwarder() {
         let nodes: Vec<_> = (0..3)
             .map(|_| {

@@ -43,6 +43,7 @@ impl PohService {
     }
 
     pub fn new(poh_recorder: PohRecorder, config: Config) -> Self {
+        println!("STARTING UP POH SERVICE");
         // PohService is a headless producer, so when it exits it should notify the banking stage.
         // Since channel are not used to talk between these threads an AtomicBool is used as a
         // signal.
@@ -54,6 +55,7 @@ impl PohService {
             .spawn(move || {
                 let mut poh_recorder_ = poh_recorder;
                 let return_value = Self::tick_producer(&mut poh_recorder_, config, &poh_exit_);
+                println!("Tick service exitedddd");
                 poh_exit_.store(true, Ordering::Relaxed);
                 return_value
             })
@@ -78,8 +80,9 @@ impl PohService {
                 }
             }
             poh.tick()?;
+            println!("GENERATING TICK");
             if poh_exit.load(Ordering::Relaxed) {
-                debug!("tick service exited");
+                println!("Tick service exited");
                 return Ok(());
             }
         }

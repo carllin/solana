@@ -347,7 +347,12 @@ impl ClusterInfo {
             received_index,
             me,
         );
-        trace!("broadcast orders table {}", orders.len());
+        println!(
+            "{} broadcast orders table {}, clt: {}",
+            me.id,
+            orders.len(),
+            contains_last_tick
+        );
 
         let errs = Self::send_orders(s, orders, me, leader_id);
 
@@ -422,25 +427,20 @@ impl ClusterInfo {
                 assert!(vs.iter().find(|info| info.id == leader_id).is_none());
                 let bl = b.unwrap();
                 let blob = bl.read().unwrap();
+
                 //TODO profile this, may need multiple sockets for par_iter
-                let ids_and_tvus = if log_enabled!(Level::Trace) {
-                    let v_ids = vs.iter().map(|v| v.id);
-                    let tvus = vs.iter().map(|v| v.tvu);
-                    let ids_and_tvus = v_ids.zip(tvus).collect();
+                let v_ids = vs.iter().map(|v| v.id);
+                let tvus = vs.iter().map(|v| v.tvu);
+                let ids_and_tvus: Vec<_> = v_ids.zip(tvus).collect();
 
-                    trace!(
-                        "{}: BROADCAST idx: {} sz: {} to {:?} coding: {}",
-                        me.id,
-                        blob.index().unwrap(),
-                        blob.meta.size,
-                        ids_and_tvus,
-                        blob.is_coding()
-                    );
-
-                    ids_and_tvus
-                } else {
-                    vec![]
-                };
+                println!(
+                    "{}: BROADCAST idx: {} sz: {} to {:?} coding: {}",
+                    me.id,
+                    blob.index().unwrap(),
+                    blob.meta.size,
+                    ids_and_tvus,
+                    blob.is_coding()
+                );
 
                 assert!(blob.meta.size <= BLOB_SIZE);
                 let send_errs_for_blob: Vec<_> = vs
@@ -478,11 +478,9 @@ impl ClusterInfo {
         for idx in transmit_index.data..received_index {
             let w_idx = idx as usize % window_l.len();
 
-            trace!(
+            println!(
                 "{} broadcast order data w_idx {} br_idx {}",
-                me.id,
-                w_idx,
-                br_idx
+                me.id, w_idx, br_idx
             );
 
             // Broadcast the last tick to everyone on the network so it doesn't get dropped

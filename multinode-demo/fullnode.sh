@@ -166,7 +166,7 @@ rsync_url() { # adds the 'rsync://` prefix to URLs that need it
 }
 
 rsync_leader_url=$(rsync_url "$leader")
-
+ulimit -n 65536
 tune_networking
 
 set -ex

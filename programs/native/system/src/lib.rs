@@ -77,7 +77,7 @@ pub fn entrypoint(
 
                 // bank should be verifying correctness
                 if tokens > keyed_accounts[from].account.tokens {
-                    info!(
+                    println!(
                         "Move: insufficient tokens ({}, need {})",
                         keyed_accounts[from].account.tokens, tokens
                     );

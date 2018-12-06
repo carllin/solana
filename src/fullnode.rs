@@ -266,6 +266,12 @@ impl Fullnode {
             .get_current_leader()
             .expect("Leader not known after processing bank");
 
+        println!(
+            "FULLNODE WITH ID: {:?} GETTING SCHEDULED LEADER {:?}, tick height: {}",
+            keypair.pubkey(),
+            scheduled_leader,
+            bank.tick_height()
+        );
         cluster_info.write().unwrap().set_leader(scheduled_leader);
 
         let node_role = if scheduled_leader != keypair.pubkey() {
@@ -317,6 +323,11 @@ impl Fullnode {
                 ls_lock.max_height_for_leader(bank.tick_height() + 1)
             };
 
+            println!(
+                "fullnode max tick height: {:?}, {}",
+                max_tick_height,
+                bank.tick_height()
+            );
             // Start in leader mode.
             let (tpu, entry_receiver, tpu_exit) = Tpu::new(
                 &bank,
@@ -435,6 +446,7 @@ impl Fullnode {
         // check for that
         if scheduled_leader == self.keypair.pubkey() {
             let tick_height = self.bank.tick_height();
+            println!("TRANSITIONING BACK TO LEADER");
             self.validator_to_leader(tick_height, entry_height, last_entry_id);
             Ok(())
         } else {
@@ -489,6 +501,10 @@ impl Fullnode {
             ls_lock.max_height_for_leader(tick_height + 1)
         };
 
+        println!(
+            "fullnode max tick height, vtol: {:?}, {}",
+            max_tick_height, tick_height
+        );
         let (tpu, blob_receiver, tpu_exit) = Tpu::new(
             &self.bank,
             Default::default(),
@@ -536,6 +552,10 @@ impl Fullnode {
         match node_role {
             Some(NodeRole::Leader(leader_services)) => match leader_services.join()? {
                 Some(TpuReturnType::LeaderRotation) => {
+                    println!(
+                        "TRANSITIONING LEADER TO VALIDATOR: {}",
+                        self.keypair.pubkey()
+                    );
                     self.leader_to_validator()?;
                     Ok(Some(FullnodeReturnType::LeaderToValidatorRotation))
                 }
@@ -544,6 +564,10 @@ impl Fullnode {
             Some(NodeRole::Validator(validator_services)) => match validator_services.join()? {
                 Some(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
                     //TODO: Fix this to return actual poh height.
+                    println!(
+                        "TRANSITIONING VALIDATOR TO LEADER: {}",
+                        self.keypair.pubkey()
+                    );
                     self.validator_to_leader(tick_height, entry_height, last_entry_id);
                     Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation))
                 }

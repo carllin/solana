@@ -37,6 +37,7 @@ use solana_sdk::timing::{duration_as_us, timestamp};
 use solana_sdk::token_program;
 use solana_sdk::transaction::Transaction;
 use solana_sdk::vote_program;
+use solana_sdk::vote_program::VOTE_PROGRAM_ID;
 use std;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::result;
@@ -818,6 +819,9 @@ impl Bank {
             .iter()
             .map(|ix| {
                 let program_id = tx.program_ids[ix.program_ids_index as usize];
+                if program_id.as_ref() == VOTE_PROGRAM_ID {
+                    println!("GOT VOTE TRANSACTION IN BANK");
+                }
                 self.load_executable_accounts(program_id)
             })
             .collect()
@@ -935,6 +939,7 @@ impl Bank {
                     let mut loaders = self.load_loaders(tx)?;
                     runtime::execute_transaction(tx, &mut loaders, accounts, tick_height).map_err(
                         |RuntimeError::ProgramError(index, err)| {
+                            println!("ERROR IN BANK: {}", err);
                             BankError::ProgramError(index, err)
                         },
                     )
@@ -1027,6 +1032,7 @@ impl Bank {
             }
         } else {
             self.register_tick(&entry.id);
+            println!("IN BANK PROCESS_ENTRY. TICK HEIGHT: {}", self.tick_height());
             self.leader_scheduler
                 .write()
                 .unwrap()

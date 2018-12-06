@@ -1254,7 +1254,6 @@ fn test_dropped_handoff_recovery() {
 }
 
 #[test]
-#[ignore]
 //TODO: Ignore for now due to bug exposed by the test "test_dropped_handoff_recovery"
 fn test_full_leader_validator_network() {
     logger::setup();
@@ -1379,6 +1378,7 @@ fn test_full_leader_validator_network() {
     }
 
     // Start up the bootstrap leader
+    println!("STARTING BOOTSTRAP LEADER");
     let bootstrap_leader = Arc::new(RwLock::new(Fullnode::new(
         bootstrap_leader_node,
         &bootstrap_leader_ledger_path,
@@ -1389,6 +1389,7 @@ fn test_full_leader_validator_network() {
         LeaderScheduler::new(&leader_scheduler_config),
         None,
     )));
+    println!("BOOTSTRAP LEADER STARTED");
 
     nodes.push(bootstrap_leader.clone());
     t_nodes.push(run_node(

@@ -46,6 +46,7 @@ if [[ -d $SNAP ]]; then
   fi
 fi
 
+ulimit -n 65536
 tune_networking
 
 trap 'kill "$pid" && wait "$pid"' INT TERM

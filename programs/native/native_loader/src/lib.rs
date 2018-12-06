@@ -17,6 +17,7 @@ pub use solana_sdk::native_loader::*;
 use solana_sdk::native_program;
 use solana_sdk::native_program::ProgramError;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::vote_program::VOTE_PROGRAM_ID;
 use std::env;
 use std::path::PathBuf;
 use std::str;
@@ -64,6 +65,12 @@ pub fn entrypoint(
     ix_userdata: &[u8],
     tick_height: u64,
 ) -> Result<(), ProgramError> {
+    if program_id.as_ref() == VOTE_PROGRAM_ID {
+        println!(
+            "GOT A VOTE PROGRAM CALL: {}",
+            keyed_accounts[0].account.executable
+        );
+    }
     if keyed_accounts[0].account.executable {
         // dispatch it
         let name = keyed_accounts[0].account.userdata.clone();
@@ -74,16 +81,18 @@ pub fn entrypoint(
                 return Err(ProgramError::GenericError);
             }
         };
-        trace!("Call native {:?}", name);
+        println!("Call native {:?}", name);
         let path = create_path(&name);
+        println!("CREATED path: {:?}", path);
         // TODO linux tls bug can cause crash on dlclose(), workaround by never unloading
         match Library::open(Some(&path), libc::RTLD_NODELETE | libc::RTLD_NOW) {
             Ok(library) => unsafe {
+                println!("OPENED LIBRARY with path: {:?}", path);
                 let entrypoint: Symbol<native_program::Entrypoint> =
                     match library.get(native_program::ENTRYPOINT.as_bytes()) {
                         Ok(s) => s,
                         Err(e) => {
-                            warn!(
+                            println!(
                                 "{:?}: Unable to find {:?} in program",
                                 e,
                                 native_program::ENTRYPOINT
@@ -91,6 +100,7 @@ pub fn entrypoint(
                             return Err(ProgramError::GenericError);
                         }
                     };
+                println!("Calling entrypoint: {:?}", name);
                 return entrypoint(
                     program_id,
                     &mut keyed_accounts[1..],
@@ -99,7 +109,7 @@ pub fn entrypoint(
                 );
             },
             Err(e) => {
-                warn!("Unable to load: {:?}", e);
+                println!("Unable to load: {:?}", e);
                 return Err(ProgramError::GenericError);
             }
         }
@@ -110,7 +120,7 @@ pub fn entrypoint(
         }
         match instruction {
             LoaderInstruction::Write { offset, bytes } => {
-                trace!("NativeLoader::Write offset {} bytes {:?}", offset, bytes);
+                println!("NativeLoader::Write offset {} bytes {:?}", offset, bytes);
                 let offset = offset as usize;
                 if keyed_accounts[0].account.userdata.len() < offset + bytes.len() {
                     warn!(

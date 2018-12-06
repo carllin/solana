@@ -54,6 +54,7 @@ impl BankingStage {
         max_tick_height: Option<u64>,
         leader_id: Pubkey,
     ) -> (Self, Receiver<Vec<Entry>>) {
+        println!("BANKING STAGE MAX TICK HEIGHT: {:?}", max_tick_height);
         let (entry_sender, entry_receiver) = channel();
         let shared_verified_receiver = Arc::new(Mutex::new(verified_receiver));
         let poh_recorder =

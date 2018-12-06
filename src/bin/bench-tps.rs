@@ -295,6 +295,11 @@ fn verify_funding_transfer(client: &mut ThinClient, tx: &Transaction, amount: u6
     for a in &tx.account_keys[1..] {
         if client.get_balance(a).unwrap_or(0) >= amount {
             return true;
+        } else {
+            println!(
+                "funding tx from {0} to {1} failed",
+                &tx.account_keys[0], &tx.account_keys[1]
+            );
         }
     }
 
@@ -361,7 +366,7 @@ fn fund_keys(client: &mut ThinClient, source: &Keypair, dests: &[Keypair], token
                     .fold(0, |len, (_, tx)| len + tx.instructions.len());
 
                 println!(
-                    "{} {} to {} in {} txs",
+                    "{} {} to {} in {} txs, num_tries: {}",
                     if tries == 0 {
                         "transferring"
                     } else {
@@ -370,6 +375,7 @@ fn fund_keys(client: &mut ThinClient, source: &Keypair, dests: &[Keypair], token
                     amount,
                     receivers,
                     to_fund_txs.len(),
+                    tries,
                 );
 
                 let last_id = client.get_last_id();

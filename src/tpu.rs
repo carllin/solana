@@ -89,9 +89,13 @@ impl Service for Tpu {
     type JoinReturnType = Option<TpuReturnType>;
 
     fn join(self) -> thread::Result<(Option<TpuReturnType>)> {
+        println!("JOINING FETCH STAGE");
         self.fetch_stage.join()?;
+        println!("JOINING SIGVERIFY STAGE");
         self.sigverify_stage.join()?;
+        println!("JOINING LEDGER WRITE STAGE");
         self.ledger_write_stage.join()?;
+        println!("JOINING BANKING STAGE");
         match self.banking_stage.join()? {
             Some(BankingStageReturnType::LeaderRotation) => Ok(Some(TpuReturnType::LeaderRotation)),
             _ => Ok(None),

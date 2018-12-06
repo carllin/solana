@@ -45,9 +45,12 @@ fn broadcast(
     receive_index: &mut u64,
     leader_scheduler: &Arc<RwLock<LeaderScheduler>>,
 ) -> Result<()> {
+    info!("BROADCAST STAGE CALLED");
     let id = node_info.id;
     let timer = Duration::new(1, 0);
+    info!("CHECK BROADCAST TIMEOUT");
     let entries = receiver.recv_timeout(timer)?;
+    info!("BROADCAST DIDN'T TIMEOUT");
     let now = Instant::now();
     let mut num_entries = entries.len();
     let mut ventries = Vec::new();
@@ -91,7 +94,7 @@ fn broadcast(
     let broadcast_start = Instant::now();
     for blobs in blobs_chunked {
         let blobs_len = blobs.len();
-        trace!("{}: broadcast blobs.len: {}", id, blobs_len);
+        println!("{}: broadcast blobs.len: {}", id, blobs_len);
 
         index_blobs(blobs.iter(), &node_info.id, *receive_index);
 
@@ -151,7 +154,6 @@ fn broadcast(
 
         *receive_index += blobs_len as u64;
 
-        // Send blobs out from the window
         ClusterInfo::broadcast(
             contains_last_tick,
             leader_id,
