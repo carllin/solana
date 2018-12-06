@@ -116,7 +116,7 @@ fn main() {
     let mut leader_scheduler = LeaderScheduler::default();
 
     // Remove this line to enable leader rotation
-    leader_scheduler.use_only_bootstrap_leader = use_only_bootstrap_leader;
+    leader_scheduler.use_only_bootstrap_leader = false;
 
     let rpc_port = if let Some(port) = matches.value_of("rpc") {
         let port_number = port.to_string().parse().expect("integer");
