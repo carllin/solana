@@ -93,7 +93,7 @@ fn recv_window(
 
         pixs.push(pix);
 
-        trace!("{} window pix: {} size: {}", id, pix, meta_size);
+        println!("{} window pix: {} size: {}", id, pix, meta_size);
 
         let _ = process_blob(
             leader_scheduler,
@@ -180,6 +180,8 @@ pub fn window_service(
                             .add_field("consumed", influxdb::Value::Integer(consumed as i64))
                             .to_owned(),
                     );
+
+                    println!("{} consumed: {}, received: {}", id, consumed, received,);
 
                     // Consumed should never be bigger than received
                     assert!(consumed <= received);

@@ -56,6 +56,9 @@ fn broadcast(
         num_entries += entries.len();
         ventries.push(entries);
     }
+
+    println!("GOT SOMETHING IN BROADCAST");
+
     inc_new_counter_info!("broadcast_stage-entries_received", num_entries);
 
     let to_blobs_start = Instant::now();
@@ -96,7 +99,7 @@ fn broadcast(
     let broadcast_start = Instant::now();
     for mut blobs in blobs_chunked {
         let blobs_len = blobs.len();
-        trace!("{}: broadcast blobs.len: {}", id, blobs_len);
+        println!("{}: broadcast blobs.len: {}", id, blobs_len);
 
         index_blobs(
             blobs.iter(),
@@ -162,6 +165,10 @@ fn broadcast(
         *receive_index += blobs_len as u64;
 
         // Send blobs out from the window
+        println!(
+            "BROADCAST STAGE: TH:{} MTH: {:?}",
+            *tick_height, max_tick_height
+        );
         ClusterInfo::broadcast(
             Some(*tick_height) == max_tick_height,
             leader_id,

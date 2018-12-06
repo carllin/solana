@@ -200,6 +200,12 @@ impl ReplicateStage {
                         None
                     };
 
+                    println!(
+                        "Replicate stage: {}: tick height: {}",
+                        keypair.pubkey(),
+                        bank.tick_height()
+                    );
+
                     match Self::replicate_requests(
                         &bank,
                         &cluster_info,
