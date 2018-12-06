@@ -36,7 +36,7 @@ buildSshOptions() {
     -o "UserKnownHostsFile=/dev/null"
     -o "User=solana"
     -o "IdentityFile=$sshPrivateKey"
-    -o "LogLevel=ERROR"
+    -o "LogLevel=INFO"
     -F /dev/null
   )
 }
