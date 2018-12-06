@@ -202,6 +202,12 @@ impl ReplayStage {
                         None
                     };
 
+                    println!(
+                        "Replicate stage: {}: tick height: {}",
+                        keypair.pubkey(),
+                        bank.tick_height()
+                    );
+
                     match Self::process_entries(
                         &bank,
                         &cluster_info,

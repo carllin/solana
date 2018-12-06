@@ -54,6 +54,7 @@ impl PohService {
             .spawn(move || {
                 let mut poh_recorder_ = poh_recorder;
                 let return_value = Self::tick_producer(&mut poh_recorder_, config, &poh_exit_);
+                println!("Tick service exitedddd");
                 poh_exit_.store(true, Ordering::Relaxed);
                 return_value
             })
@@ -78,8 +79,9 @@ impl PohService {
                 }
             }
             poh.tick()?;
+            println!("GENERATING TICK");
             if poh_exit.load(Ordering::Relaxed) {
-                debug!("tick service exited");
+                println!("Tick service exited");
                 return Ok(());
             }
         }
