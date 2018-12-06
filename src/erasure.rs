@@ -366,9 +366,12 @@ pub fn recover(
     );
 
     let data_missing =
-        find_missing_data_indexes(slot, db_ledger, block_start_idx, block_end_idx, NUM_DATA).len();
+        find_missing_data_indexes(slot, db_ledger, block_start_idx, block_end_idx, NUM_DATA)
+            .0
+            .len();
     let coding_missing =
         find_missing_coding_indexes(slot, db_ledger, coding_start_idx, block_end_idx, NUM_CODING)
+            .0
             .len();
 
     // if we're not missing data, or if we have too much missing but have enough coding

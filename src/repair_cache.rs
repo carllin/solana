@@ -6,17 +6,16 @@ pub const MAX_REPAIR_LENGTH: usize = 128;
 
 #[derive(Default)]
 pub struct RepairCache {
-    last_missing_index: u64,
-    last_missing_slot: u64,
+    last_index: u64,
+    last_slot: u64,
     pub missing_indexes: HashSet<u64>,
 }
 
 impl RepairCache {
     pub fn new(ledger_meta: &SlotMeta) -> Self {
         let mut repair_cache = Self::default();
-        repair_cache.last_missing_index = ledger_meta.consumed;
-        repair_cache.last_missing_slot = ledger_meta.consumed_slot;
-        repair_cache.missing_indexes.insert(ledger_meta.consumed);
+        repair_cache.last_index = ledger_meta.consumed;
+        repair_cache.last_slot = ledger_meta.consumed_slot;
         repair_cache
     }
 
@@ -27,16 +26,15 @@ impl RepairCache {
         max_repair_entry_height: u64,
     ) {
         println!("IN UPDATE CACHE, ledger_meta: {:?}", ledger_meta);
-        if ledger_meta.consumed > self.last_missing_index {
+        if ledger_meta.consumed > self.last_index {
             println!("CLEARING CACHE");
             // Clear everything because we have received everything that was in the missing
-            // cache, update the last_missing_index and last_missing_slot to the latest
+            // cache, update the last_index and last_slot to the latest
             // updated versions based on consumed, because consumed might have jumped far ahead
             // once the missing holes were patched
             self.missing_indexes.clear();
-            self.last_missing_index = ledger_meta.consumed;
-            self.last_missing_slot = ledger_meta.consumed_slot;
-            self.missing_indexes.insert(ledger_meta.consumed);
+            self.last_index = ledger_meta.consumed;
+            self.last_slot = ledger_meta.consumed_slot;
         }
 
         assert!(self.missing_indexes.len() <= MAX_REPAIR_LENGTH);
@@ -45,39 +43,21 @@ impl RepairCache {
             return;
         }
 
-        let mut current_slot = self.last_missing_slot;
-        while self.missing_indexes.len() != MAX_REPAIR_LENGTH
-            && current_slot <= ledger_meta.received_slot
-        {
-            let result = find_missing_data_indexes(
-                current_slot,
-                db_ledger,
-                self.last_missing_index + 1,
-                max_repair_entry_height,
-                MAX_REPAIR_LENGTH - self.missing_indexes.len(),
-            );
+        let (result, last_slot, last_index) = find_missing_data_indexes(
+            self.last_slot,
+            db_ledger,
+            self.last_index,
+            max_repair_entry_height,
+            MAX_REPAIR_LENGTH - self.missing_indexes.len(),
+        );
 
-            println!("find_missing_data_indexes() result: {:?}", result);
-            if !result.is_empty() {
-                self.last_missing_slot = current_slot;
-                self.last_missing_index = *result.last().unwrap();
-                for idx in result {
-                    self.missing_indexes.insert(idx);
-                }
+        println!("find_missing_data_indexes() result: {:?}", result);
+        if !result.is_empty() {
+            self.last_slot = last_slot;
+            self.last_index = last_index;
+            for idx in result {
+                self.missing_indexes.insert(idx);
             }
-
-            // Check if this slot contains the upper bound, max_repair_entry_height - 1 (recall
-            // find_missing_data_indexes finds everything missing in the in the range [self.last_missing_index + 1, max_repair_entry_height)
-            // where the ending bound is exclusive). If so, then this is the last slot we should check
-            if Self::is_index_within_slot_limit(
-                db_ledger,
-                current_slot,
-                max_repair_entry_height - 1,
-            ) {
-                break;
-            }
-
-            current_slot += 1;
         }
     }
 
@@ -85,23 +65,6 @@ impl RepairCache {
         for index in received_indexes {
             self.missing_indexes.remove(index);
         }
-    }
-
-    // Check if a slot contains any blobs with index >= index
-    fn is_index_within_slot_limit(db_ledger: &DbLedger, slot_height: u64, index: u64) -> bool {
-        let mut db_iterator = db_ledger
-            .db
-            .raw_iterator_cf(db_ledger.data_cf.handle(&db_ledger.db))
-            .expect("Expected to be able to open database iterator");
-        db_iterator.seek(&DataCf::key(slot_height, index));
-        if db_iterator.valid() {
-            let key = &db_iterator.key().expect("Expected valid key");
-            let slot =
-                DataCf::slot_height_from_key(&key).expect("Expect valid slot from blob in ledger");
-            return slot == slot_height;
-        }
-
-        false
     }
 }
 
@@ -111,58 +74,6 @@ mod test {
     use db_ledger::{LedgerColumnFamily, MetaCf, DEFAULT_SLOT_HEIGHT};
     use ledger::{get_tmp_ledger_path, make_tiny_test_entries, Block};
     use packet::Blob;
-
-    #[test]
-    fn test_is_index_within_slot_limit() {
-        let shared_blobs = make_tiny_test_entries(20).to_blobs();
-        let blob_locks: Vec<_> = shared_blobs.iter().map(|b| b.read().unwrap()).collect();
-        let blobs: Vec<&Blob> = blob_locks.iter().map(|b| &**b).collect();
-        let slot = DEFAULT_SLOT_HEIGHT;
-
-        let ledger_path = get_tmp_ledger_path("test_is_index_within_slot_limit");
-        let mut ledger = DbLedger::open(&ledger_path).unwrap();
-
-        ledger.write_blobs(slot, &blobs[0..5]).unwrap();
-        ledger.write_blobs(slot + 1, &blobs[5..10]).unwrap();
-
-        for i in 0..5 {
-            assert!(RepairCache::is_index_within_slot_limit(
-                &ledger, slot, i as u64
-            ));
-        }
-
-        for i in 5..10 {
-            assert!(RepairCache::is_index_within_slot_limit(
-                &ledger,
-                slot + 1,
-                i as u64
-            ));
-            assert!(!RepairCache::is_index_within_slot_limit(
-                &ledger, slot, i as u64
-            ));
-        }
-
-        for (i, b) in blobs[10..20].iter().enumerate() {
-            ledger.write_blobs(slot + 2 + i as u64, vec![b]).unwrap();
-        }
-
-        for i in 0..10 as u64 {
-            assert!(RepairCache::is_index_within_slot_limit(
-                &ledger,
-                slot + 2 + i,
-                i + 10
-            ));
-            assert!(!RepairCache::is_index_within_slot_limit(
-                &ledger,
-                slot + 2 + i,
-                i + 1 + 10
-            ));
-        }
-
-        // Destroying database without closing it first is undefined behavior
-        drop(ledger);
-        DbLedger::destroy(&ledger_path).expect("Expected successful database destruction");
-    }
 
     #[test]
     fn test_update_cache() {
@@ -204,10 +115,10 @@ mod test {
             .collect();
         assert_eq!(repair_cache.missing_indexes, expected);
         assert_eq!(
-            repair_cache.last_missing_index,
-            ((num_intervals - 1) * interval - 1) as u64
+            repair_cache.last_index,
+            ((num_intervals - 1) * interval) as u64
         );
-        assert_eq!(repair_cache.last_missing_slot, (num_intervals - 1) as u64);
+        assert_eq!(repair_cache.last_slot, (num_intervals - 2) as u64);
 
         // Simulate receiving blobs, should clear the cache
         let received_vec: Vec<u64> = expected.into_iter().collect();
@@ -219,11 +130,8 @@ mod test {
         let mut expected: HashSet<u64> = HashSet::new();
         expected.insert((num_intervals * interval - 1) as u64);
         assert_eq!(repair_cache.missing_indexes, expected);
-        assert_eq!(
-            repair_cache.last_missing_index,
-            ((num_intervals) * interval - 1) as u64
-        );
-        assert_eq!(repair_cache.last_missing_slot, num_intervals as u64);
+        assert_eq!(repair_cache.last_index, ((num_intervals) * interval) as u64);
+        assert_eq!(repair_cache.last_slot, (num_intervals - 1) as u64);
 
         // Destroying database without closing it first is undefined behavior
         drop(ledger);
