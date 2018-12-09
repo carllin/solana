@@ -155,11 +155,6 @@ fn broadcast(
 
         *receive_index += blobs_len as u64;
 
-        // Send blobs out from the window
-        println!(
-            "BROADCAST STAGE: TH:{} MTH: {:?}",
-            *tick_height, max_tick_height
-        );
         ClusterInfo::broadcast(
             contains_last_tick,
             leader_id,

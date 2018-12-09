@@ -449,7 +449,6 @@ where
     for b in blobs {
         let (b, slot) = b.borrow();
         let mut blob = b.borrow().write().unwrap();
-        println!("tick_height: {}", tick_height);
 
         blob.set_index(index).expect("set_index");
         blob.set_slot(*slot).expect("set_slot");

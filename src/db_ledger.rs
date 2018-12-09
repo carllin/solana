@@ -347,6 +347,7 @@ impl DbLedger {
         // TODO: Handle if leader sends different blob for same index when the index > consumed
         // The old window implementation would just replace that index.
         if index < meta.consumed {
+            println!("index: {}, consumed: {}, received: {}", index, meta.consumed, meta.received);
             return Err(Error::DbLedgerError(DbLedgerError::BlobForIndexExists));
         }
 

@@ -936,6 +936,7 @@ impl Bank {
                     let mut loaders = self.load_loaders(tx)?;
                     runtime::execute_transaction(tx, &mut loaders, accounts, tick_height).map_err(
                         |RuntimeError::ProgramError(index, err)| {
+                            println!("ERROR IN BANK: {}", err);
                             BankError::ProgramError(index, err)
                         },
                     )

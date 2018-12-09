@@ -52,6 +52,8 @@ impl TpuForwarder {
                 for m in msgs.write().unwrap().packets.iter_mut() {
                     m.meta.set_addr(&leader_data.tpu);
                 }
+
+                println!("Forwarding TRANSACTIONS TO {}", leader_data.id);
                 msgs.read().unwrap().send_to(&socket)?
             }
         }

@@ -77,7 +77,7 @@ fn main() {
         .get_matches();
 
     let nosigverify = matches.is_present("nosigverify");
-    let use_only_bootstrap_leader = false;
+    let use_only_bootstrap_leader = matches.is_present("no-leader-rotation");
 
     let (keypair, vote_account_keypair, gossip) = if let Some(i) = matches.value_of("identity") {
         let path = i.to_string();
@@ -171,15 +171,13 @@ fn main() {
     }
 
     // Create the vote account if necessary
-    /*if client.poll_get_balance(&vote_account_id).unwrap_or(0) == 0 {
+    if client.poll_get_balance(&vote_account_id).unwrap_or(0) == 0 {
         // Need at least two tokens as one token will be spent on a vote_account_new() transaction
         if balance < 2 {
-            println!("VOTE FAILED TO GET BALANCE");
             error!("insufficient tokens");
             exit(1);
         }
         loop {
-            println!("TRYING TO CREATE VOTE ACCOUNT");
             let last_id = client.get_last_id();
             let transaction =
                 VoteTransaction::vote_account_new(&keypair, vote_account_id, last_id, 1, 1);
@@ -197,7 +195,6 @@ fn main() {
     }
 
     loop {
-        println!("TRYING TO CONFIRM VOTE ACCOUNT");
         let vote_account_user_data = client.get_account_userdata(&vote_account_id);
         if let Ok(Some(vote_account_user_data)) = vote_account_user_data {
             if let Ok(vote_state) = VoteProgram::deserialize(&vote_account_user_data) {
@@ -207,7 +204,7 @@ fn main() {
             }
         }
         panic!("Expected successful vote account registration");
-    }*/
+    }
 
     loop {
         let status = fullnode.handle_role_transition();
