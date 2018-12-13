@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
-pub const NUM_TICKS_PER_SECOND: usize = 10;
+pub const NUM_TICKS_PER_SECOND: usize = 2;
 
 #[derive(Copy, Clone)]
 pub enum Config {
