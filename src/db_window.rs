@@ -282,7 +282,7 @@ pub fn process_blob(
     tick_height: &mut u64,
     done: &Arc<AtomicBool>,
 ) -> Result<()> {
-    println!("{}: Process blob max_ix: {}", id, max_ix);
+    println!("{}: Process blob with pix: {} max_ix: {}", pix, id, max_ix);
     let is_coding = blob.read().unwrap().is_coding();
 
     // Check if the blob is in the range of our known leaders. If not, we return.
@@ -325,7 +325,7 @@ pub fn process_blob(
         // If write_shared_blobs() of these recovered blobs fails fails, don't return
         // because consumed_entries might be nonempty from earlier, and tick height needs to
         // be updated. Hopefully we can recover these blobs next time successfully.
-        if let Err(e) = try_erasure(db_ledger, consume_queue, id) {
+        if let Err(e) = try_erasure(db_ledger, &mut consumed_entries, id) {
             trace!(
                 "erasure::recover failed to write recovered coding blobs. Err: {:?}",
                 e
