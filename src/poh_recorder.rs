@@ -87,6 +87,8 @@ impl PohRecorder {
 
     fn record_and_send_txs(&self, poh: &mut Poh, mixin: Hash, txs: Vec<Transaction>) -> Result<()> {
         let entry = poh.record(mixin);
+        let sigs: Vec<_> = txs.iter().map(|t| t.signatures[0]).collect();
+        println!("tx ids: {:?}", sigs);
         assert!(!txs.is_empty(), "Entries without transactions are used to track real-time passing in the ledger and can only be generated with PohRecorder::tick function");
         let entry = Entry {
             tick_height: entry.tick_height,
@@ -94,6 +96,7 @@ impl PohRecorder {
             id: entry.id,
             transactions: txs,
         };
+        println!("Entry id: {}", entry.id);
         self.sender.send(vec![entry])?;
         Ok(())
     }

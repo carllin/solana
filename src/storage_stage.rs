@@ -13,11 +13,11 @@ use rand_chacha::ChaChaRng;
 use solana_sdk::hash::Hash;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
+use solana_sdk::signature::KeypairUtil;
 use solana_sdk::signature::Signature;
 use solana_sdk::storage_program;
 use solana_sdk::storage_program::StorageProgram;
 use solana_sdk::vote_program;
-use solana_sdk::signature::KeypairUtil;
 use std::collections::HashSet;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -287,7 +287,12 @@ impl StorageStage {
                                 entry_height: proof_entry_height,
                                 ..
                             }) => {
-                                println!("{}, GOT ENTRY PROOF, eh: {}, peh: {}", keypair.pubkey(), *entry_height, proof_entry_height);
+                                println!(
+                                    "{}, GOT ENTRY PROOF, eh: {}, peh: {}",
+                                    keypair.pubkey(),
+                                    *entry_height,
+                                    proof_entry_height
+                                );
                                 if proof_entry_height < *entry_height {
                                     let mut statew = storage_state.write().unwrap();
                                     let max_segment_index =

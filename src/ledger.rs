@@ -462,12 +462,13 @@ impl Block for [Entry] {
             id: *start_hash,
             transactions: vec![],
         }];
-        let entry_pairs = genesis.par_iter().chain(self).zip(self);
-        entry_pairs.all(|(x0, x1)| {
+        let entry_pairs = genesis.par_iter().chain(self).zip(self).enumerate();
+        entry_pairs.all(|(i, (x0, x1))| {
             let r = x1.verify(&x0.id);
             if !r {
-                warn!(
-                    "entry invalid!: x0: {:?}, x1: {:?} num txs: {}",
+                println!(
+                    "i: {}, entry invalid!: x0: {:?}, x1: {:?} num txs: {}",
+                    i,
                     x0.id,
                     x1.id,
                     x1.transactions.len()

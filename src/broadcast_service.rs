@@ -53,6 +53,15 @@ fn broadcast(
     let mut ventries = Vec::new();
     ventries.push(entries);
 
+    let vv: Vec<_> = ventries
+        .iter()
+        .flatten()
+        .map(|e| e.id)
+        .enumerate()
+        .map(|(i, x)| (*receive_index + i as u64, x))
+        .collect();
+    println!("BROADCAST ENTRIES INDEX: {:?}", vv);
+
     let mut contains_last_tick = false;
     while let Ok(entries) = receiver.try_recv() {
         num_entries += entries.len();

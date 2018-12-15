@@ -399,6 +399,7 @@ fn try_erasure(
 
     if let Some(meta) = meta {
         let (data, coding) = erasure::recover(db_ledger, meta.consumed_slot, meta.consumed)?;
+        let data_indexes = data.iter().map(|d| d.index().unwrap());
         for c in coding {
             let cl = c.read().unwrap();
             let erasure_key = ErasureCf::key(
@@ -413,6 +414,7 @@ fn try_erasure(
 
         let entries = db_ledger.write().unwrap().write_shared_blobs(data)?;
         let entry_ids: Vec<_> = entries.iter().map(|e| e.id).collect();
+        println!("{}: Erasure generated blob indexes: {:?}", id, data_indexes);
         println!("{}: Erasure generated entries: {:?}", id, entry_ids);
         consume_queue.extend(entries);
     }

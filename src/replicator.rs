@@ -266,7 +266,10 @@ impl Replicator {
                 let tx =
                     Transaction::storage_new_mining_proof(&keypair, hash, last_id, entry_height);
                 client.transfer_signed(&tx).expect("transfer didn't work!");
-                println!("TRANSFERRING MINING PROOF {}, sig: {}", entry_height, tx.signatures[0]);
+                println!(
+                    "TRANSFERRING MINING PROOF {}, sig: {}",
+                    entry_height, tx.signatures[0]
+                );
             }
             Err(e) => info!("Error occurred while sampling: {:?}", e),
         }

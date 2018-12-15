@@ -88,7 +88,11 @@ impl ReplayStage {
         let mut res = Ok(());
         let mut num_entries_to_write = entries.len();
         let now = Instant::now();
+        println!("VERIFYING ENTRIES {} to {}", *entry_height, *entry_height + entries.len() as u64);
+        let entry_ids: Vec<_> = entries.iter().map(|e| e.id).collect();
+        println!("VERIFYING ENTRIES {:?}", entry_ids);
         if !entries.as_slice().verify(last_entry_id) {
+            println!("SLICE FAILED TO VERIFY CORRECTLY");
             inc_new_counter_info!("replicate_stage-verify-fail", entries.len());
             return Err(Error::BlobError(BlobError::VerificationFailed));
         } else {

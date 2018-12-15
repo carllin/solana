@@ -145,7 +145,10 @@ impl BankingStage {
         poh: &PohRecorder,
     ) -> Result<()> {
         debug!("transactions: {}", transactions.len());
-        println!("tx_sigs: {:?}", transactions.iter().map(|t| t.signatures[0]));
+        println!(
+            "tx_sigs: {:?}",
+            transactions.iter().map(|t| t.signatures[0])
+        );
         let mut chunk_start = 0;
         while chunk_start != transactions.len() {
             let chunk_end = chunk_start + Entry::num_will_fit(&transactions[chunk_start..]);
