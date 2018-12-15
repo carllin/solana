@@ -173,6 +173,7 @@ impl Replicator {
         let mut entry_height = block_index * ENTRIES_PER_SEGMENT;
         entry_height %= storage_entry_height;
         let max_entry_height = entry_height + ENTRIES_PER_SEGMENT;
+        println!("max_entry_height: {}", max_entry_height);
 
         let repair_socket = Arc::new(node.sockets.repair);
         let mut blob_sockets: Vec<Arc<UdpSocket>> =
@@ -200,8 +201,9 @@ impl Replicator {
             done.clone(),
         );
 
-        info!("window created, waiting for ledger download done");
+        println!("window created, waiting for ledger download done");
         while !done.load(Ordering::Relaxed) {
+            println!("CHECKING WINDOW DONE IN REPLICATOR");
             sleep(Duration::from_millis(100));
         }
 
@@ -253,7 +255,7 @@ impl Replicator {
             chacha_cbc_encrypt_file(&ledger_data_file, &ledger_data_file_encrypted, &mut ivec)?;
         }
 
-        info!("Done encrypting the ledger");
+        println!("Done encrypting the ledger");
 
         let sampling_offsets = [0, 1, 2, 3];
 
@@ -264,6 +266,7 @@ impl Replicator {
                 let tx =
                     Transaction::storage_new_mining_proof(&keypair, hash, last_id, entry_height);
                 client.transfer_signed(&tx).expect("transfer didn't work!");
+                println!("TRANSFERRING MINING PROOF {}, sig: {}", entry_height, tx.signatures[0]);
             }
             Err(e) => info!("Error occurred while sampling: {:?}", e),
         }

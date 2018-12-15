@@ -102,6 +102,7 @@ fn recv_window(
         trace!("{} window pix: {} size: {}", id, pix, meta_size);
 
         let _ = process_blob(
+            id,
             leader_scheduler,
             db_ledger,
             &b,
@@ -180,6 +181,8 @@ pub fn window_service(
                 if let Ok(Some(meta)) = meta {
                     let received = meta.received;
                     let consumed = meta.consumed;
+
+                    println!("{} received: {} consumed: {}", id, received, consumed);
 
                     submit(
                         influxdb::Point::new("window-stage")

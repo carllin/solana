@@ -423,12 +423,12 @@ impl ClusterInfo {
                 let bl = b.unwrap();
                 let blob = bl.read().unwrap();
                 //TODO profile this, may need multiple sockets for par_iter
-                let ids_and_tvus = if log_enabled!(Level::Trace) {
+                let ids_and_tvus: Vec<_> = {
                     let v_ids = vs.iter().map(|v| v.id);
                     let tvus = vs.iter().map(|v| v.tvu);
                     let ids_and_tvus = v_ids.zip(tvus).collect();
 
-                    trace!(
+                    println!(
                         "{}: BROADCAST idx: {} sz: {} to {:?} coding: {}",
                         me.id,
                         blob.index().unwrap(),
@@ -438,8 +438,6 @@ impl ClusterInfo {
                     );
 
                     ids_and_tvus
-                } else {
-                    vec![]
                 };
 
                 assert!(blob.meta.size <= BLOB_SIZE);

@@ -49,6 +49,8 @@ fn test_replicator_startup() {
             None,
         );
 
+        println!("Leader id: {}", leader_info.id);
+
         let validator_keypair = Arc::new(Keypair::new());
         let validator_node = Node::new_localhost_with_pubkey(validator_keypair.pubkey());
 
@@ -66,6 +68,7 @@ fn test_replicator_startup() {
             None,
         );
 
+        println!("Validator id: {}", validator_node_info.id);
         let mut leader_client = mk_client(&leader_info);
 
         let bob = Keypair::new();
@@ -94,6 +97,7 @@ fn test_replicator_startup() {
 
         let leader_info = NodeInfo::new_entry_point(&leader_info.gossip);
 
+        println!("Replicator id: {}", replicator_node.info.id);
         let replicator = Replicator::new(
             Some(replicator_ledger_path),
             replicator_node,

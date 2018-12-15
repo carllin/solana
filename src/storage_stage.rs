@@ -17,6 +17,7 @@ use solana_sdk::signature::Signature;
 use solana_sdk::storage_program;
 use solana_sdk::storage_program::StorageProgram;
 use solana_sdk::vote_program;
+use solana_sdk::signature::KeypairUtil;
 use std::collections::HashSet;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -118,6 +119,7 @@ impl StorageState {
         const MAX_PUBKEYS_TO_RETURN: usize = 5;
         let index = (entry_height / ENTRIES_PER_SEGMENT) as usize;
         let replicator_map = &self.state.read().unwrap().replicator_map;
+        println!("replicator_map.len(): {}", replicator_map.len());
         if index < replicator_map.len() {
             replicator_map[index]
                 .iter()
@@ -261,6 +263,10 @@ impl StorageStage {
         let entries = entry_receiver.recv_timeout(timeout)?;
 
         for entry in entries {
+            println!(
+                "Storage Stage: GOT ENTRY WITH tick height: {}, id: {}",
+                entry.tick_height, entry.id
+            );
             // Go through the transactions, find votes, and use them to update
             // the storage_keys with their signatures.
             for tx in entry.transactions {
@@ -281,6 +287,7 @@ impl StorageStage {
                                 entry_height: proof_entry_height,
                                 ..
                             }) => {
+                                println!("{}, GOT ENTRY PROOF, eh: {}, peh: {}", keypair.pubkey(), *entry_height, proof_entry_height);
                                 if proof_entry_height < *entry_height {
                                     let mut statew = storage_state.write().unwrap();
                                     let max_segment_index =

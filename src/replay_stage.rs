@@ -91,6 +91,8 @@ impl ReplayStage {
         if !entries.as_slice().verify(last_entry_id) {
             inc_new_counter_info!("replicate_stage-verify-fail", entries.len());
             return Err(Error::BlobError(BlobError::VerificationFailed));
+        } else {
+            println!("SLICE VERIFIED CORRECTLY");
         }
         inc_new_counter_info!(
             "replicate_stage-verify-duration",

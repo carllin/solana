@@ -488,6 +488,7 @@ impl Bank {
     }
 
     pub fn get_pubkeys_for_entry_height(&self, entry_height: u64) -> Vec<Pubkey> {
+        println!("BANK GOT REQUEST FOR PK For ENTRY HEIGHT: {}", entry_height);
         self.storage_state
             .get_pubkeys_for_entry_height(entry_height)
     }

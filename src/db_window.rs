@@ -272,6 +272,7 @@ pub fn add_blob_to_retransmit_queue(
 /// starting from consumed is thereby formed, add that continuous
 /// range of blobs to a queue to be sent on to the next stage.
 pub fn process_blob(
+    id: &Pubkey,
     leader_scheduler: &Arc<RwLock<LeaderScheduler>>,
     db_ledger: &Arc<RwLock<DbLedger>>,
     blob: &SharedBlob,
@@ -281,6 +282,7 @@ pub fn process_blob(
     tick_height: &mut u64,
     done: &Arc<AtomicBool>,
 ) -> Result<()> {
+    println!("{}: Process blob max_ix: {}", id, max_ix);
     let is_coding = blob.read().unwrap().is_coding();
 
     // Check if the blob is in the range of our known leaders. If not, we return.
@@ -323,7 +325,7 @@ pub fn process_blob(
         // If write_shared_blobs() of these recovered blobs fails fails, don't return
         // because consumed_entries might be nonempty from earlier, and tick height needs to
         // be updated. Hopefully we can recover these blobs next time successfully.
-        if let Err(e) = try_erasure(db_ledger, consume_queue) {
+        if let Err(e) = try_erasure(db_ledger, consume_queue, id) {
             trace!(
                 "erasure::recover failed to write recovered coding blobs. Err: {:?}",
                 e
@@ -354,6 +356,7 @@ pub fn process_blob(
             let extra_unwanted_entries_len =
                 cmp::min(consumed_entries_len, (consumed - (max_ix + 1)) as usize);
             consumed_entries.truncate(consumed_entries_len - extra_unwanted_entries_len);
+            println!("DONE, REACHED MAX IX");
             done.store(true, Ordering::Relaxed);
         }
     }
@@ -383,7 +386,11 @@ pub fn calculate_max_repair_entry_height(
 }
 
 #[cfg(feature = "erasure")]
-fn try_erasure(db_ledger: &Arc<RwLock<DbLedger>>, consume_queue: &mut Vec<Entry>) -> Result<()> {
+fn try_erasure(
+    db_ledger: &Arc<RwLock<DbLedger>>,
+    consume_queue: &mut Vec<Entry>,
+    id: &Pubkey,
+) -> Result<()> {
     let meta = {
         let r_db = db_ledger.read().unwrap();
         r_db.meta_cf
@@ -405,6 +412,8 @@ fn try_erasure(db_ledger: &Arc<RwLock<DbLedger>>, consume_queue: &mut Vec<Entry>
         }
 
         let entries = db_ledger.write().unwrap().write_shared_blobs(data)?;
+        let entry_ids: Vec<_> = entries.iter().map(|e| e.id).collect();
+        println!("{}: Erasure generated entries: {:?}", id, entry_ids);
         consume_queue.extend(entries);
     }
 
@@ -746,7 +755,8 @@ mod test {
         )));
 
         let mut consume_queue = vec![];
-        try_erasure(&db_ledger, &mut consume_queue).expect("Expected successful erasure attempt");
+        try_erasure(&db_ledger, &mut consume_queue)
+            .expect("Expected successful erasure attempt", Pubkey::default());
         window[erase_offset].data = erased_data;
 
         let data_blobs: Vec<_> = window[erase_offset..end_index]
