@@ -22,6 +22,7 @@ use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub const MAX_REPAIR_BACKOFF: usize = 128;
+pub const PROCESS_BLOB_CHUNK_SIZE: usize = 4096;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum WindowServiceReturnType {
@@ -67,6 +68,7 @@ fn recv_window(
     while let Ok(mut nq) = r.try_recv() {
         dq.append(&mut nq)
     }
+
     let now = Instant::now();
     inc_new_counter_info!("streamer-recv_window-recv", dq.len(), 100);
 
@@ -83,28 +85,36 @@ fn recv_window(
 
     trace!("{} num blobs received: {}", id, dq.len());
 
-    for b in dq {
-        let (pix, meta_size) = {
-            let p = b.read().unwrap();
-            (p.index()?, p.meta.size)
-        };
+    for chunk in dq.chunks(PROCESS_BLOB_CHUNK_SIZE) {
+        println!("Got chunk of size: {}", chunk.len());
+        for b in chunk {
+            let (pix, meta_size) = {
+                let p = b.read().unwrap();
+                (p.index()?, p.meta.size)
+            };
 
-        submit(
-            influxdb::Point::new("window-service")
-                .add_field("last-recv", influxdb::Value::Integer(pix as i64))
-                .to_owned(),
-        );
+            submit(
+                influxdb::Point::new("window-service")
+                    .add_field("last-recv", influxdb::Value::Integer(pix as i64))
+                    .to_owned(),
+            );
 
-        trace!("{} window pix: {} size: {}", id, pix, meta_size);
+            trace!("{} window pix: {} size: {}", id, pix, meta_size);
+        }
 
-        let _ = process_blob(
+        let now = Instant::now();
+        let _ = process_blobs(
             leader_scheduler,
             db_ledger,
-            &b,
+            chunk,
             max_ix,
             &mut consume_queue,
             tick_height,
             done,
+        );
+        println!(
+            "Elapsed processing time in proces_blobs: {}",
+            duration_as_ms(&now.elapsed())
         );
     }
 

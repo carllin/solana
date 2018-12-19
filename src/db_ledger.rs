@@ -375,6 +375,16 @@ impl DbLedger {
         let lowest_slot = new_blobs[0].borrow().slot()?;
         let highest_index = new_blobs.last().unwrap().borrow().index()?;
         let highest_slot = new_blobs.last().unwrap().borrow().slot()?;
+
+        let indexes: Vec<_> = new_blobs
+            .iter()
+            .map(|b| b.borrow().index().unwrap())
+            .collect();
+        println!(
+            "Insert data blob meta, meta.consumed: {}, meta.received: {}",
+            meta.consumed, meta.received
+        );
+        println!("Inserting indexes: {:?}", indexes);
         if lowest_index < meta.consumed {
             return Err(Error::DbLedgerError(DbLedgerError::BlobForIndexExists));
         }
@@ -419,9 +429,11 @@ impl DbLedger {
                             "Blob made it past validation, so must be deserializable at this point",
                         )
                     } else {
+                        println!("Looking in db for slot: {}, index: {}", current_slot, current_index);
                         let key = DataCf::key(current_slot, current_index);
                         let blob_data = {
                             if let Some(blob_data) = self.data_cf.get(&self.db, &key)? {
+                                println!("FOUND IN DB");
                                 blob_data
                             } else if meta.consumed < meta.received {
                                 let key = DataCf::key(current_slot + 1, current_index);
@@ -430,9 +442,11 @@ impl DbLedger {
                                     meta.consumed_slot = current_slot;
                                     blob_data
                                 } else {
+                                    println!("breaking outer");
                                     break 'outer;
                                 }
                             } else {
+                                println!("breaking outer 2");
                                 break 'outer;
                             }
                         };
