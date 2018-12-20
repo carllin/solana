@@ -514,10 +514,7 @@ impl DbLedger {
         }
 
         let db_start = Instant::now();
-        let mut write_options = WriteOptions::default();
-        write_options.set_sync(false);
-        write_options.disable_wal(true);
-        self.db.write_opt(batch, &write_options)?;
+        self.db.write(batch)?;
         let duration = duration_as_ms(&db_start.elapsed()) as usize;
         println!("Writing {} blobs in db_ledger, elapsed: {}", len, duration);
         Ok(consumed_queue)
@@ -565,10 +562,7 @@ impl DbLedger {
         );
 
         let db_start = Instant::now();
-        let mut write_options = WriteOptions::default();
-        write_options.set_sync(false);
-        write_options.disable_wal(true);
-        self.db.write_opt(batch, &write_options)?;
+        self.db.write(batch)?;
         let duration = duration_as_ms(&db_start.elapsed()) as usize;
         println!(
             "Writing {} blobs in db_ledger_consecutive, elapsed: {}",
@@ -653,7 +647,6 @@ impl DbLedger {
         options.set_max_write_buffer_number(32);
         options.set_write_buffer_size(MAX_WRITE_BUFFER_SIZE);
         options.set_max_bytes_for_level_base(MAX_WRITE_BUFFER_SIZE as u64);
-        options.set_compaction_style(DBCompactionStyle::Universal);
         options
     }
 
@@ -667,7 +660,6 @@ impl DbLedger {
         options.set_max_write_buffer_number(32);
         options.set_write_buffer_size(MAX_WRITE_BUFFER_SIZE);
         options.set_max_bytes_for_level_base(MAX_WRITE_BUFFER_SIZE as u64);
-        options.set_compaction_style(DBCompactionStyle::Universal);
         options
     }
 }
