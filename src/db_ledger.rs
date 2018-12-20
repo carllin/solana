@@ -7,7 +7,9 @@ use crate::packet::{Blob, SharedBlob, BLOB_HEADER_SIZE};
 use crate::result::{Error, Result};
 use bincode::{deserialize, serialize};
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
-use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBRawIterator, Options, WriteBatch, DB};
+use rocksdb::{
+    ColumnFamily, ColumnFamilyDescriptor, DBCompactionStyle, DBRawIterator, Options, WriteBatch, DB,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use solana_sdk::signature::{Keypair, KeypairUtil};
@@ -604,6 +606,7 @@ impl DbLedger {
         let mut options = Options::default();
         options.set_max_write_buffer_number(32);
         options.set_write_buffer_size(512 * 1024 * 1024);
+        options.set_compaction_style(DBCompactionStyle::Universal);
         options
     }
 
@@ -616,6 +619,7 @@ impl DbLedger {
         options.set_max_background_compactions(4);
         options.set_max_write_buffer_number(32);
         options.set_write_buffer_size(512 * 1024 * 1024);
+        options.set_compaction_style(DBCompactionStyle::Universal);
         options
     }
 }
