@@ -160,7 +160,7 @@ pub fn window_service(
                     }
                 }
 
-                let meta = db_ledger.meta();
+                let meta = db_ledger.meta(0);
 
                 if let Ok(Some(meta)) = meta {
                     let received = meta.received;
