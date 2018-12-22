@@ -197,14 +197,13 @@ pub fn process_blob(
     }
 
     // Insert the new blob into the window
-    let mut consumed_entries = if is_coding {
+    if is_coding {
         let blob = &blob.read().unwrap();
         db_ledger.put_coding_blob_bytes(
             slot,
             pix,
             &blob.data[..BLOB_HEADER_SIZE + blob.size().unwrap()],
         )?;
-        vec![]
     } else {
         db_ledger.insert_data_blobs(vec![(*blob.read().unwrap()).borrow()])?
     };
