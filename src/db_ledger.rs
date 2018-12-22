@@ -20,7 +20,7 @@ use std::cmp;
 use std::fs::{create_dir_all, remove_dir_all};
 use std::io;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 
 pub type DbLedgerRawIterator = rocksdb::DBRawIterator;
 
@@ -281,9 +281,10 @@ impl LedgerColumnFamilyRaw for ErasureCf {
 pub struct DbLedger {
     // Underlying database is automatically closed in the Drop implementation of DB
     db: Arc<DB>,
-    meta_cf: MetaCf,
-    data_cf: DataCf,
-    erasure_cf: ErasureCf,
+    pub meta_cf: MetaCf,
+    pub data_cf: DataCf,
+    pub erasure_cf: ErasureCf,
+    pub new_blobs_signal: (Condvar, Mutex<bool>),
 }
 
 // TODO: Once we support a window that knows about different leader
@@ -328,11 +329,14 @@ impl DbLedger {
         // Create the erasure column family
         let erasure_cf = ErasureCf::new(db.clone());
 
+        let new_blobs_signal = (Condvar::new(), Mutex::new(false));
+
         Ok(DbLedger {
             db,
             meta_cf,
             data_cf,
             erasure_cf,
+            new_blobs_signal,
         })
     }
 
@@ -427,9 +431,13 @@ impl DbLedger {
                 self.insert_data_blob(blob, &mut prev_inserted_keys, slot_meta, &mut write_batch);
         }
 
+        let mut should_signal = false;
         // Check if any metadata was changed, if so, insert them into the write batch
         for (slot_height, (meta, meta_backup)) in slot_metas {
             if Some(&meta) != meta_backup.as_ref() {
+                if meta.consumed != meta_backup.consumed {
+                    should_signal = true;
+                }
                 write_batch.put_cf(
                     self.meta_cf.handle(),
                     &MetaCf::key(slot_height),
@@ -439,6 +447,12 @@ impl DbLedger {
         }
 
         self.db.write(write_batch)?;
+        if should_signal {
+            let mut has_updates = self.new_blobs_signal.1.lock().unwrap();
+            *has_updates = true;
+            self.new_blobs_signal.0.notify_all();
+        }
+
         Ok(())
     }
 
@@ -1058,7 +1072,7 @@ mod tests {
         let ledger = DbLedger::open(&ledger_path).unwrap();
 
         // Insert second blob, we're missing the first blob, so should return nothing
-        let result = ledger.insert_data_blobs(vec![blobs[1]]).unwrap();
+        ledger.insert_data_blobs(vec![blobs[1]]).unwrap();
 
         assert!(result.len() == 0);
         let meta = ledger
