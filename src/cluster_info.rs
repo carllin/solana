@@ -812,7 +812,7 @@ impl ClusterInfo {
         ix: u64,
     ) -> Vec<SharedBlob> {
         if let Some(db_ledger) = db_ledger {
-            let meta = db_ledger.meta();
+            let meta = db_ledger.meta(0);
 
             if let Ok(Some(meta)) = meta {
                 let max_slot = meta.received_slot;
