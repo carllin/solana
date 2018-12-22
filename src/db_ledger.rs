@@ -2,8 +2,7 @@
 //! Proof of History ledger as well as iterative read, append write, and random
 //! access read to a persistent file-based ledger.
 
-use crate::entry::create_ticks;
-use crate::entry::Entry;
+use crate::entry::{create_ticks, reconstruct_entries_from_blobs, Entry};
 use crate::mint::Mint;
 use crate::packet::{Blob, SharedBlob, BLOB_HEADER_SIZE};
 use crate::result::{Error, Result};
@@ -116,7 +115,7 @@ pub trait LedgerColumnFamilyRaw {
     fn db(&self) -> &Arc<DB>;
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 // The Meta column family
 pub struct SlotMeta {
     // The total number of consecutive blob starting from index 0
@@ -124,10 +123,8 @@ pub struct SlotMeta {
     pub consumed: u64,
     // The entry height of the highest blob received for this slot.
     pub received: u64,
-    // The tick height of the latest tick in this slot in the range [0..consumed]
-    pub consumed_tick_height: u64,
-    // The tick height that marks the end of this slot
-    pub max_tick_height: u64,
+    // The number of ticks in the range [0..consumed]
+    pub consumed_ticks: u64,
 }
 
 impl SlotMeta {
@@ -135,8 +132,7 @@ impl SlotMeta {
         SlotMeta {
             consumed: 0,
             received: 0,
-            consumed_tick_height: 0,
-            max_tick_height: 0,
+            consumed_ticks: 0,
         }
     }
 }
@@ -352,7 +348,7 @@ impl DbLedger {
         Ok(())
     }
 
-    pub fn write_shared_blobs<I>(&self, shared_blobs: I) -> Result<Vec<Entry>>
+    pub fn write_shared_blobs<I>(&self, shared_blobs: I) -> Result<()>
     where
         I: IntoIterator,
         I::Item: Borrow<SharedBlob>,
@@ -370,17 +366,17 @@ impl DbLedger {
         Ok(new_entries)
     }
 
-    pub fn write_blobs<'a, I>(&self, blobs: I) -> Result<Vec<Entry>>
+    pub fn write_blobs<'a, I>(&self, blobs: I) -> Result<()>
     where
         I: IntoIterator,
         I::Item: Borrow<&'a Blob>,
     {
         let blobs = blobs.into_iter().map(|b| *b.borrow());
-        let new_entries = self.insert_data_blobs(blobs)?;
-        Ok(new_entries)
+        self.insert_data_blobs(blobs)?;
+        Ok(())
     }
 
-    pub fn write_entries<I>(&self, slot: u64, index: u64, entries: I) -> Result<Vec<Entry>>
+    pub fn write_entries<I>(&self, slot: u64, index: u64, entries: I) -> Result<()>
     where
         I: IntoIterator,
         I::Item: Borrow<Entry>,
@@ -410,26 +406,25 @@ impl DbLedger {
         // so we can detect changes to the slot metadata later
         let mut slot_metas = HashMap::new();
         for blob in new_blobs.into_iter() {
-            let blob_index = blob.index()?;
+            let blob = blob.borrow();
             let blob_slot = blob.slot()?;
-            let blob_size = blob.size()?;
 
             // Check if we've already inserted the slot metadata for this blob's slot
-            let (slot_meta, slot_meta_backup) = slot_metas.entry(blob_slot).or_insert_with(|| {
+            let (ref mut slot_meta, _) = slot_metas.entry(blob_slot).or_insert_with(|| {
                 // Store a 2-tuple of the metadata (working copy, backup copy)
-                if let Some(meta) = self.meta_cf.get_slot_meta(&self.db)? {
+                if let Some(meta) = self
+                    .meta_cf
+                    .get_slot_meta(blob_slot)
+                    .expect("Expect database get to succeed")
+                {
                     (meta.clone(), Some(meta))
                 } else {
                     (SlotMeta::new(), None)
                 }
             });
 
-            let _ = self.insert_data_blob(
-                &blob,
-                &mut prev_inserted_keys,
-                &mut slot_meta,
-                &mut write_batch,
-            );
+            let _ =
+                self.insert_data_blob(blob, &mut prev_inserted_keys, slot_meta, &mut write_batch);
         }
 
         // Check if any metadata was changed, if so, insert them into the write batch
@@ -722,11 +717,19 @@ impl DbLedger {
             return Err(Error::DbLedgerError(DbLedgerError::BlobForIndexExists));
         }
 
-        let new_consumed = {
+        let (new_consumed, new_consumed_ticks) = {
             if slot_meta.consumed == blob_index {
-                self.find_next_consumed(blob_slot, prev_inserted_keys, blob_index + 1)?
+                let (consumed, mut num_ticks) =
+                    self.find_next_consumed(blob_slot, prev_inserted_keys, blob_index + 1)?;
+
+                // Reconstruct entry to check if it's a tick
+                let (_, is_tick) = reconstruct_entries_from_blobs(vec![blob]).expect(
+                    "Blob made it past validation, so must be deserializable at this point",
+                );
+                num_ticks += is_tick;
+                (consumed, num_ticks)
             } else {
-                slot_meta.consumed
+                (slot_meta.consumed, 0)
             }
         };
 
@@ -741,24 +744,36 @@ impl DbLedger {
         // so received = index + 1 for the same blob.
         slot_meta.received = max(blob_index + 1, slot_meta.received);
         slot_meta.consumed = new_consumed;
+        slot_meta.consumed_ticks += new_consumed_ticks;
         Ok(())
     }
 
+    // Returns the next consumed index and the number of ticks in the new consumed
+    // range
     pub fn find_next_consumed(
         &self,
         slot_height: u64,
-        prev_inserted_keys: &mut HashSet<(u64, u64)>,
+        prev_inserted_keys: &HashSet<(u64, u64)>,
         mut current_consumed: u64,
-    ) -> Result<u64> {
+    ) -> Result<(u64, u64)> {
+        let mut num_ticks = 0;
         'outer: loop {
             // Try to find the next blob we're looking for in the prev_inserted_keys
             if !prev_inserted_keys.contains(&(slot_height, current_consumed)) {
                 // Try to find the next blob we're looking for in the database
-                if self
+                if let Some(blob_data) = self
                     .data_cf
                     .get_by_slot_index(slot_height, current_consumed)?
-                    .is_none()
                 {
+                    // Check if it's a tick
+                    let serialized_entry_data = &blob_data[BLOB_HEADER_SIZE..];
+                    let entry: Entry = deserialize(serialized_entry_data).expect(
+                        "Blob made it past validation, so must be deserializable at this point",
+                    );
+                    if entry.is_tick() {
+                        num_ticks += 1;
+                    }
+                } else {
                     break;
                 }
             }
@@ -766,7 +781,7 @@ impl DbLedger {
             current_consumed += 1;
         }
 
-        Ok(current_consumed)
+        Ok((current_consumed, num_ticks))
     }
 }
 
@@ -1167,12 +1182,10 @@ mod tests {
                 w_b.set_slot(DEFAULT_SLOT_HEIGHT).unwrap();
             }
 
-            assert_eq!(
-                db_ledger
-                    .write_shared_blobs(&shared_blobs)
-                    .expect("Expected successful write of blobs"),
-                vec![]
-            );
+            db_ledger
+                .write_shared_blobs(&shared_blobs)
+                .expect("Expected successful write of blobs");
+
             let mut db_iterator = db_ledger
                 .db
                 .raw_iterator_cf(db_ledger.data_cf.handle())
