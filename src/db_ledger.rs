@@ -438,7 +438,7 @@ impl DbLedger {
         // Check if any metadata was changed, if so, insert them into the write batch
         for (slot_height, (meta, meta_backup)) in slot_metas {
             if Some(&meta) != meta_backup.as_ref() {
-                if meta.consumed != meta_backup.consumed {
+                if meta_backup.is_none() || meta_backup.unwrap().consumed != meta.consumed {
                     should_signal = true;
                 }
                 write_batch.put_cf(
@@ -696,32 +696,33 @@ impl DbLedger {
         )
     }
     /// Returns the entry vector for the slot starting with `blob_start_index`
-    pub fn get_slot_entries(slot_index: u64, blob_start_index: usize) -> Vec<Entry> {
+    pub fn get_slot_entries(&self, slot_index: u64, blob_start_index: u64) -> Vec<Entry> {
         // Find the next consecutive block of blobs.
         let mut iter = self.db.iterator(IteratorMode::Start);
         let consecutive_blobs =
-            DataCf::get_slot_consecutive_blobs(&mut iter, slot_height, blob_start_index);
-        deserialize_blobs(consecutive_blobs)
+            self.get_slot_consecutive_blobs(&mut iter, slot_index, blob_start_index);
+        Self::deserialize_blobs(consecutive_blobs)
     }
 
     fn get_slot_consecutive_blobs(
+        &self,
         iterator: &mut DBIterator,
         slot_height: u64,
         start_index: u64,
     ) -> Vec<Box<[u8]>> {
-        let key = Self::key(slot_height, start_index);
+        let key = DataCf::key(slot_height, start_index);
         iterator.set_mode(IteratorMode::From(&key, Direction::Forward));
         let mut expected_index = start_index;
         let mut results = vec![];
 
         for (key, value) in iterator.by_ref() {
-            let slot = Self::slot_height_from_key(&key)
+            let slot = DataCf::slot_height_from_key(&key)
                 .expect("Expect to be able to get slot height from key in database");
             if slot != slot_height {
                 break;
             }
 
-            let index = Self::index_from_key(&key)
+            let index = DataCf::index_from_key(&key)
                 .expect("Expect to be able to get index from key in database");
             if index != expected_index {
                 break;
@@ -1115,6 +1116,7 @@ mod tests {
     fn test_insert_data_blobs_basic() {
         let entries = make_tiny_test_entries(2);
         let shared_blobs = entries.to_shared_blobs();
+        let slot_height = 0;
 
         for (i, b) in shared_blobs.iter().enumerate() {
             b.write().unwrap().set_index(i as u64).unwrap();
@@ -1126,25 +1128,27 @@ mod tests {
         let ledger_path = get_tmp_ledger_path("test_insert_data_blobs_basic");
         let ledger = DbLedger::open(&ledger_path).unwrap();
 
-        // Insert second blob, we're missing the first blob, so should return nothing
+        // Insert second blob, we're missing the first blob, so no consecutive
+        // blobs starting from slot 0, index 0 should exist.
         ledger.insert_data_blobs(vec![blobs[1]]).unwrap();
+        assert!(ledger.get_slot_entries(slot_height, 0).is_empty());
 
-        assert!(result.len() == 0);
         let meta = ledger
             .meta_cf
-            .get(&MetaCf::key(DEFAULT_SLOT_HEIGHT))
+            .get(&MetaCf::key(slot_height))
             .unwrap()
             .expect("Expected new metadata object to be created");
         assert!(meta.consumed == 0 && meta.received == 2);
 
         // Insert first blob, check for consecutive returned entries
-        let result = ledger.insert_data_blobs(vec![blobs[0]]).unwrap();
+        ledger.insert_data_blobs(vec![blobs[0]]).unwrap();
+        let result = ledger.get_slot_entries(slot_height, 0);
 
         assert_eq!(result, entries);
 
         let meta = ledger
             .meta_cf
-            .get(&MetaCf::key(DEFAULT_SLOT_HEIGHT))
+            .get(&MetaCf::key(slot_height))
             .unwrap()
             .expect("Expected new metadata object to exist");
         assert!(meta.consumed == 2 && meta.received == 2);
@@ -1158,6 +1162,7 @@ mod tests {
     fn test_insert_data_blobs_multiple() {
         let num_blobs = 10;
         let entries = make_tiny_test_entries(num_blobs);
+        let slot_height = 0;
         let shared_blobs = entries.to_shared_blobs();
         for (i, b) in shared_blobs.iter().enumerate() {
             b.write().unwrap().set_index(i as u64).unwrap();
@@ -1170,11 +1175,12 @@ mod tests {
 
         // Insert blobs in reverse, check for consecutive returned blobs
         for i in (0..num_blobs).rev() {
-            let result = ledger.insert_data_blobs(vec![blobs[i]]).unwrap();
+            ledger.insert_data_blobs(vec![blobs[i]]).unwrap();
+            let result = ledger.get_slot_entries(slot_height, 0);
 
             let meta = ledger
                 .meta_cf
-                .get(&MetaCf::key(DEFAULT_SLOT_HEIGHT))
+                .get(&MetaCf::key(slot_height))
                 .unwrap()
                 .expect("Expected metadata object to exist");
             if i != 0 {
@@ -1192,45 +1198,9 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_data_blobs_slots() {
-        let num_blobs = 10;
-        let entries = make_tiny_test_entries(num_blobs);
-        let shared_blobs = entries.to_shared_blobs();
-        for (i, b) in shared_blobs.iter().enumerate() {
-            b.write().unwrap().set_index(i as u64).unwrap();
-        }
-        let blob_locks: Vec<_> = shared_blobs.iter().map(|b| b.read().unwrap()).collect();
-        let blobs: Vec<&Blob> = blob_locks.iter().map(|b| &**b).collect();
-
-        let ledger_path = get_tmp_ledger_path("test_insert_data_blobs_slots");
-        let ledger = DbLedger::open(&ledger_path).unwrap();
-
-        // Insert last blob into next slot
-        let result = ledger
-            .insert_data_blobs(vec![*blobs.last().unwrap()])
-            .unwrap();
-        assert_eq!(result.len(), 0);
-
-        // Insert blobs into first slot, check for consecutive blobs
-        for i in (0..num_blobs - 1).rev() {
-            let result = ledger.insert_data_blobs(vec![blobs[i]]).unwrap();
-            let meta = ledger
-                .meta_cf
-                .get(&MetaCf::key(DEFAULT_SLOT_HEIGHT))
-                .unwrap()
-                .expect("Expected metadata object to exist");
-            if i != 0 {
-                assert_eq!(result.len(), 0);
-                assert!(meta.consumed == 0 && meta.received == num_blobs as u64);
-            } else {
-                assert_eq!(result, entries);
-                assert!(meta.consumed == num_blobs as u64 && meta.received == num_blobs as u64);
-            }
-        }
-
-        // Destroying database without closing it first is undefined behavior
-        drop(ledger);
-        DbLedger::destroy(&ledger_path).expect("Expected successful database destruction");
+    fn test_insert_slots() {
+        test_insert_data_blobs_slots("test_insert_data_blobs_slots_single", false);
+        test_insert_data_blobs_slots("test_insert_data_blobs_slots_bulk", true);
     }
 
     #[test]
@@ -1276,10 +1246,11 @@ mod tests {
     }
 
     #[test]
-    pub fn test_insert_data_blobs_bulk() {
-        let db_ledger_path = get_tmp_ledger_path("test_insert_data_blobs_bulk");
+    pub fn test_insert_data_blobs_consecutive() {
+        let db_ledger_path = get_tmp_ledger_path("test_insert_data_blobs_consecutive");
         {
             let db_ledger = DbLedger::open(&db_ledger_path).unwrap();
+            let slot = 0;
 
             // Write entries
             let num_entries = 20 as u64;
@@ -1288,28 +1259,32 @@ mod tests {
             for (i, b) in shared_blobs.iter().enumerate() {
                 let mut w_b = b.write().unwrap();
                 w_b.set_index(i as u64).unwrap();
-                w_b.set_slot(i as u64).unwrap();
+                w_b.set_slot(slot).unwrap();
             }
 
-            assert_eq!(
-                db_ledger
-                    .write_shared_blobs(shared_blobs.iter().skip(1).step_by(2))
-                    .unwrap(),
-                vec![]
-            );
+            db_ledger
+                .write_shared_blobs(shared_blobs.iter().skip(1).step_by(2))
+                .unwrap();
 
-            assert_eq!(
-                db_ledger
-                    .write_shared_blobs(shared_blobs.iter().step_by(2))
-                    .unwrap(),
-                original_entries
-            );
+            assert_eq!(db_ledger.get_slot_entries(0, 0), vec![]);
 
-            let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
+            let meta_key = MetaCf::key(slot);
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
-            assert_eq!(meta.consumed, num_entries);
-            assert_eq!(meta.received, num_entries);
+            assert_eq!(meta.received, 0);
+            assert_eq!(meta.consumed, 0);
+
+            db_ledger
+                .write_shared_blobs(shared_blobs.iter().step_by(2))
+                .unwrap();
+
+            assert_eq!(db_ledger.get_slot_entries(0, 0), original_entries,);
+
+            let meta_key = MetaCf::key(slot);
+            let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
+            assert_eq!(meta.received, num_entries + 1);
+            assert_eq!(meta.consumed, num_entries + 1);
         }
+
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
     }
 
@@ -1336,29 +1311,27 @@ mod tests {
                 w_b.set_slot(index).unwrap();
             }
 
-            assert_eq!(
-                db_ledger
-                    .write_shared_blobs(
-                        shared_blobs
-                            .iter()
-                            .skip(num_duplicates)
-                            .step_by(num_duplicates * 2)
-                    )
-                    .unwrap(),
-                vec![]
-            );
+            db_ledger
+                .write_shared_blobs(
+                    shared_blobs
+                        .iter()
+                        .skip(num_duplicates)
+                        .step_by(num_duplicates * 2),
+                )
+                .unwrap();
+
+            assert_eq!(db_ledger.get_slot_entries(0, 0), vec![]);
+
+            db_ledger
+                .write_shared_blobs(shared_blobs.iter().step_by(num_duplicates * 2))
+                .unwrap();
 
             let expected: Vec<_> = original_entries
                 .into_iter()
                 .step_by(num_duplicates)
                 .collect();
 
-            assert_eq!(
-                db_ledger
-                    .write_shared_blobs(shared_blobs.iter().step_by(num_duplicates * 2))
-                    .unwrap(),
-                expected,
-            );
+            assert_eq!(db_ledger.get_slot_entries(0, 0), expected,);
 
             let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
@@ -1461,4 +1434,48 @@ mod tests {
         DbLedger::destroy(&ledger_path).expect("Expected successful database destruction");
     }
 
+    fn test_insert_data_blobs_slots(name: &str, should_bulk_write: bool) {
+        let db_ledger_path = get_tmp_ledger_path(name);
+        {
+            let db_ledger = DbLedger::open(&db_ledger_path).unwrap();
+
+            // Write entries
+            let num_entries = 20 as u64;
+            let original_entries = make_tiny_test_entries(num_entries as usize);
+            let shared_blobs = original_entries.clone().to_shared_blobs();
+            for (i, b) in shared_blobs.iter().enumerate() {
+                let mut w_b = b.write().unwrap();
+                w_b.set_index(i as u64).unwrap();
+                w_b.set_slot(i as u64).unwrap();
+            }
+
+            if should_bulk_write {
+                db_ledger.write_shared_blobs(shared_blobs.iter()).unwrap();
+            } else {
+                for i in 0..num_entries {
+                    let i = i as usize;
+                    db_ledger
+                        .write_shared_blobs(&shared_blobs[i..i + 1])
+                        .unwrap();
+                }
+            }
+
+            for i in 0..num_entries - 1 {
+                assert_eq!(
+                    db_ledger.get_slot_entries(i, i)[0],
+                    original_entries[i as usize]
+                );
+
+                let meta_key = MetaCf::key(i);
+                let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
+                assert_eq!(meta.received, i + 1);
+                if i != 0 {
+                    assert!(meta.consumed == 0);
+                } else {
+                    assert!(meta.consumed == 1);
+                }
+            }
+        }
+        DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
+    }
 }
