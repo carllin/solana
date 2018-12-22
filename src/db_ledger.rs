@@ -9,6 +9,7 @@ use crate::packet::{Blob, SharedBlob, BLOB_HEADER_SIZE};
 use crate::result::{Error, Result};
 use bincode::{deserialize, serialize};
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
+use hashbrown::{HashMap, HashSet};
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBRawIterator, Options, WriteBatch, DB};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -123,10 +124,10 @@ pub struct SlotMeta {
     pub consumed: u64,
     // The entry height of the highest blob received for this slot.
     pub received: u64,
-    // The slot the blob with index == "consumed" is in
-    pub consumed_slot: u64,
-    // The slot the blob with index == "received" is in
-    pub received_slot: u64,
+    // The tick height of the latest tick in this slot in the range [0..consumed]
+    pub consumed_tick_height: u64,
+    // The tick height that marks the end of this slot
+    pub max_tick_height: u64,
 }
 
 impl SlotMeta {
@@ -134,8 +135,8 @@ impl SlotMeta {
         SlotMeta {
             consumed: 0,
             received: 0,
-            consumed_slot: 0,
-            received_slot: 0,
+            consumed_tick_height: 0,
+            max_tick_height: 0,
         }
     }
 }
@@ -153,6 +154,11 @@ impl MetaCf {
         let mut key = vec![0u8; 8];
         BigEndian::write_u64(&mut key[0..8], slot_height);
         key
+    }
+
+    pub fn get_slot_meta(&self, slot_height: u64) -> Result<Option<SlotMeta>> {
+        let key = Self::key(slot_height);
+        self.get(&key)
     }
 }
 
@@ -334,8 +340,8 @@ impl DbLedger {
         })
     }
 
-    pub fn meta(&self) -> Result<Option<SlotMeta>> {
-        self.meta_cf.get(&MetaCf::key(DEFAULT_SLOT_HEIGHT))
+    pub fn meta(&self, slot_index: u64) -> Result<Option<SlotMeta>> {
+        self.meta_cf.get(&MetaCf::key(slot_index))
     }
 
     pub fn destroy(ledger_path: &str) -> Result<()> {
@@ -393,142 +399,52 @@ impl DbLedger {
         self.write_blobs(&blobs)
     }
 
-    pub fn insert_data_blobs<I>(&self, new_blobs: I) -> Result<Vec<Entry>>
+    pub fn insert_data_blobs<I>(&self, new_blobs: I) -> Result<()>
     where
         I: IntoIterator,
         I::Item: Borrow<Blob>,
     {
-        let mut new_blobs: Vec<_> = new_blobs.into_iter().collect();
+        let mut write_batch = WriteBatch::default();
+        let mut prev_inserted_keys = HashSet::new();
+        // A map from slot_height to a 2-tuple of metadata: (working copy, backup copy),
+        // so we can detect changes to the slot metadata later
+        let mut slot_metas = HashMap::new();
+        for blob in new_blobs.into_iter() {
+            let blob_index = blob.index()?;
+            let blob_slot = blob.slot()?;
+            let blob_size = blob.size()?;
 
-        if new_blobs.is_empty() {
-            return Ok(vec![]);
+            // Check if we've already inserted the slot metadata for this blob's slot
+            let (slot_meta, slot_meta_backup) = slot_metas.entry(blob_slot).or_insert_with(|| {
+                // Store a 2-tuple of the metadata (working copy, backup copy)
+                if let Some(meta) = self.meta_cf.get_slot_meta(&self.db)? {
+                    (meta.clone(), Some(meta))
+                } else {
+                    (SlotMeta::new(), None)
+                }
+            });
+
+            let _ = self.insert_data_blob(
+                &blob,
+                &mut prev_inserted_keys,
+                &mut slot_meta,
+                &mut write_batch,
+            );
         }
 
-        new_blobs.sort_unstable_by(|b1, b2| {
-            b1.borrow()
-                .index()
-                .unwrap()
-                .cmp(&b2.borrow().index().unwrap())
-        });
-
-        let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
-
-        let mut should_write_meta = false;
-
-        let mut meta = {
-            if let Some(meta) = self.db.get_cf(self.meta_cf.handle(), &meta_key)? {
-                deserialize(&meta)?
-            } else {
-                should_write_meta = true;
-                SlotMeta::new()
-            }
-        };
-
-        // TODO: Handle if leader sends different blob for same index when the index > consumed
-        // The old window implementation would just replace that index.
-        let lowest_index = new_blobs[0].borrow().index()?;
-        let lowest_slot = new_blobs[0].borrow().slot()?;
-        let highest_index = new_blobs.last().unwrap().borrow().index()?;
-        let highest_slot = new_blobs.last().unwrap().borrow().slot()?;
-        if lowest_index < meta.consumed {
-            return Err(Error::DbLedgerError(DbLedgerError::BlobForIndexExists));
-        }
-
-        // Index is zero-indexed, while the "received" height starts from 1,
-        // so received = index + 1 for the same blob.
-        if highest_index >= meta.received {
-            meta.received = highest_index + 1;
-            meta.received_slot = highest_slot;
-            should_write_meta = true;
-        }
-
-        let mut consumed_queue = vec![];
-
-        if meta.consumed == lowest_index {
-            // Find the next consecutive block of blobs.
-            // TODO: account for consecutive blocks that
-            // span multiple slots
-            should_write_meta = true;
-            let mut index_into_blob = 0;
-            let mut current_index = lowest_index;
-            let mut current_slot = lowest_slot;
-            'outer: loop {
-                let entry: Entry = {
-                    // Try to find the next blob we're looking for in the new_blobs
-                    // vector
-                    let mut found_blob = None;
-                    while index_into_blob < new_blobs.len() {
-                        let new_blob = new_blobs[index_into_blob].borrow();
-                        let index = new_blob.index()?;
-
-                        // Skip over duplicate blobs with the same index and continue
-                        // until we either find the index we're looking for, or detect
-                        // that the index doesn't exist in the new_blobs vector.
-                        if index > current_index {
-                            break;
-                        }
-
-                        index_into_blob += 1;
-
-                        if index == current_index {
-                            found_blob = Some(new_blob);
-                        }
-                    }
-
-                    // If we found the blob in the new_blobs vector, process it, otherwise,
-                    // look for the blob in the database.
-                    if let Some(next_blob) = found_blob {
-                        current_slot = next_blob.slot()?;
-                        let serialized_entry_data = &next_blob.data
-                            [BLOB_HEADER_SIZE..BLOB_HEADER_SIZE + next_blob.size()?];
-                        // Verify entries can actually be reconstructed
-                        deserialize(serialized_entry_data).expect(
-                            "Blob made it past validation, so must be deserializable at this point",
-                        )
-                    } else {
-                        let key = DataCf::key(current_slot, current_index);
-                        let blob_data = {
-                            if let Some(blob_data) = self.data_cf.get(&key)? {
-                                blob_data
-                            } else if meta.consumed < meta.received {
-                                let key = DataCf::key(current_slot + 1, current_index);
-                                if let Some(blob_data) = self.data_cf.get(&key)? {
-                                    current_slot += 1;
-                                    blob_data
-                                } else {
-                                    break 'outer;
-                                }
-                            } else {
-                                break 'outer;
-                            }
-                        };
-                        deserialize(&blob_data[BLOB_HEADER_SIZE..])
-                            .expect("Blobs in database must be deserializable")
-                    }
-                };
-
-                consumed_queue.push(entry);
-                current_index += 1;
-                meta.consumed += 1;
-                meta.consumed_slot = current_slot;
+        // Check if any metadata was changed, if so, insert them into the write batch
+        for (slot_height, (meta, meta_backup)) in slot_metas {
+            if Some(&meta) != meta_backup.as_ref() {
+                write_batch.put_cf(
+                    self.meta_cf.handle(),
+                    &MetaCf::key(slot_height),
+                    &serialize(&meta)?,
+                )?;
             }
         }
 
-        // Commit Step: Atomic write both the metadata and the data
-        let mut batch = WriteBatch::default();
-        if should_write_meta {
-            batch.put_cf(self.meta_cf.handle(), &meta_key, &serialize(&meta)?)?;
-        }
-
-        for blob in new_blobs {
-            let blob = blob.borrow();
-            let key = DataCf::key(blob.slot()?, blob.index()?);
-            let serialized_blob_datas = &blob.data[..BLOB_HEADER_SIZE + blob.size()?];
-            batch.put_cf(self.data_cf.handle(), &key, serialized_blob_datas)?;
-        }
-
-        self.db.write(batch)?;
-        Ok(consumed_queue)
+        self.db.write(write_batch)?;
+        Ok(())
     }
 
     // Writes a list of sorted, consecutive broadcast blobs to the db_ledger
@@ -550,9 +466,7 @@ impl DbLedger {
         {
             let last = blobs.last().unwrap().read().unwrap();
             meta.consumed = last.index()? + 1;
-            meta.consumed_slot = last.slot()?;
-            meta.received = cmp::max(meta.received, last.index()? + 1);
-            meta.received_slot = cmp::max(meta.received_slot, last.index()?);
+            meta.received = max(meta.received, last.index()? + 1);
         }
 
         let mut batch = WriteBatch::default();
@@ -789,6 +703,70 @@ impl DbLedger {
         options.set_write_buffer_size(MAX_WRITE_BUFFER_SIZE);
         options.set_max_bytes_for_level_base(MAX_WRITE_BUFFER_SIZE as u64);
         options
+    }
+
+    // Insert a blob into a given write batch
+    fn insert_data_blob(
+        &self,
+        blob: &Blob,
+        prev_inserted_keys: &mut HashSet<(u64, u64)>,
+        slot_meta: &mut SlotMeta,
+        write_batch: &mut WriteBatch,
+    ) -> Result<()> {
+        let blob_index = blob.index()?;
+        let blob_slot = blob.slot()?;
+        let blob_size = blob.size()?;
+
+        if blob_index < slot_meta.consumed || prev_inserted_keys.contains(&(blob_slot, blob_index))
+        {
+            return Err(Error::DbLedgerError(DbLedgerError::BlobForIndexExists));
+        }
+
+        let new_consumed = {
+            if slot_meta.consumed == blob_index {
+                self.find_next_consumed(blob_slot, prev_inserted_keys, blob_index + 1)?
+            } else {
+                slot_meta.consumed
+            }
+        };
+
+        let key = DataCf::key(blob_slot, blob_index);
+        let serialized_blob_data = &blob.data[..BLOB_HEADER_SIZE + blob_size];
+
+        // Commit step: commit all changes to the mutable structures at once, or none at all.
+        // We don't want only some of these changes going through.
+        write_batch.put_cf(self.data_cf.handle(), &key, serialized_blob_data)?;
+        prev_inserted_keys.insert((blob_slot, blob_index));
+        // Index is zero-indexed, while the "received" height starts from 1,
+        // so received = index + 1 for the same blob.
+        slot_meta.received = max(blob_index + 1, slot_meta.received);
+        slot_meta.consumed = new_consumed;
+        Ok(())
+    }
+
+    pub fn find_next_consumed(
+        &self,
+        slot_height: u64,
+        prev_inserted_keys: &mut HashSet<(u64, u64)>,
+        mut current_consumed: u64,
+    ) -> Result<u64> {
+        'outer: loop {
+            // Try to find the next blob we're looking for in the prev_inserted_keys
+            if !prev_inserted_keys.contains(&(slot_height, current_consumed)) {
+                // Try to find the next blob we're looking for in the database
+                if self
+                    .data_cf
+                    .get_by_slot_index(slot_height, current_consumed)?
+                    .is_none()
+                {
+                    break;
+                }
+            }
+
+            current_consumed += 1;
+        }
+
+        Ok(current_consumed)
     }
 }
 
@@ -1249,8 +1227,6 @@ mod tests {
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
             assert_eq!(meta.consumed, num_entries);
             assert_eq!(meta.received, num_entries);
-            assert_eq!(meta.consumed_slot, num_entries - 1);
-            assert_eq!(meta.received_slot, num_entries - 1);
         }
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
     }
@@ -1306,8 +1282,6 @@ mod tests {
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
             assert_eq!(meta.consumed, num_entries);
             assert_eq!(meta.received, num_entries);
-            assert_eq!(meta.consumed_slot, num_entries - 1);
-            assert_eq!(meta.received_slot, num_entries - 1);
         }
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
     }
@@ -1336,8 +1310,6 @@ mod tests {
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
             assert_eq!(meta.consumed, num_entries);
             assert_eq!(meta.received, num_entries);
-            assert_eq!(meta.consumed_slot, num_entries - 1);
-            assert_eq!(meta.received_slot, num_entries - 1);
 
             for (i, b) in shared_blobs.iter().enumerate() {
                 let mut w_b = b.write().unwrap();
@@ -1352,8 +1324,6 @@ mod tests {
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
             assert_eq!(meta.consumed, 2 * num_entries);
             assert_eq!(meta.received, 2 * num_entries);
-            assert_eq!(meta.consumed_slot, 2 * num_entries - 1);
-            assert_eq!(meta.received_slot, 2 * num_entries - 1);
         }
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
     }
