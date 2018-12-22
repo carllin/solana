@@ -9,7 +9,10 @@ use crate::result::{Error, Result};
 use bincode::{deserialize, serialize};
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
 use hashbrown::{HashMap, HashSet};
-use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBRawIterator, Options, WriteBatch, DB};
+use rocksdb::{
+    ColumnFamily, ColumnFamilyDescriptor, DBIterator, DBRawIterator, Direction, IteratorMode,
+    Options, WriteBatch, DB,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use solana_sdk::hash::Hash;
@@ -456,7 +459,7 @@ impl DbLedger {
         Ok(())
     }
 
-    // Writes a list of sorted, consecutive broadcast blobs to the db_ledger
+    /// Writes a list of sorted, consecutive broadcast blobs to the db_ledger
     pub fn write_consecutive_blobs(&self, blobs: &[SharedBlob]) -> Result<()> {
         assert!(!blobs.is_empty());
 
@@ -692,6 +695,58 @@ impl DbLedger {
             max_missing,
         )
     }
+    /// Returns the entry vector for the slot starting with `blob_start_index`
+    pub fn get_slot_entries(slot_index: u64, blob_start_index: usize) -> Vec<Entry> {
+        // Find the next consecutive block of blobs.
+        let mut iter = self.db.iterator(IteratorMode::Start);
+        let consecutive_blobs =
+            DataCf::get_slot_consecutive_blobs(&mut iter, slot_height, blob_start_index);
+        deserialize_blobs(consecutive_blobs)
+    }
+
+    fn get_slot_consecutive_blobs(
+        iterator: &mut DBIterator,
+        slot_height: u64,
+        start_index: u64,
+    ) -> Vec<Box<[u8]>> {
+        let key = Self::key(slot_height, start_index);
+        iterator.set_mode(IteratorMode::From(&key, Direction::Forward));
+        let mut expected_index = start_index;
+        let mut results = vec![];
+
+        for (key, value) in iterator.by_ref() {
+            let slot = Self::slot_height_from_key(&key)
+                .expect("Expect to be able to get slot height from key in database");
+            if slot != slot_height {
+                break;
+            }
+
+            let index = Self::index_from_key(&key)
+                .expect("Expect to be able to get index from key in database");
+            if index != expected_index {
+                break;
+            }
+
+            results.push(value);
+            expected_index += 1;
+        }
+
+        results
+    }
+
+    fn deserialize_blobs(blob_datas: Vec<Box<[u8]>>) -> Vec<Entry> {
+        let entries = blob_datas
+            .iter()
+            .map(|blob_data| {
+                let serialized_entry_data = &blob_data[BLOB_HEADER_SIZE..];
+                let entry: Entry = deserialize(serialized_entry_data)
+                    .expect("Ledger should only contain well formed data");
+                entry
+            })
+            .collect();
+
+        entries
+    }
 
     fn get_cf_options() -> Options {
         let mut options = Options::default();
@@ -714,7 +769,7 @@ impl DbLedger {
         options
     }
 
-    // Insert a blob into a given write batch
+    /// Insert a blob into ledger, updating the slot_meta if necessary
     fn insert_data_blob(
         &self,
         blob: &Blob,
@@ -762,8 +817,8 @@ impl DbLedger {
         Ok(())
     }
 
-    // Returns the next consumed index and the number of ticks in the new consumed
-    // range
+    /// Returns the next consumed index and the number of ticks in the new consumed
+    /// range
     pub fn find_next_consumed(
         &self,
         slot_height: u64,
