@@ -55,6 +55,9 @@ pub struct ReplayStage {
     ledger_signal_sender: SyncSender<bool>,
 }
 
+// TODO: ReplayStage needs to wait for signals from db_ledger and directly
+// query db_ledger for updates.
+// Issue: https://github.com/solana-labs/solana/issues/2444
 impl ReplayStage {
     /// Process entry blobs, already in order
     #[allow(clippy::too_many_arguments)]
@@ -436,7 +439,7 @@ mod test {
 
             // Set up the replay stage
             let (rotation_sender, rotation_receiver) = channel();
-            let meta = db_ledger.meta().unwrap().unwrap();
+            let meta = db_ledger.meta(0).unwrap().unwrap();
             let exit = Arc::new(AtomicBool::new(false));
             let (replay_stage, ledger_writer_recv) = ReplayStage::new(
                 my_id,
@@ -666,7 +669,7 @@ mod test {
                 )
                 .unwrap();
             let meta = db_ledger
-                .meta()
+                .meta(0)
                 .unwrap()
                 .expect("First slot metadata must exist");
 
