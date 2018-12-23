@@ -2,23 +2,20 @@
 //! Proof of History ledger as well as iterative read, append write, and random
 //! access read to a persistent file-based ledger.
 
-use crate::entry::{create_ticks, reconstruct_entries_from_blobs, Entry};
+use crate::entry::{reconstruct_entries_from_blobs, Entry};
 use crate::genesis_block::GenesisBlock;
 use crate::packet::{Blob, SharedBlob, BLOB_HEADER_SIZE};
 use crate::result::{Error, Result};
 use bincode::{deserialize, serialize};
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
-use hashbrown::{HashMap, HashSet};
-use rocksdb::{
-    ColumnFamily, ColumnFamilyDescriptor, DBIterator, DBRawIterator, Direction, IteratorMode,
-    Options, WriteBatch, DB,
-};
+use hashbrown::HashMap;
+use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBRawIterator, Options, WriteBatch, DB};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use solana_sdk::hash::Hash;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, KeypairUtil};
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::cmp;
 use std::fs;
 use std::io;
@@ -408,11 +405,12 @@ impl DbLedger {
         I::Item: Borrow<Blob>,
     {
         let mut write_batch = WriteBatch::default();
-        let mut prev_inserted_keys = HashSet::new();
         // A map from slot_height to a 2-tuple of metadata: (working copy, backup copy),
         // so we can detect changes to the slot metadata later
         let mut slot_metas = HashMap::new();
-        for blob in new_blobs.into_iter() {
+        let new_blobs: Vec<_> = new_blobs.into_iter().collect();
+        let mut prev_inserted_blob_datas = HashMap::new();
+        for blob in new_blobs.iter() {
             let blob = blob.borrow();
             let blob_slot = blob.slot()?;
 
@@ -430,15 +428,26 @@ impl DbLedger {
                 }
             });
 
-            let _ =
-                self.insert_data_blob(blob, &mut prev_inserted_keys, slot_meta, &mut write_batch);
+            let _ = self.insert_data_blob(
+                blob,
+                &mut prev_inserted_blob_datas,
+                slot_meta,
+                &mut write_batch,
+            );
         }
 
         let mut should_signal = false;
-        // Check if any metadata was changed, if so, insert them into the write batch
+        // Check if any metadata was changed, if so, insert the new version of the
+        // metadata into the write batch
         for (slot_height, (meta, meta_backup)) in slot_metas {
             if Some(&meta) != meta_backup.as_ref() {
-                if meta_backup.is_none() || meta_backup.unwrap().consumed != meta.consumed {
+                // We should signal that there are updates if either:
+                // 1) The slot didn't exist in the database before, and now we have a consecutive
+                // block for that slot
+                // 2) The slot did exist, but now we have a consecutive block for that slot
+                if meta_backup.is_none() && meta.consumed != 0
+                    || meta_backup.is_some() && meta_backup.unwrap().consumed != meta.consumed
+                {
                     should_signal = true;
                 }
                 write_batch.put_cf(
@@ -478,7 +487,7 @@ impl DbLedger {
         {
             let last = blobs.last().unwrap().read().unwrap();
             meta.consumed = last.index()? + 1;
-            meta.received = max(meta.received, last.index()? + 1);
+            meta.received = cmp::max(meta.received, last.index()? + 1);
         }
 
         let mut batch = WriteBatch::default();
@@ -696,50 +705,31 @@ impl DbLedger {
         )
     }
     /// Returns the entry vector for the slot starting with `blob_start_index`
-    pub fn get_slot_entries(&self, slot_index: u64, blob_start_index: u64) -> Vec<Entry> {
-        // Find the next consecutive block of blobs.
-        let mut iter = self.db.iterator(IteratorMode::Start);
-        let consecutive_blobs =
-            self.get_slot_consecutive_blobs(&mut iter, slot_index, blob_start_index);
-        Self::deserialize_blobs(consecutive_blobs)
-    }
-
-    fn get_slot_consecutive_blobs(
+    pub fn get_slot_entries(
         &self,
-        iterator: &mut DBIterator,
-        slot_height: u64,
-        start_index: u64,
-    ) -> Vec<Box<[u8]>> {
-        let key = DataCf::key(slot_height, start_index);
-        iterator.set_mode(IteratorMode::From(&key, Direction::Forward));
-        let mut expected_index = start_index;
-        let mut results = vec![];
-
-        for (key, value) in iterator.by_ref() {
-            let slot = DataCf::slot_height_from_key(&key)
-                .expect("Expect to be able to get slot height from key in database");
-            if slot != slot_height {
-                break;
-            }
-
-            let index = DataCf::index_from_key(&key)
-                .expect("Expect to be able to get index from key in database");
-            if index != expected_index {
-                break;
-            }
-
-            results.push(value);
-            expected_index += 1;
-        }
-
-        results
+        slot_index: u64,
+        blob_start_index: u64,
+        max_entries: u64,
+    ) -> Result<Vec<Entry>> {
+        println!("get_slot_entries {} {}", slot_index, blob_start_index);
+        // Find the next consecutive block of blobs.
+        let consecutive_blobs = self.get_slot_consecutive_blobs(
+            slot_index,
+            &HashMap::new(),
+            blob_start_index,
+            Some(max_entries),
+        )?;
+        Ok(Self::deserialize_blobs(consecutive_blobs))
     }
 
-    fn deserialize_blobs(blob_datas: Vec<Box<[u8]>>) -> Vec<Entry> {
+    fn deserialize_blobs<I>(blob_datas: Vec<I>) -> Vec<Entry>
+    where
+        I: Borrow<[u8]>,
+    {
         let entries = blob_datas
             .iter()
             .map(|blob_data| {
-                let serialized_entry_data = &blob_data[BLOB_HEADER_SIZE..];
+                let serialized_entry_data = &blob_data.borrow()[BLOB_HEADER_SIZE..];
                 let entry: Entry = deserialize(serialized_entry_data)
                     .expect("Ledger should only contain well formed data");
                 entry
@@ -771,10 +761,10 @@ impl DbLedger {
     }
 
     /// Insert a blob into ledger, updating the slot_meta if necessary
-    fn insert_data_blob(
+    fn insert_data_blob<'a>(
         &self,
-        blob: &Blob,
-        prev_inserted_keys: &mut HashSet<(u64, u64)>,
+        blob: &'a Blob,
+        prev_inserted_blob_datas: &mut HashMap<(u64, u64), &'a [u8]>,
         slot_meta: &mut SlotMeta,
         write_batch: &mut WriteBatch,
     ) -> Result<()> {
@@ -782,22 +772,50 @@ impl DbLedger {
         let blob_slot = blob.slot()?;
         let blob_size = blob.size()?;
 
-        if blob_index < slot_meta.consumed || prev_inserted_keys.contains(&(blob_slot, blob_index))
+        println!(
+            "inserting data blob, slot: {}, index: {}",
+            blob_slot, blob_index
+        );
+        if blob_index < slot_meta.consumed
+            || prev_inserted_blob_datas.contains_key(&(blob_slot, blob_index))
         {
             return Err(Error::DbLedgerError(DbLedgerError::BlobForIndexExists));
         }
 
         let (new_consumed, new_consumed_ticks) = {
             if slot_meta.consumed == blob_index {
-                let (consumed, mut num_ticks) =
-                    self.find_next_consumed(blob_slot, prev_inserted_keys, blob_index + 1)?;
+                let blob_datas = self.get_slot_consecutive_blobs(
+                    blob_slot,
+                    prev_inserted_blob_datas,
+                    // Skip this blob_index because we haven't inserted the current into the
+                    // database or prev_inserted_blob_datas
+                    blob_index + 1,
+                    None,
+                )?;
 
-                // Reconstruct entry to check if it's a tick
+                let mut new_consumed_ticks = 0;
+                // Check all the consecutive blobs for ticks
+                for blob_data in blob_datas.iter() {
+                    let serialized_entry_data = &blob_data[BLOB_HEADER_SIZE..];
+                    let entry: Entry = deserialize(serialized_entry_data).expect(
+                        "Blob made it past validation, so must be deserializable at this point",
+                    );
+                    if entry.is_tick() {
+                        new_consumed_ticks += 1;
+                    }
+                }
+
+                // Reconstruct entry from the blob we are inserting to check if it's a tick
                 let (_, is_tick) = reconstruct_entries_from_blobs(vec![blob]).expect(
                     "Blob made it past validation, so must be deserializable at this point",
                 );
-                num_ticks += is_tick;
-                (consumed, num_ticks)
+                new_consumed_ticks += is_tick;
+                (
+                    // Add one because we skipped this current blob when calling
+                    // get_slot_consecutive_blobs() earlier
+                    slot_meta.consumed + blob_datas.len() as u64 + 1,
+                    new_consumed_ticks,
+                )
             } else {
                 (slot_meta.consumed, 0)
             }
@@ -809,10 +827,10 @@ impl DbLedger {
         // Commit step: commit all changes to the mutable structures at once, or none at all.
         // We don't want only some of these changes going through.
         write_batch.put_cf(self.data_cf.handle(), &key, serialized_blob_data)?;
-        prev_inserted_keys.insert((blob_slot, blob_index));
+        prev_inserted_blob_datas.insert((blob_slot, blob_index), serialized_blob_data);
         // Index is zero-indexed, while the "received" height starts from 1,
         // so received = index + 1 for the same blob.
-        slot_meta.received = max(blob_index + 1, slot_meta.received);
+        slot_meta.received = cmp::max(blob_index + 1, slot_meta.received);
         slot_meta.consumed = new_consumed;
         slot_meta.consumed_ticks += new_consumed_ticks;
         Ok(())
@@ -820,38 +838,35 @@ impl DbLedger {
 
     /// Returns the next consumed index and the number of ticks in the new consumed
     /// range
-    pub fn find_next_consumed(
+    fn get_slot_consecutive_blobs<'a>(
         &self,
-        slot_height: u64,
-        prev_inserted_keys: &HashSet<(u64, u64)>,
-        mut current_consumed: u64,
-    ) -> Result<(u64, u64)> {
-        let mut num_ticks = 0;
-        'outer: loop {
-            // Try to find the next blob we're looking for in the prev_inserted_keys
-            if !prev_inserted_keys.contains(&(slot_height, current_consumed)) {
+        slot_index: u64,
+        prev_inserted_blob_datas: &HashMap<(u64, u64), &'a [u8]>,
+        mut current_index: u64,
+        max_blobs: Option<u64>,
+    ) -> Result<Vec<Cow<'a, [u8]>>> {
+        let mut blobs: Vec<Cow<[u8]>> = vec![];
+        loop {
+            if Some(blobs.len() as u64) == max_blobs {
+                break;
+            }
+            // Try to find the next blob we're looking for in the prev_inserted_blob_datas
+            if let Some(prev_blob_data) = prev_inserted_blob_datas.get(&(slot_index, current_index))
+            {
+                blobs.push(Cow::Borrowed(*prev_blob_data));
+            } else if let Some(blob_data) =
+                self.data_cf.get_by_slot_index(slot_index, current_index)?
+            {
                 // Try to find the next blob we're looking for in the database
-                if let Some(blob_data) = self
-                    .data_cf
-                    .get_by_slot_index(slot_height, current_consumed)?
-                {
-                    // Check if it's a tick
-                    let serialized_entry_data = &blob_data[BLOB_HEADER_SIZE..];
-                    let entry: Entry = deserialize(serialized_entry_data).expect(
-                        "Blob made it past validation, so must be deserializable at this point",
-                    );
-                    if entry.is_tick() {
-                        num_ticks += 1;
-                    }
-                } else {
-                    break;
-                }
+                blobs.push(Cow::Owned(blob_data));
+            } else {
+                break;
             }
 
-            current_consumed += 1;
+            current_index += 1;
         }
 
-        Ok((current_consumed, num_ticks))
+        Ok(blobs)
     }
 }
 
@@ -1000,6 +1015,11 @@ mod tests {
     use crate::entry::{make_tiny_test_entries, make_tiny_test_entries_from_id, EntrySlice};
     use crate::packet::index_blobs;
     use solana_sdk::hash::Hash;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::channel;
+    use std::thread::sleep;
+    use std::thread::{self, Builder, JoinHandle};
+    use std::time::Duration;
 
     #[test]
     fn test_put_get_simple() {
@@ -1133,7 +1153,7 @@ mod tests {
         // Insert second blob, we're missing the first blob, so no consecutive
         // blobs starting from slot 0, index 0 should exist.
         ledger.insert_data_blobs(vec![blobs[1]]).unwrap();
-        assert!(ledger.get_slot_entries(slot_height, 0).is_empty());
+        assert!(ledger.get_slot_entries(slot_height, 0).unwrap().is_empty());
 
         let meta = ledger
             .meta_cf
@@ -1144,7 +1164,7 @@ mod tests {
 
         // Insert first blob, check for consecutive returned entries
         ledger.insert_data_blobs(vec![blobs[0]]).unwrap();
-        let result = ledger.get_slot_entries(slot_height, 0);
+        let result = ledger.get_slot_entries(slot_height, 0).unwrap();
 
         assert_eq!(result, entries);
 
@@ -1153,7 +1173,8 @@ mod tests {
             .get(&MetaCf::key(slot_height))
             .unwrap()
             .expect("Expected new metadata object to exist");
-        assert!(meta.consumed == 2 && meta.received == 2);
+        assert_eq!(meta.consumed, 2);
+        assert_eq!(meta.received, 2);
 
         // Destroying database without closing it first is undefined behavior
         drop(ledger);
@@ -1178,7 +1199,7 @@ mod tests {
         // Insert blobs in reverse, check for consecutive returned blobs
         for i in (0..num_blobs).rev() {
             ledger.insert_data_blobs(vec![blobs[i]]).unwrap();
-            let result = ledger.get_slot_entries(slot_height, 0);
+            let result = ledger.get_slot_entries(slot_height, 0).unwrap();
 
             let meta = ledger
                 .meta_cf
@@ -1268,23 +1289,23 @@ mod tests {
                 .write_shared_blobs(shared_blobs.iter().skip(1).step_by(2))
                 .unwrap();
 
-            assert_eq!(db_ledger.get_slot_entries(0, 0), vec![]);
+            assert_eq!(db_ledger.get_slot_entries(0, 0).unwrap(), vec![]);
 
             let meta_key = MetaCf::key(slot);
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
-            assert_eq!(meta.received, 0);
+            assert_eq!(meta.received, num_entries);
             assert_eq!(meta.consumed, 0);
 
             db_ledger
                 .write_shared_blobs(shared_blobs.iter().step_by(2))
                 .unwrap();
 
-            assert_eq!(db_ledger.get_slot_entries(0, 0), original_entries,);
+            assert_eq!(db_ledger.get_slot_entries(0, 0).unwrap(), original_entries,);
 
             let meta_key = MetaCf::key(slot);
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
-            assert_eq!(meta.received, num_entries + 1);
-            assert_eq!(meta.consumed, num_entries + 1);
+            assert_eq!(meta.received, num_entries);
+            assert_eq!(meta.consumed, num_entries);
         }
 
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
@@ -1310,7 +1331,6 @@ mod tests {
                 let index = (i / 2) as u64;
                 let mut w_b = b.write().unwrap();
                 w_b.set_index(index).unwrap();
-                w_b.set_slot(index).unwrap();
             }
 
             db_ledger
@@ -1322,7 +1342,7 @@ mod tests {
                 )
                 .unwrap();
 
-            assert_eq!(db_ledger.get_slot_entries(0, 0), vec![]);
+            assert_eq!(db_ledger.get_slot_entries(0, 0).unwrap(), vec![]);
 
             db_ledger
                 .write_shared_blobs(shared_blobs.iter().step_by(num_duplicates * 2))
@@ -1333,7 +1353,7 @@ mod tests {
                 .step_by(num_duplicates)
                 .collect();
 
-            assert_eq!(db_ledger.get_slot_entries(0, 0), expected,);
+            assert_eq!(db_ledger.get_slot_entries(0, 0).unwrap(), expected,);
 
             let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
@@ -1436,6 +1456,150 @@ mod tests {
         DbLedger::destroy(&ledger_path).expect("Expected successful database destruction");
     }
 
+    #[test]
+    pub fn test_new_blobs_signal() {
+        let entries = make_tiny_test_entries(2);
+        let shared_blobs = entries.to_shared_blobs();
+        let slot_height = 0;
+
+        for (i, b) in shared_blobs.iter().enumerate() {
+            b.write().unwrap().set_index(i as u64).unwrap();
+        }
+
+        let blob_locks: Vec<_> = shared_blobs.iter().map(|b| b.read().unwrap()).collect();
+        let blobs: Vec<&Blob> = blob_locks.iter().map(|b| &**b).collect();
+
+        let ledger_path = get_tmp_ledger_path("test_insert_data_blobs_basic");
+        let ledger = Arc::new(DbLedger::open(&ledger_path).unwrap());
+
+        // Make new thread to listen for signal
+        let (sender, recvr) = channel();
+        let ledger_clone = ledger.clone();
+        let blobs_signal = &ledger_clone.new_blobs_signal;
+        let t_signal_receiver = Builder::new()
+            .name("test_new_blobs_signal".to_string())
+            .spawn(move || {
+                let (cvar, lock) = &*blobs_signal;
+                loop {
+                    let mut has_updates = lock.lock().unwrap();
+                    // Check boolean predicate to protect against spurious wakeups
+                    while !*has_updates {
+                        has_updates = cvar.wait(has_updates).unwrap();
+                    }
+
+                    sender.send(1).unwrap();
+                    *has_updates = false;
+                }
+            })
+            .unwrap();
+
+        // Insert second blob, we're missing the first blob, so no consecutive
+        // blobs starting from slot 0, index 0 should exist.
+        ledger.insert_data_blobs(vec![blobs[1]]).unwrap();
+        let timer = Duration::new(1, 0);
+        assert!(recvr.recv_timeout(timer).is_err());
+        // Insert first blob, now we've made a consecutive block
+        ledger.insert_data_blobs(vec![blobs[0]]).unwrap();
+        // Wait to get notified of update, should only be one update
+        assert!(recvr.recv_timeout(timer).is_ok());
+        assert!(recvr.try_recv().is_err());
+
+        // Send batch of updates where each slot is missing blob index == slot index
+        let num_slots = 10;
+        let mut all_blobs = vec![];
+        for slot_index in (1..num_slots + 1) {
+            let entries = make_tiny_test_entries(num_slots);
+            let mut blobs = entries.to_blobs();
+            for (i, ref mut b) in blobs.iter_mut().enumerate() {
+                if i < slot_index {
+                    b.set_index(i as u64).unwrap();
+                } else {
+                    b.set_index(i as u64 + 1).unwrap();
+                }
+                b.set_slot(slot_index as u64).unwrap();
+            }
+
+            all_blobs.extend(blobs);
+        }
+
+        ledger.insert_data_blobs(all_blobs.iter()).unwrap();
+
+        // Wait to get notified of update, should only be one update because there was only
+        // one batch insert, consecutive blobs were formed because we inserted the zero-indexed
+        // blob for each of the new slots
+        assert!(recvr.recv_timeout(timer).is_ok());
+        assert!(recvr.try_recv().is_err());
+
+        // Insert a blob for each slot that doesn't make a consecutive block, we
+        // should get no updates
+        let all_blobs: Vec<_> = (1..num_slots + 1)
+            .map(|slot_index| {
+                let entries = make_tiny_test_entries(1);
+                let mut blob = entries[0].to_blob();
+                blob.set_index(2 * num_slots as u64).unwrap();
+                blob.set_slot(slot_index as u64).unwrap();
+                blob
+            })
+            .collect();
+
+        ledger.insert_data_blobs(all_blobs.iter()).unwrap();
+        assert!(recvr.recv_timeout(timer).is_err());
+
+        // For slots 1..num_slots/2, fill in the holes in one batch insertion,
+        // so we should only get one signal
+        let all_blobs: Vec<_> = (1..num_slots / 2)
+            .map(|slot_index| {
+                let entries = make_tiny_test_entries(1);
+                let mut blob = entries[0].to_blob();
+                blob.set_index(slot_index as u64).unwrap();
+                blob.set_slot(slot_index as u64).unwrap();
+                blob
+            })
+            .collect();
+
+        ledger.insert_data_blobs(all_blobs.iter()).unwrap();
+        assert!(recvr.recv_timeout(timer).is_ok());
+        assert!(recvr.try_recv().is_err());
+
+        // Fill in the holes for each of the remaining slots, we should get a single update
+        // for each
+        for slot_index in (num_slots / 2..num_slots) {
+            let entries = make_tiny_test_entries(1);
+            let mut blob = entries[0].to_blob();
+            blob.set_index(slot_index as u64).unwrap();
+            blob.set_slot(slot_index as u64).unwrap();
+            ledger.insert_data_blobs(vec![blob]).unwrap();
+            assert!(recvr.recv_timeout(timer).is_ok());
+            assert!(recvr.try_recv().is_err());
+        }
+
+        // Shut down the t_signal_receiver thread
+        drop(recvr);
+        *ledger.new_blobs_signal.1.lock().unwrap() = true;
+
+        loop {
+            ledger.new_blobs_signal.0.notify_all();
+            let has_update = ledger.new_blobs_signal.1.lock();
+            // Lock could be poisoned if thread has already exited while holding the lock.
+            // Otherwise, confirm that the thread got woken up by the signal and will
+            // thus exit upon detecting the dropped channel.
+            if has_update.is_err() || !*has_update.unwrap() {
+                // Wait for confirmation that thread is no longer blocked on
+                // condition variable, then break
+                break;
+            }
+            sleep(Duration::from_millis(100));
+        }
+
+        // Wait for thread to exit with error because the send channel was dropped
+        // thread belonging to db_ledger were destroyed
+        assert!(t_signal_receiver.join().is_err());
+
+        // Destroying database without closing it first is undefined behavior
+        drop(ledger);
+        DbLedger::destroy(&ledger_path).expect("Expected successful database destruction");
+    }
+
     fn test_insert_data_blobs_slots(name: &str, should_bulk_write: bool) {
         let db_ledger_path = get_tmp_ledger_path(name);
         {
@@ -1464,7 +1628,7 @@ mod tests {
 
             for i in 0..num_entries - 1 {
                 assert_eq!(
-                    db_ledger.get_slot_entries(i, i)[0],
+                    db_ledger.get_slot_entries(i, i).unwrap()[0],
                     original_entries[i as usize]
                 );
 
