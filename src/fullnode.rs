@@ -187,7 +187,7 @@ impl Fullnode {
         }
 
         // Get the scheduled leader
-        let (scheduled_leader, slot_index) = bank
+        let (scheduled_leader, slot_height) = bank
             .get_current_leader()
             .expect("Leader not known after processing bank");
 
@@ -224,12 +224,13 @@ impl Fullnode {
         let (to_leader_sender, to_leader_receiver) = channel();
         let (to_validator_sender, to_validator_receiver) = channel();
 
-        let blob_index = Self::get_consumed_for_slot(&db_ledger, slot_index);
+        let blob_index = Self::get_consumed_for_slot(&db_ledger, slot_height);
 
         let (tvu, blob_sender) = Tvu::new(
             voting_keypair_option,
             &bank,
             entry_height,
+            blob_index,
             last_entry_id,
             &cluster_info,
             sockets,
@@ -259,7 +260,7 @@ impl Fullnode {
                 .try_clone()
                 .expect("Failed to clone broadcast socket"),
             cluster_info.clone(),
-            slot_index,
+            slot_height,
             blob_index,
             config.sigverify_disabled,
             max_tick_height,
@@ -313,7 +314,7 @@ impl Fullnode {
         // in the active set, then the leader scheduler will pick the same leader again, so
         // check for that
         if scheduled_leader == self.id {
-            let (last_entry_id, entry_height) = self.node_services.tvu.get_state();
+            let last_entry_id = self.node_services.tvu.get_state();
             self.validator_to_leader(self.bank.tick_height(), last_entry_id);
             Ok(())
         } else {
@@ -336,7 +337,7 @@ impl Fullnode {
             let ls_lock = self.bank.leader_scheduler.read().unwrap();
             ls_lock.max_height_for_leader(tick_height + 1)
         };
-        let (_, slot_index) = self
+        let (_, slot_height) = self
             .bank
             .get_current_leader()
             .expect("Leader must be known during leader rotation");
@@ -355,7 +356,7 @@ impl Fullnode {
             self.cluster_info.clone(),
             self.sigverify_disabled,
             max_tick_height,
-            slot_index,
+            slot_height,
             0,
             &last_id,
             self.id,
@@ -457,8 +458,8 @@ impl Fullnode {
         (genesis_block, Arc::new(db_ledger), l_sender, l_receiver)
     }
 
-    fn get_consumed_for_slot(db_ledger: &DbLedger, slot_index: u64) -> u64 {
-        let meta = db_ledger.meta(slot_index).expect("Database error");
+    fn get_consumed_for_slot(db_ledger: &DbLedger, slot_height: u64) -> u64 {
+        let meta = db_ledger.meta(slot_height).expect("Database error");
         if let Some(meta) = meta {
             meta.consumed
         } else {

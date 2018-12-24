@@ -4,7 +4,7 @@
 
 use crate::entry::Entry;
 use crate::genesis_block::GenesisBlock;
-use crate::leader_scheduler::{DEFAULT_BOOTSTRAP_HEIGHT, TICKS_PER_BLOCK};
+use crate::leader_scheduler::{DEFAULT_BOOTSTRAP_HEIGHT, DEFAULT_TICKS_PER_SLOT};
 use crate::packet::{Blob, SharedBlob, BLOB_HEADER_SIZE};
 use crate::result::{Error, Result};
 use bincode::{deserialize, serialize};
@@ -320,12 +320,12 @@ impl LedgerColumnFamilyRaw for ErasureCf {
 pub struct DbLedger {
     // Underlying database is automatically closed in the Drop implementation of DB
     db: Arc<DB>,
-    pub meta_cf: MetaCf,
-    pub data_cf: DataCf,
-    pub erasure_cf: ErasureCf,
-    pub new_blobs_signals: Vec<SyncSender<bool>>,
-    pub ticks_per_block: u64,
-    pub num_bootstrap_ticks: u64,
+    meta_cf: MetaCf,
+    data_cf: DataCf,
+    erasure_cf: ErasureCf,
+    new_blobs_signals: Vec<SyncSender<bool>>,
+    ticks_per_block: u64,
+    num_bootstrap_ticks: u64,
 }
 
 // TODO: Once we support a window that knows about different leader
@@ -372,7 +372,7 @@ impl DbLedger {
 
         // TODO: make these constructor arguments
         // Issue: https://github.com/solana-labs/solana/issues/2458
-        let ticks_per_block = TICKS_PER_BLOCK;
+        let ticks_per_block = DEFAULT_TICKS_PER_SLOT;
         let num_bootstrap_ticks = DEFAULT_BOOTSTRAP_HEIGHT;
         Ok(DbLedger {
             db,
@@ -489,6 +489,10 @@ impl DbLedger {
                         // inserting a new slot
                         (Rc::new(RefCell::new(meta.clone())), None)
                     } else {
+                        println!(
+                            "blob_slot index: {}, ct: {}",
+                            blob_slot, meta.consumed_ticks
+                        );
                         (Rc::new(RefCell::new(meta.clone())), Some(meta))
                     }
                 } else {
@@ -499,6 +503,22 @@ impl DbLedger {
             });
 
             let slot_meta = &mut entry.0.borrow_mut();
+
+            // This slot is full, skip the bogus blob
+            if slot_meta.contains_all_ticks(
+                blob_slot,
+                self.num_bootstrap_ticks,
+                self.ticks_per_block,
+            ) {
+                println!(
+                    "cat: bs: {}, bi: {}, ct: {}",
+                    blob_slot,
+                    blob.index(),
+                    slot_meta.consumed_ticks
+                );
+                continue;
+            }
+
             let entries = self.insert_data_blob(
                 blob,
                 &mut prev_inserted_blob_datas,
@@ -1122,6 +1142,38 @@ impl DbLedger {
 
         Ok(blobs)
     }
+
+    // Handle special case of writing genesis blobs. For instance, the first two entries
+    // don't count as ticks, even if they're empty entries
+    fn write_genesis_blobs(&self, blobs: &[Blob]) -> Result<()> {
+        // TODO: change bootstrap height to number of slots
+        let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
+        let mut bootstrap_meta = SlotMeta::new(0, self.num_bootstrap_ticks / self.ticks_per_block);
+        let last = blobs.last().unwrap();
+        let num_ending_ticks = blobs.iter().skip(2).fold(0, |tick_count, blob| {
+            let entry: Entry = deserialize(&blob.data[BLOB_HEADER_SIZE..])
+                .expect("Blob has to be deseriablizable");
+            tick_count + entry.is_tick() as u64
+        });
+        bootstrap_meta.consumed = last.index() + 1;
+        bootstrap_meta.received = last.index() + 1;
+        bootstrap_meta.is_trunk = true;
+        bootstrap_meta.consumed_ticks = num_ending_ticks;
+
+        let mut batch = WriteBatch::default();
+        batch.put_cf(
+            self.meta_cf.handle(),
+            &meta_key,
+            &serialize(&bootstrap_meta)?,
+        )?;
+        for blob in blobs {
+            let key = DataCf::key(blob.slot(), blob.index());
+            let serialized_blob_datas = &blob.data[..BLOB_HEADER_SIZE + blob.size()];
+            batch.put_cf(self.data_cf.handle(), &key, serialized_blob_datas)?;
+        }
+        self.db.write(batch)?;
+        Ok(())
+    }
 }
 
 // TODO: all this goes away with Blocktree
@@ -1194,7 +1246,7 @@ where
         })
         .collect();
 
-    db_ledger.write_blobs(&blobs[..])?;
+    db_ledger.write_genesis_blobs(&blobs[..])?;
     Ok(())
 }
 
@@ -1750,8 +1802,7 @@ mod tests {
         let (mut ledger, _, recvr) = DbLedger::open_with_signal(&ledger_path).unwrap();
         let ticks_per_block = 10;
         let num_bootstrap_ticks = 10;
-        let blocks_per_slot = 1;
-        let config = DbLedgerConfig::new(num_bootstrap_ticks, ticks_per_block, blocks_per_slot);
+        let config = DbLedgerConfig::new(num_bootstrap_ticks, ticks_per_block);
         let ledger = Arc::new(DbLedger::open_config(&ledger_path, &config).unwrap());
 
         // Create ticks for slot 0

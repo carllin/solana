@@ -55,9 +55,6 @@ pub struct ReplayStage {
     ledger_signal_sender: SyncSender<bool>,
 }
 
-// TODO: ReplayStage needs to wait for signals from db_ledger and directly
-// query db_ledger for updates.
-// Issue: https://github.com/solana-labs/solana/issues/2444
 impl ReplayStage {
     /// Process entry blobs, already in order
     #[allow(clippy::too_many_arguments)]
@@ -67,7 +64,7 @@ impl ReplayStage {
         cluster_info: &Arc<RwLock<ClusterInfo>>,
         voting_keypair: Option<&Arc<VotingKeypair>>,
         ledger_entry_sender: &EntrySender,
-        entry_height: &Arc<RwLock<u64>>,
+        current_blob_index: &mut u64,
         last_entry_id: &Arc<RwLock<Hash>>,
         entry_stream: Option<&mut EntryStream>,
     ) -> Result<()> {
@@ -95,7 +92,7 @@ impl ReplayStage {
             duration_as_ms(&now.elapsed()) as usize
         );
 
-        let (current_leader, _) = bank
+        let (mut current_leader, _) = bank
             .get_current_leader()
             .expect("Scheduled leader should be calculated by this point");
 
@@ -178,11 +175,11 @@ impl ReplayStage {
         // an error occurred processing one of the entries (causing the rest of the entries to
         // not be processed).
         if entries_len != 0 {
+            println!("Sending {} entries", entries.len());
             ledger_entry_sender.send(entries)?;
         }
 
-        *entry_height.write().unwrap() += entries_len;
-
+        *current_blob_index += entries_len;
         res?;
         inc_new_counter_info!(
             "replicate_stage-duration",
@@ -199,7 +196,7 @@ impl ReplayStage {
         bank: Arc<Bank>,
         cluster_info: Arc<RwLock<ClusterInfo>>,
         exit: Arc<AtomicBool>,
-        entry_height: Arc<RwLock<u64>>,
+        mut current_blob_index: u64,
         last_entry_id: Arc<RwLock<Hash>>,
         to_leader_sender: TvuRotationSender,
         entry_stream: Option<&String>,
@@ -209,7 +206,7 @@ impl ReplayStage {
         let (ledger_entry_sender, ledger_entry_receiver) = channel();
         let mut entry_stream = entry_stream.cloned().map(EntryStream::new);
 
-        let (_, mut current_slot) = bank
+        let (_, current_slot) = bank
             .get_current_leader()
             .expect("Scheduled leader should be calculated by this point");
 
@@ -219,6 +216,8 @@ impl ReplayStage {
             .unwrap()
             .max_tick_height_for_slot(current_slot);
 
+        let mut current_slot = Some(current_slot);
+        let mut prev_slot = None;
         let exit_ = exit.clone();
         let t_replay = Builder::new()
             .name("solana-replay-stage".to_string())
@@ -235,15 +234,34 @@ impl ReplayStage {
                         break;
                     }
 
-                    let current_entry_height = *entry_height.read().unwrap();
+                    if current_slot.is_none() {
+                        let new_slot = Self::get_next_slot(
+                            &db_ledger,
+                            prev_slot.expect("prev_slot must exist"),
+                        );
+                        if new_slot.is_some() {
+                            // Reset the state
+                            current_slot = new_slot;
+                            current_blob_index = 0;
+                            max_tick_height_for_slot = bank
+                                .leader_scheduler
+                                .read()
+                                .unwrap()
+                                .max_tick_height_for_slot(current_slot.unwrap());
+                        }
+                    }
 
                     let entries = {
-                        if let Ok(entries) = db_ledger.get_slot_entries(
-                            current_slot,
-                            current_entry_height,
-                            Some(MAX_ENTRY_RECV_PER_ITER as u64),
-                        ) {
-                            entries
+                        if let Some(slot) = current_slot {
+                            if let Ok(entries) = db_ledger.get_slot_entries(
+                                slot,
+                                current_blob_index,
+                                Some(MAX_ENTRY_RECV_PER_ITER as u64),
+                            ) {
+                                entries
+                            } else {
+                                vec![]
+                            }
                         } else {
                             vec![]
                         }
@@ -258,7 +276,7 @@ impl ReplayStage {
                             &cluster_info,
                             voting_keypair.as_ref(),
                             &ledger_entry_sender,
-                            &entry_height,
+                            &mut current_blob_index,
                             &last_entry_id,
                             entry_stream.as_mut(),
                         ) {
@@ -281,13 +299,11 @@ impl ReplayStage {
                                     .unwrap();
                             }
 
-                            current_slot += 1;
-                            max_tick_height_for_slot = bank
-                                .leader_scheduler
-                                .read()
-                                .unwrap()
-                                .max_tick_height_for_slot(current_slot);
+                            // Check for any slots that chain to this one
+                            prev_slot = current_slot;
+                            current_slot = None;
                             last_leader_id = leader_id;
+                            continue;
                         }
                     }
 
@@ -346,8 +362,9 @@ mod test {
     use super::*;
     use crate::bank::Bank;
     use crate::cluster_info::{ClusterInfo, Node};
-    use crate::db_ledger::create_tmp_sample_ledger;
-    use crate::db_ledger::{DbLedger, DEFAULT_SLOT_HEIGHT};
+    use crate::db_ledger::{
+        create_tmp_sample_ledger, DbLedger, DbLedgerConfig, DEFAULT_SLOT_HEIGHT,
+    };
     use crate::entry::create_ticks;
     use crate::entry::Entry;
     use crate::fullnode::Fullnode;
@@ -447,7 +464,7 @@ mod test {
                 Arc::new(bank),
                 Arc::new(RwLock::new(cluster_info_me)),
                 exit.clone(),
-                Arc::new(RwLock::new(meta.consumed)),
+                meta.consumed,
                 Arc::new(RwLock::new(last_entry_id)),
                 rotation_sender,
                 None,
@@ -566,7 +583,7 @@ mod test {
                 bank.clone(),
                 cluster_info_me.clone(),
                 exit.clone(),
-                Arc::new(RwLock::new(entry_height)),
+                entry_height,
                 Arc::new(RwLock::new(last_entry_id)),
                 to_leader_sender,
                 None,
@@ -686,7 +703,7 @@ mod test {
                 bank.clone(),
                 cluster_info_me.clone(),
                 exit.clone(),
-                Arc::new(RwLock::new(meta.consumed)),
+                meta.consumed,
                 Arc::new(RwLock::new(last_entry_id)),
                 rotation_tx,
                 None,
@@ -762,8 +779,7 @@ mod test {
         let cluster_info_me = Arc::new(RwLock::new(ClusterInfo::new(my_node.info.clone())));
         let (ledger_entry_sender, _ledger_entry_receiver) = channel();
         let last_entry_id = Hash::default();
-
-        let entry_height = 0;
+        let mut current_blob_index = 0;
         let mut last_id = Hash::default();
         let mut entries = Vec::new();
         for _ in 0..5 {
@@ -780,7 +796,7 @@ mod test {
             &cluster_info_me,
             Some(&voting_keypair),
             &ledger_entry_sender,
-            &Arc::new(RwLock::new(entry_height)),
+            &mut current_blob_index,
             &Arc::new(RwLock::new(last_entry_id)),
             None,
         );
@@ -802,7 +818,7 @@ mod test {
             &cluster_info_me,
             Some(&voting_keypair),
             &ledger_entry_sender,
-            &Arc::new(RwLock::new(entry_height)),
+            &mut current_blob_index,
             &Arc::new(RwLock::new(last_entry_id)),
             None,
         );
@@ -832,7 +848,7 @@ mod test {
         let (ledger_entry_sender, _ledger_entry_receiver) = channel();
         let last_entry_id = Hash::default();
 
-        let entry_height = 0;
+        let mut entry_height = 0;
         let mut last_id = Hash::default();
         let mut entries = Vec::new();
         let mut expected_entries = Vec::new();
@@ -851,7 +867,7 @@ mod test {
             &cluster_info_me,
             Some(&voting_keypair),
             &ledger_entry_sender,
-            &Arc::new(RwLock::new(entry_height)),
+            &mut entry_height,
             &Arc::new(RwLock::new(last_entry_id)),
             Some(&mut entry_stream),
         )
