@@ -9,10 +9,7 @@ use crate::result::{Error, Result};
 use bincode::{deserialize, serialize};
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
 use hashbrown::HashMap;
-use rocksdb::{
-    ColumnFamily, ColumnFamilyDescriptor, DBRawIterator,
-    Options, WriteBatch, DB,
-};
+use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBRawIterator, Options, WriteBatch, DB};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use solana_sdk::hash::Hash;
