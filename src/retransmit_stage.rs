@@ -4,7 +4,6 @@ use crate::bank::Bank;
 use crate::cluster_info::{ClusterInfo, DATA_PLANE_FANOUT, GROW_LAYER_CAPACITY, NEIGHBORHOOD_SIZE};
 use crate::counter::Counter;
 use crate::db_ledger::DbLedger;
-use crate::entry::Entry;
 use crate::leader_scheduler::LeaderScheduler;
 use crate::result::{Error, Result};
 use crate::service::Service;
@@ -14,8 +13,8 @@ use log::Level;
 use solana_metrics::{influxdb, submit};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::mpsc::channel;
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
@@ -134,7 +133,7 @@ impl RetransmitStage {
         repair_socket: Arc<UdpSocket>,
         fetch_stage_receiver: BlobReceiver,
         leader_scheduler: Arc<RwLock<LeaderScheduler>>,
-    ) -> (Self, Receiver<Vec<Entry>>) {
+    ) -> Self {
         let (retransmit_sender, retransmit_receiver) = channel();
 
         let t_retransmit = retransmitter(
@@ -143,7 +142,6 @@ impl RetransmitStage {
             cluster_info.clone(),
             retransmit_receiver,
         );
-        let (entry_sender, entry_receiver) = channel();
         let done = Arc::new(AtomicBool::new(false));
         let t_window = window_service(
             db_ledger,
@@ -152,7 +150,6 @@ impl RetransmitStage {
             entry_height,
             0,
             fetch_stage_receiver,
-            Some(entry_sender),
             retransmit_sender,
             repair_socket,
             leader_scheduler,
@@ -160,7 +157,7 @@ impl RetransmitStage {
         );
 
         let thread_hdls = vec![t_retransmit, t_window];
-        (Self { thread_hdls }, entry_receiver)
+        Self { thread_hdls }
     }
 }
 
