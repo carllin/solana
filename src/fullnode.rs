@@ -230,7 +230,7 @@ impl Fullnode {
         }
 
         // Get the scheduled leader
-        let (scheduled_leader, slot_index) = bank
+        let (scheduled_leader, slot_height) = bank
             .get_current_leader()
             .expect("Leader not known after processing bank");
 
@@ -261,12 +261,13 @@ impl Fullnode {
         let (to_leader_sender, to_leader_receiver) = channel();
         let (to_validator_sender, to_validator_receiver) = channel();
 
-        let blob_index = Self::get_consumed_for_slot(&db_ledger, slot_index);
+        let blob_index = Self::get_consumed_for_slot(&db_ledger, slot_height);
 
         let (tvu, blob_sender) = Tvu::new(
             vote_signer,
             &bank,
             entry_height,
+            blob_index,
             *last_entry_id,
             &cluster_info,
             sockets,
@@ -294,7 +295,7 @@ impl Fullnode {
                 .try_clone()
                 .expect("Failed to clone broadcast socket"),
             cluster_info.clone(),
-            slot_index,
+            slot_height,
             blob_index,
             config.sigverify_disabled,
             max_tick_height,
@@ -337,7 +338,7 @@ impl Fullnode {
         // in the active set, then the leader scheduler will pick the same leader again, so
         // check for that
         if scheduled_leader == self.keypair.pubkey() {
-            let (last_entry_id, _) = self.node_services.tvu.get_state();
+            let last_entry_id = self.node_services.tvu.get_state();
             self.validator_to_leader(self.bank.tick_height(), last_entry_id);
             Ok(())
         } else {
@@ -363,7 +364,7 @@ impl Fullnode {
             let ls_lock = self.bank.leader_scheduler.read().unwrap();
             ls_lock.max_height_for_leader(tick_height + 1)
         };
-        let (_, slot_index) = self
+        let (_, slot_height) = self
             .bank
             .get_current_leader()
             .expect("Leader must be known during leader rotation");
@@ -382,7 +383,7 @@ impl Fullnode {
             self.cluster_info.clone(),
             self.sigverify_disabled,
             max_tick_height,
-            slot_index,
+            slot_height,
             0,
             &last_id,
             self.keypair.pubkey(),
@@ -436,7 +437,7 @@ impl Fullnode {
         self.join()
     }
 
-    fn new_bank_from_db_ledger(
+    pub fn new_bank_from_db_ledger(
         genesis_block: &GenesisBlock,
         db_ledger: &DbLedger,
         leader_scheduler: Arc<RwLock<LeaderScheduler>>,
@@ -482,8 +483,8 @@ impl Fullnode {
         (genesis_block, db_ledger)
     }
 
-    fn get_consumed_for_slot(db_ledger: &DbLedger, slot_index: u64) -> u64 {
-        let meta = db_ledger.meta(slot_index).expect("Database error");
+    fn get_consumed_for_slot(db_ledger: &DbLedger, slot_height: u64) -> u64 {
+        let meta = db_ledger.meta(slot_height).expect("Database error");
         if let Some(meta) = meta {
             meta.consumed
         } else {
@@ -750,7 +751,6 @@ mod tests {
         let num_slots_per_epoch = 3;
         let leader_rotation_interval = 5;
         let seed_rotation_interval = num_slots_per_epoch * leader_rotation_interval;
-        let bootstrap_height = genesis_tick_height;
 
         // Set the bootstrap height exactly the current tick height, so that we can
         // test if the bootstrap leader knows to immediately transition to a validator

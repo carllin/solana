@@ -183,7 +183,6 @@ impl Replicator {
             entry_height,
             max_entry_height,
             blob_fetch_receiver,
-            Some(entry_sender),
             retransmit_sender,
             repair_socket,
             Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(

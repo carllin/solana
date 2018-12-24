@@ -1452,12 +1452,12 @@ fn test_full_leader_validator_network() {
     solana_logger::setup();
 
     // Create the bootstrap leader node information
-    let bootstrap_leader_keypair = Keypair::new();
+    let bootstrap_leader_keypair = Arc::new(Keypair::new());
     let bootstrap_leader_node = Node::new_localhost_with_pubkey(bootstrap_leader_keypair.pubkey());
     let bootstrap_leader_info = bootstrap_leader_node.info.clone();
 
     let mut node_keypairs = VecDeque::new();
-    node_keypairs.push_back(Arc::new(bootstrap_leader_keypair));
+    node_keypairs.push_back(bootstrap_leader_keypair.clone());
 
     // Create the validator keypairs
     for _ in 0..N {

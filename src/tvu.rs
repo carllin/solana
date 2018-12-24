@@ -43,7 +43,6 @@ pub struct Tvu {
     storage_stage: StorageStage,
     exit: Arc<AtomicBool>,
     last_entry_id: Arc<RwLock<Hash>>,
-    entry_height: Arc<RwLock<u64>>,
 }
 
 pub struct Sockets {
@@ -58,6 +57,7 @@ impl Tvu {
     /// # Arguments
     /// * `bank` - The bank state.
     /// * `entry_height` - Initial ledger height
+    /// * `blob_index` - Index of last processed blob
     /// * `last_entry_id` - Hash of the last entry
     /// * `cluster_info` - The cluster_info state.
     /// * `sockets` - My fetch, repair, and restransmit sockets
@@ -66,6 +66,7 @@ impl Tvu {
     pub fn new(
         vote_signer: Option<Arc<VoteSignerProxy>>,
         bank: &Arc<Bank>,
+        blob_index: u64,
         entry_height: u64,
         last_entry_id: Hash,
         cluster_info: &Arc<RwLock<ClusterInfo>>,
@@ -101,7 +102,7 @@ impl Tvu {
         //TODO
         //the packets coming out of blob_receiver need to be sent to the GPU and verified
         //then sent to the window, which does the erasure coding reconstruction
-        let (retransmit_stage, blob_window_receiver) = RetransmitStage::new(
+        let retransmit_stage = RetransmitStage::new(
             bank,
             db_ledger.clone(),
             &cluster_info,
@@ -113,17 +114,16 @@ impl Tvu {
             bank.leader_scheduler.clone(),
         );
 
-        let l_entry_height = Arc::new(RwLock::new(entry_height));
         let l_last_entry_id = Arc::new(RwLock::new(last_entry_id));
 
         let (replay_stage, ledger_entry_receiver) = ReplayStage::new(
             keypair.clone(),
-            vote_signer,
+            vote_signer.clone(),
+            db_ledger.clone(),
             bank.clone(),
             cluster_info.clone(),
-            blob_window_receiver,
             exit.clone(),
-            l_entry_height.clone(),
+            blob_index,
             l_last_entry_id.clone(),
             to_leader_sender,
             entry_stream,
@@ -148,17 +148,13 @@ impl Tvu {
                 storage_stage,
                 exit,
                 last_entry_id: l_last_entry_id,
-                entry_height: l_entry_height,
             },
             blob_fetch_sender,
         )
     }
 
-    pub fn get_state(&self) -> (Hash, u64) {
-        (
-            *self.last_entry_id.read().unwrap(),
-            *self.entry_height.read().unwrap(),
-        )
+    pub fn get_state(&self) -> Hash {
+        *self.last_entry_id.read().unwrap()
     }
 
     pub fn is_exited(&self) -> bool {
@@ -166,11 +162,11 @@ impl Tvu {
     }
 
     pub fn exit(&self) {
-        self.exit.store(true, Ordering::Relaxed);
+        self.replay_stage.exit();
     }
 
     pub fn close(self) -> thread::Result<Option<TvuReturnType>> {
-        self.fetch_stage.close();
+        self.exit();
         self.join()
     }
 }
@@ -223,6 +219,59 @@ pub mod tests {
         exit: Arc<AtomicBool>,
     ) -> GossipService {
         GossipService::new(&cluster_info, None, gossip, exit)
+    }
+
+    #[test]
+    fn test_tvu_exit() {
+        solana_logger::setup();
+        let leader = Node::new_localhost();
+        let target1_keypair = Keypair::new();
+        let target1 = Node::new_localhost_with_pubkey(target1_keypair.pubkey());
+
+        let starting_balance = 10_000;
+        let (genesis_block, _mint_keypair) = GenesisBlock::new(starting_balance);
+        let leader_id = leader.info.id;
+        let leader_scheduler = Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_id,
+        )));
+        let mut bank = Bank::new(&genesis_block);
+        bank.leader_scheduler = leader_scheduler;
+        let bank = Arc::new(bank);
+
+        //start cluster_info1
+        let mut cluster_info1 = ClusterInfo::new(target1.info.clone());
+        cluster_info1.insert_info(leader.info.clone());
+        cluster_info1.set_leader(leader.info.id);
+        let cref1 = Arc::new(RwLock::new(cluster_info1));
+
+        let cur_hash = Hash::default();
+        let db_ledger_path = get_tmp_ledger_path("test_replay");
+        let db_ledger =
+            DbLedger::open(&db_ledger_path).expect("Expected to successfully open ledger");
+        let vote_account_keypair = Arc::new(Keypair::new());
+        let vote_signer = VoteSignerProxy::new_local(&vote_account_keypair);
+        let (sender, _receiver) = channel();
+        let tvu = Tvu::new(
+            Some(Arc::new(vote_signer)),
+            &bank,
+            0,
+            0,
+            cur_hash,
+            &cref1,
+            {
+                Sockets {
+                    repair: target1.sockets.repair,
+                    retransmit: target1.sockets.retransmit,
+                    fetch: target1.sockets.tvu,
+                }
+            },
+            Arc::new(db_ledger),
+            STORAGE_ROTATE_TEST_COUNT,
+            sender,
+            &StorageState::default(),
+            None,
+        );
+        tvu.close().expect("close");
     }
 
     /// Test that message sent from leader to target1 and replayed to target2
@@ -295,6 +344,7 @@ pub mod tests {
         let (tvu, _) = Tvu::new(
             Some(Arc::new(vote_signer)),
             &bank,
+            0,
             0,
             cur_hash,
             &cref1,
