@@ -125,15 +125,42 @@ pub struct SlotMeta {
     pub received: u64,
     // The number of ticks in the range [0..consumed]
     pub consumed_ticks: u64,
+    // The number of blocks in this slot
+    pub num_blocks: u64,
+    // The list of slots that chains to this slot
+    pub next_slots: Vec<u64>,
+    // True if every block from 0..slot, where slot is the slot index of this slot
+    // is full
+    pub is_trunk: bool,
 }
 
 impl SlotMeta {
-    fn new() -> Self {
+    fn new(slot_index: u64, num_blocks: u64) -> Self {
         SlotMeta {
             consumed: 0,
             received: 0,
             consumed_ticks: 0,
+            num_blocks: num_blocks,
+            next_slots: vec![],
+            is_trunk: slot_index == 0,
         }
+    }
+
+    fn contains_all_ticks(
+        &self,
+        slot_height: u64,
+        num_bootstrap_ticks: u64,
+        ticks_per_block: u64,
+    ) -> bool {
+        let num_expected_slot_ticks = {
+            if slot_height == 0 {
+                num_bootstrap_ticks
+            } else {
+                ticks_per_block * self.num_blocks
+            }
+        };
+
+        num_expected_slot_ticks == self.consumed_ticks
     }
 }
 
@@ -285,6 +312,8 @@ pub struct DbLedger {
     pub data_cf: DataCf,
     pub erasure_cf: ErasureCf,
     pub new_blobs_signal: (Condvar, Mutex<bool>),
+    pub ticks_per_block: u64,
+    pub num_bootstrap_ticks: u64,
 }
 
 // TODO: Once we support a window that knows about different leader
@@ -331,12 +360,17 @@ impl DbLedger {
 
         let new_blobs_signal = (Condvar::new(), Mutex::new(false));
 
+        // TODO: make these constructor arguments
+        let ticks_per_block = 100;
+        let num_bootstrap_ticks = 1000;
         Ok(DbLedger {
             db,
             meta_cf,
             data_cf,
             erasure_cf,
             new_blobs_signal,
+            ticks_per_block,
+            num_bootstrap_ticks,
         })
     }
 
@@ -407,26 +441,41 @@ impl DbLedger {
         let mut write_batch = WriteBatch::default();
         // A map from slot_height to a 2-tuple of metadata: (working copy, backup copy),
         // so we can detect changes to the slot metadata later
-        let mut slot_metas = HashMap::new();
+        let mut slot_meta_working_set = HashMap::new();
         let new_blobs: Vec<_> = new_blobs.into_iter().collect();
         let mut prev_inserted_blob_datas = HashMap::new();
+
         for blob in new_blobs.iter() {
             let blob = blob.borrow();
             let blob_slot = blob.slot()?;
 
             // Check if we've already inserted the slot metadata for this blob's slot
-            let (ref mut slot_meta, _) = slot_metas.entry(blob_slot).or_insert_with(|| {
-                // Store a 2-tuple of the metadata (working copy, backup copy)
-                if let Some(meta) = self
-                    .meta_cf
-                    .get_slot_meta(blob_slot)
-                    .expect("Expect database get to succeed")
-                {
-                    (meta.clone(), Some(meta))
-                } else {
-                    (SlotMeta::new(), None)
-                }
-            });
+            let (ref mut slot_meta, _) =
+                slot_meta_working_set.entry(blob_slot).or_insert_with(|| {
+                    // Store a 2-tuple of the metadata (working copy, backup copy)
+                    if let Some(mut meta) = self
+                        .meta_cf
+                        .get_slot_meta(blob_slot)
+                        .expect("Expect database get to succeed")
+                    {
+                        // If num_blocks == 0, then this is one of the dummy metadatas inserted
+                        // during the chaining process, see the function find_slot_in_existing_state()
+                        // for details
+                        if meta.num_blocks == 0 {
+                            // TODO: derive num_blocks for this metadata from the blob itself
+                            meta.num_blocks = 1;
+                            // Set backup as None so that all the logic for inserting new slots
+                            // still runs, as this placeholder slot is essentially equivalent to
+                            // inserting a new slot
+                            (meta.clone(), None)
+                        } else {
+                            (meta.clone(), Some(meta))
+                        }
+                    } else {
+                        // TODO: derive num_blocks for this metadata from the blob itself
+                        (SlotMeta::new(blob_slot, 1), None)
+                    }
+                });
 
             let _ = self.insert_data_blob(
                 blob,
@@ -436,23 +485,33 @@ impl DbLedger {
             );
         }
 
+        // Handle chaining for the working set
+        self.handle_chaining(&mut write_batch, &mut slot_meta_working_set);
         let mut should_signal = false;
+
         // Check if any metadata was changed, if so, insert the new version of the
         // metadata into the write batch
-        for (slot_height, (meta, meta_backup)) in slot_metas {
-            if Some(&meta) != meta_backup.as_ref() {
-                // We should signal that there are updates if either:
+        for (slot_height, (meta, meta_backup)) in slot_meta_working_set.iter() {
+            // Check if the working copy of the metadata has changed
+            if Some(meta) != meta_backup.as_ref() {
+                // We should signal that there are updates if we extended the chain of consecutive blocks starting
+                // from block 0, which is true iff:
+                // 1) The block with index prev_block_index is itself part of the trunk of consecutive blocks
+                // starting from block 0,
+                if meta.is_trunk &&
+                // AND either:
                 // 1) The slot didn't exist in the database before, and now we have a consecutive
                 // block for that slot
-                // 2) The slot did exist, but now we have a consecutive block for that slot
-                if meta_backup.is_none() && meta.consumed != 0
-                    || meta_backup.is_some() && meta_backup.unwrap().consumed != meta.consumed
+                (meta_backup.is_none() && meta.consumed != 0) ||
+                // OR
+                // 2) The slot did exist, but now we have a new consecutive block for that slot
+                (meta_backup.is_some() && meta_backup.as_ref().unwrap().consumed != meta.consumed)
                 {
                     should_signal = true;
                 }
                 write_batch.put_cf(
                     self.meta_cf.handle(),
-                    &MetaCf::key(slot_height),
+                    &MetaCf::key(*slot_height),
                     &serialize(&meta)?,
                 )?;
             }
@@ -465,40 +524,6 @@ impl DbLedger {
             self.new_blobs_signal.0.notify_all();
         }
 
-        Ok(())
-    }
-
-    /// Writes a list of sorted, consecutive broadcast blobs to the db_ledger
-    pub fn write_consecutive_blobs(&self, blobs: &[SharedBlob]) -> Result<()> {
-        assert!(!blobs.is_empty());
-
-        let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
-
-        let mut meta = {
-            if let Some(meta) = self.meta_cf.get(&meta_key)? {
-                let first = blobs[0].read().unwrap();
-                assert_eq!(meta.consumed, first.index()?);
-                meta
-            } else {
-                SlotMeta::new()
-            }
-        };
-
-        {
-            let last = blobs.last().unwrap().read().unwrap();
-            meta.consumed = last.index()? + 1;
-            meta.received = cmp::max(meta.received, last.index()? + 1);
-        }
-
-        let mut batch = WriteBatch::default();
-        batch.put_cf(self.meta_cf.handle(), &meta_key, &serialize(&meta)?)?;
-        for blob in blobs {
-            let blob = blob.read().unwrap();
-            let key = DataCf::key(blob.slot()?, blob.index()?);
-            let serialized_blob_datas = &blob.data[..BLOB_HEADER_SIZE + blob.size()?];
-            batch.put_cf(self.data_cf.handle(), &key, serialized_blob_datas)?;
-        }
-        self.db.write(batch)?;
         Ok(())
     }
 
@@ -711,7 +736,7 @@ impl DbLedger {
         blob_start_index: u64,
         max_entries: u64,
     ) -> Result<Vec<Entry>> {
-        println!("get_slot_entries {} {}", slot_index, blob_start_index);
+        trace!("get_slot_entries {} {}", slot_index, blob_start_index);
         // Find the next consecutive block of blobs.
         let consecutive_blobs = self.get_slot_consecutive_blobs(
             slot_index,
@@ -760,6 +785,152 @@ impl DbLedger {
         options
     }
 
+    // Chaining based on latest discussion here: https://github.com/solana-labs/solana/pull/2253
+    fn handle_chaining(
+        &self,
+        write_batch: &mut WriteBatch,
+        working_set: &mut HashMap<u64, (SlotMeta, Option<SlotMeta>)>,
+    ) -> Result<()> {
+        let mut new_chained_slots = HashMap::new();
+        let working_set_slot_heights: Vec<_> = working_set.iter().map(|s| *s.0).collect();
+        for slot_height in working_set_slot_heights {
+            self.handle_chaining_for_slot(
+                write_batch,
+                working_set,
+                &mut new_chained_slots,
+                slot_height,
+            )?;
+        }
+
+        // Write all the newly changed slots in new_chained_slots to the write_batch
+        for (slot_height, meta) in new_chained_slots.iter() {
+            write_batch.put_cf(
+                self.meta_cf.handle(),
+                &MetaCf::key(*slot_height),
+                &serialize(&meta)?,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn handle_chaining_for_slot(
+        &self,
+        write_batch: &WriteBatch,
+        working_set: &mut HashMap<u64, (SlotMeta, Option<SlotMeta>)>,
+        chained_slots: &mut HashMap<u64, SlotMeta>,
+        slot_height: u64,
+    ) -> Result<()> {
+        let (ref mut slot_meta, backup_slot_meta) = working_set
+            .get_mut(&slot_height)
+            .expect("Slot must exist in the working_set hashmap");
+        assert!(slot_meta.num_blocks > 0);
+        // The slot that the slot with index slot_height is chaining to
+        let prev_slot_index = {
+            if slot_height == 0 {
+                0
+            } else {
+                slot_height - slot_meta.num_blocks
+            }
+        };
+
+        if backup_slot_meta.is_none() {
+            // This is a newly inserted slot so:
+            // 1) Chain to the previous slot, and also
+            // 2) Determine wheter to set the is_trunk flag
+            // TODO: need to detect this when inserting and fill in the empty num_blocks
+            let prev_slot =
+                self.find_slot_in_existing_state(working_set, chained_slots, prev_slot_index)?;
+            self.chain_new_slot(prev_slot, slot_height, slot_meta);
+        }
+
+        if self.is_newly_completed_slot(slot_height, &slot_meta, backup_slot_meta) {
+            // This is a newly inserted slot so go through and update all child
+            // slots with is_trunk if applicable
+            if slot_meta.is_trunk {
+                let mut next_slot_indexes = &slot_meta.next_slots;
+                while !next_slot_indexes.is_empty() {
+                    let mut next_slots = vec![];
+                    for i in next_slot_indexes {
+                        next_slots.push((
+                            *i,
+                            self.find_slot_in_existing_state(working_set, chained_slots, *i)?,
+                        ));
+                    }
+                    next_slot_indexes = &self.add_next_slots_to_trunk(next_slots);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn add_next_slots_to_trunk(&self, next_slots: Vec<(u64, &mut SlotMeta)>) -> Vec<u64> {
+        let mut next_indexes = vec![];
+        for (next_slot_index, next_slot) in next_slots {
+            next_slot.is_trunk = true;
+            if next_slot.contains_all_ticks(
+                next_slot_index,
+                self.num_bootstrap_ticks,
+                self.ticks_per_block,
+            ) {
+                // There should be no duplicates in this vector because
+                // each slot chains back to one unique previous slot, it's the
+                // set forward links that can be of unbounded cardinality.
+                next_indexes.extend(next_slot.next_slots);
+            }
+        }
+
+        next_indexes
+    }
+
+    fn is_newly_completed_slot(
+        &self,
+        slot_height: u64,
+        slot_meta: &SlotMeta,
+        backup_slot_meta: &Option<SlotMeta>,
+    ) -> bool {
+        slot_meta.contains_all_ticks(slot_height, self.num_bootstrap_ticks, self.ticks_per_block)
+            && (backup_slot_meta.is_none()
+                || slot_meta.consumed_ticks != backup_slot_meta.as_ref().unwrap().consumed_ticks)
+    }
+
+    fn find_slot_in_existing_state<'a>(
+        &self,
+        working_set: &'a mut HashMap<u64, (SlotMeta, Option<SlotMeta>)>,
+        chained_slots: &'a mut HashMap<u64, SlotMeta>,
+        slot_index: u64,
+    ) -> Result<&'a mut SlotMeta> {
+        if let Some((ref mut slot, _)) = working_set.get_mut(&slot_index) {
+            Ok(slot)
+        } else if let Some(ref mut slot) = chained_slots.get_mut(&slot_index) {
+            Ok(slot)
+        } else if let Some(slot) = self.meta_cf.get_slot_meta(slot_index)? {
+            chained_slots.insert(slot_index, slot);
+            Ok(chained_slots.get_mut(&slot_index).unwrap())
+        } else {
+            // If this slot doesn't exist, make a dummy placeholder slot so we
+            // can remember which slots chained to this one when we eventually
+            // get a real blob for this slot
+            chained_slots.insert(slot_index, SlotMeta::new(slot_index, 0));
+            Ok(chained_slots.get_mut(&slot_index).unwrap())
+        }
+    }
+
+    fn chain_new_slot(
+        &self,
+        prev_slot: &mut SlotMeta,
+        current_slot_height: u64,
+        current_slot: &mut SlotMeta,
+    ) {
+        prev_slot.next_slots.push(current_slot_height);
+        current_slot.is_trunk = prev_slot.is_trunk
+            && current_slot.contains_all_ticks(
+                current_slot_height,
+                self.num_bootstrap_ticks,
+                self.ticks_per_block,
+            );
+    }
+
     /// Insert a blob into ledger, updating the slot_meta if necessary
     fn insert_data_blob<'a>(
         &self,
@@ -772,10 +943,6 @@ impl DbLedger {
         let blob_slot = blob.slot()?;
         let blob_size = blob.size()?;
 
-        println!(
-            "inserting data blob, slot: {}, index: {}",
-            blob_slot, blob_index
-        );
         if blob_index < slot_meta.consumed
             || prev_inserted_blob_datas.contains_key(&(blob_slot, blob_index))
         {
@@ -1359,48 +1526,6 @@ mod tests {
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
             assert_eq!(meta.consumed, num_entries);
             assert_eq!(meta.received, num_entries);
-        }
-        DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
-    }
-
-    #[test]
-    pub fn test_write_consecutive_blobs() {
-        let db_ledger_path = get_tmp_ledger_path("test_write_consecutive_blobs");
-        {
-            let db_ledger = DbLedger::open(&db_ledger_path).unwrap();
-
-            // Write entries
-            let num_entries = 20 as u64;
-            let original_entries = make_tiny_test_entries(num_entries as usize);
-            let shared_blobs = original_entries.to_shared_blobs();
-            for (i, b) in shared_blobs.iter().enumerate() {
-                let mut w_b = b.write().unwrap();
-                w_b.set_index(i as u64).unwrap();
-                w_b.set_slot(i as u64).unwrap();
-            }
-
-            db_ledger
-                .write_consecutive_blobs(&shared_blobs)
-                .expect("Expect successful blob writes");
-
-            let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
-            let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
-            assert_eq!(meta.consumed, num_entries);
-            assert_eq!(meta.received, num_entries);
-
-            for (i, b) in shared_blobs.iter().enumerate() {
-                let mut w_b = b.write().unwrap();
-                w_b.set_index(num_entries + i as u64).unwrap();
-                w_b.set_slot(num_entries + i as u64).unwrap();
-            }
-
-            db_ledger
-                .write_consecutive_blobs(&shared_blobs)
-                .expect("Expect successful blob writes");
-
-            let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
-            assert_eq!(meta.consumed, 2 * num_entries);
-            assert_eq!(meta.received, 2 * num_entries);
         }
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
     }
