@@ -16,6 +16,7 @@ use solana_sdk::hash::Hash;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, KeypairUtil};
 use std::borrow::{Borrow, Cow};
+use std::cell::{RefCell, RefMut};
 use std::cmp;
 use std::fs;
 use std::io;
@@ -450,33 +451,33 @@ impl DbLedger {
             let blob_slot = blob.slot()?;
 
             // Check if we've already inserted the slot metadata for this blob's slot
-            let (ref mut slot_meta, _) =
-                slot_meta_working_set.entry(blob_slot).or_insert_with(|| {
-                    // Store a 2-tuple of the metadata (working copy, backup copy)
-                    if let Some(mut meta) = self
-                        .meta_cf
-                        .get_slot_meta(blob_slot)
-                        .expect("Expect database get to succeed")
-                    {
-                        // If num_blocks == 0, then this is one of the dummy metadatas inserted
-                        // during the chaining process, see the function find_slot_in_existing_state()
-                        // for details
-                        if meta.num_blocks == 0 {
-                            // TODO: derive num_blocks for this metadata from the blob itself
-                            meta.num_blocks = 1;
-                            // Set backup as None so that all the logic for inserting new slots
-                            // still runs, as this placeholder slot is essentially equivalent to
-                            // inserting a new slot
-                            (meta.clone(), None)
-                        } else {
-                            (meta.clone(), Some(meta))
-                        }
-                    } else {
+            let entry = slot_meta_working_set.entry(blob_slot).or_insert_with(|| {
+                // Store a 2-tuple of the metadata (working copy, backup copy)
+                if let Some(mut meta) = self
+                    .meta_cf
+                    .get_slot_meta(blob_slot)
+                    .expect("Expect database get to succeed")
+                {
+                    // If num_blocks == 0, then this is one of the dummy metadatas inserted
+                    // during the chaining process, see the function find_slot_meta_in_cached_state()
+                    // for details
+                    if meta.num_blocks == 0 {
                         // TODO: derive num_blocks for this metadata from the blob itself
-                        (SlotMeta::new(blob_slot, 1), None)
+                        meta.num_blocks = 1;
+                        // Set backup as None so that all the logic for inserting new slots
+                        // still runs, as this placeholder slot is essentially equivalent to
+                        // inserting a new slot
+                        RefCell::new((meta.clone(), None))
+                    } else {
+                        RefCell::new((meta.clone(), Some(meta)))
                     }
-                });
+                } else {
+                    // TODO: derive num_blocks for this metadata from the blob itself
+                    RefCell::new((SlotMeta::new(blob_slot, 1), None))
+                }
+            });
 
+            let slot_meta = &mut entry.borrow_mut().0;
             let _ = self.insert_data_blob(
                 blob,
                 &mut prev_inserted_blob_datas,
@@ -486,12 +487,15 @@ impl DbLedger {
         }
 
         // Handle chaining for the working set
-        self.handle_chaining(&mut write_batch, &mut slot_meta_working_set);
+        self.handle_chaining(&mut write_batch, &slot_meta_working_set)?;
         let mut should_signal = false;
 
         // Check if any metadata was changed, if so, insert the new version of the
         // metadata into the write batch
-        for (slot_height, (meta, meta_backup)) in slot_meta_working_set.iter() {
+        for (slot_height, value) in slot_meta_working_set.iter() {
+            let b_value = value.borrow();
+            let meta = &b_value.0;
+            let meta_backup = &b_value.1;
             // Check if the working copy of the metadata has changed
             if Some(meta) != meta_backup.as_ref() {
                 // We should signal that there are updates if we extended the chain of consecutive blocks starting
@@ -734,7 +738,7 @@ impl DbLedger {
         &self,
         slot_index: u64,
         blob_start_index: u64,
-        max_entries: u64,
+        max_entries: Option<u64>,
     ) -> Result<Vec<Entry>> {
         trace!("get_slot_entries {} {}", slot_index, blob_start_index);
         // Find the next consecutive block of blobs.
@@ -742,7 +746,7 @@ impl DbLedger {
             slot_index,
             &HashMap::new(),
             blob_start_index,
-            Some(max_entries),
+            max_entries,
         )?;
         Ok(Self::deserialize_blobs(consecutive_blobs))
     }
@@ -789,7 +793,7 @@ impl DbLedger {
     fn handle_chaining(
         &self,
         write_batch: &mut WriteBatch,
-        working_set: &mut HashMap<u64, (SlotMeta, Option<SlotMeta>)>,
+        working_set: &HashMap<u64, RefCell<(SlotMeta, Option<SlotMeta>)>>,
     ) -> Result<()> {
         let mut new_chained_slots = HashMap::new();
         let working_set_slot_heights: Vec<_> = working_set.iter().map(|s| *s.0).collect();
@@ -803,11 +807,12 @@ impl DbLedger {
         }
 
         // Write all the newly changed slots in new_chained_slots to the write_batch
-        for (slot_height, meta) in new_chained_slots.iter() {
+        for (slot_height, entry) in new_chained_slots.iter() {
+            let meta: &SlotMeta = &entry.borrow();
             write_batch.put_cf(
                 self.meta_cf.handle(),
                 &MetaCf::key(*slot_height),
-                &serialize(&meta)?,
+                &serialize(meta)?,
             )?;
         }
         Ok(())
@@ -816,66 +821,89 @@ impl DbLedger {
     fn handle_chaining_for_slot(
         &self,
         write_batch: &WriteBatch,
-        working_set: &mut HashMap<u64, RefCell<(SlotMeta, Option<SlotMeta>)>>,
-        chained_slots: &mut HashMap<u64, SlotMeta>,
+        working_set: &HashMap<u64, RefCell<(SlotMeta, Option<SlotMeta>)>>,
+        chained_slots: &mut HashMap<u64, RefCell<SlotMeta>>,
         slot_height: u64,
     ) -> Result<()> {
         // The slot that the slot with index slot_height is chaining to
-        let (prev_slot_index, is_new_slot) = {
-            let (ref slot_meta, backup_slot_meta) = working_set
-                .get(&slot_height)
-                .expect("Slot must exist in the working_set hashmap");
-            assert!(slot_meta.num_blocks > 0);
-            let is_new_slot = backup_slot_meta.is_none();
-            if slot_height == 0 {
-                (0, is_new_slot)
-            } else {
-                (slot_height - slot_meta.num_blocks, is_new_slot)
+        let value = working_set
+            .get(&slot_height)
+            .expect("Slot must exist in the working_set hashmap");
+        let mut b_value = value.borrow_mut();
+        let (ref mut slot_meta, ref mut backup_meta) = &mut *b_value;
+        assert!(slot_meta.num_blocks > 0);
+
+        // The slot that the slot with index slot_height is chaining to
+        if slot_height != 0 {
+            let prev_slot_index = slot_height - slot_meta.num_blocks;
+
+            // Check if slot_meta is a new slot
+            if backup_meta.is_none() {
+                // This is a newly inserted slot so:
+                // 1) Chain to the previous slot, and also
+                // 2) Determine whether to set the is_trunk flag
+                // TODO: need to detect this when inserting and fill in the empty num_blocks
+                let mut prev_slot = {
+                    let result = self.find_slot_meta_in_cached_state(
+                        working_set,
+                        chained_slots,
+                        prev_slot_index,
+                    )?;
+                    if let Some(prev_slot) = result {
+                        prev_slot
+                    } else {
+                        drop(result);
+                        self.find_slot_meta_in_db_else_create(prev_slot_index, chained_slots)?
+                    }
+                };
+                self.chain_new_slot(&mut prev_slot, slot_height, slot_meta);
             }
-        };
-
-        if is_new_slot {
-            // This is a newly inserted slot so:
-            // 1) Chain to the previous slot, and also
-            // 2) Determine wheter to set the is_trunk flag
-            // TODO: need to detect this when inserting and fill in the empty num_blocks
-            let prev_is_trunk = {
-                let prev_slot =
-                    self.find_slot_in_existing_state(working_set, chained_slots, prev_slot_index)?;
-                prev_slot.next_slots.push(slot_height);
-                prev_slot.is_trunk
-            };
-
-            slot_meta.is_trunk = prev_is_trunk
-                && slot_meta.contains_all_ticks(
-                    slot_height,
-                    self.num_bootstrap_ticks,
-                    self.ticks_per_block,
-                );
         }
 
-        if self.is_newly_completed_slot(slot_height, &slot_meta, backup_slot_meta) {
-            // This is a newly inserted slot so go through and update all child
-            // slots with is_trunk if applicable
-            if slot_meta.is_trunk {
-                let mut next_slot_indexes = &slot_meta.next_slots;
-                while !next_slot_indexes.is_empty() {
-                    let mut next_slots = vec![];
-                    for i in next_slot_indexes {
-                        next_slots.push((
-                            *i,
-                            self.find_slot_in_existing_state(working_set, chained_slots, *i)?,
-                        ));
-                    }
-                    next_slot_indexes = &self.add_next_slots_to_trunk(next_slots);
+        if self.is_newly_completed_slot(slot_height, slot_meta, backup_meta) && slot_meta.is_trunk {
+            // This is a newly inserted slot and slot.is_trunk is true, so go through
+            // and update all child slots with is_trunk if applicable
+            let next_slot_indexes: Vec<&Vec<u64>> = vec![&slot_meta.next_slots];
+            let mut new_chained_slots = vec![];
+            while !next_slot_indexes.is_empty() {
+                let mut next_slots: Vec<(u64, RefMut<SlotMeta>)> = vec![];
+                for next_slot_index in next_slot_indexes.iter().flat_map(|x| x.iter()) {
+                    let result = self.find_slot_meta_in_cached_state(
+                        working_set,
+                        chained_slots,
+                        *next_slot_index,
+                    )?;
+                    let next_slot = {
+                        if let Some(next_slot) = result {
+                            next_slot
+                        } else {
+                            drop(result);
+                            let slot = self.meta_cf.get_slot_meta(*next_slot_index)?.expect("Slot must exist in database if something chained to it, and it didn't exist in the cache");
+                            new_chained_slots.push((*next_slot_index, RefCell::new(slot)));
+                            chained_slots.get(next_slot_index).unwrap().borrow_mut()
+                        }
+                    };
+
+                    next_slots.push((*next_slot_index, next_slot));
                 }
+                let slots: Vec<(u64, &mut SlotMeta)> =
+                    next_slots.iter_mut().map(|(h, r)| (*h, &mut **r)).collect();
+
+                let next_slot_index: Vec<_> = self.add_next_slots_to_trunk(slots);
+            }
+
+            for (height, slot) in new_chained_slots {
+                chained_slots.insert(height, slot);
             }
         }
 
         Ok(())
     }
 
-    fn add_next_slots_to_trunk(&self, next_slots: Vec<(u64, &mut SlotMeta)>) -> Vec<u64> {
+    fn add_next_slots_to_trunk<'a>(
+        &self,
+        next_slots: Vec<(u64, &'a mut SlotMeta)>,
+    ) -> Vec<&'a Vec<u64>> {
         let mut next_indexes = vec![];
         for (next_slot_index, next_slot) in next_slots {
             next_slot.is_trunk = true;
@@ -887,11 +915,26 @@ impl DbLedger {
                 // There should be no duplicates in this vector because
                 // each slot chains back to one unique previous slot, it's the
                 // set forward links that can be of unbounded cardinality.
-                next_indexes.extend(next_slot.next_slots);
+                next_indexes.push(&next_slot.next_slots);
             }
         }
 
         next_indexes
+    }
+
+    fn chain_new_slot(
+        &self,
+        prev_slot: &mut SlotMeta,
+        current_slot_height: u64,
+        current_slot: &mut SlotMeta,
+    ) {
+        prev_slot.next_slots.push(current_slot_height);
+        current_slot.is_trunk = prev_slot.is_trunk
+            && current_slot.contains_all_ticks(
+                current_slot_height,
+                self.num_bootstrap_ticks,
+                self.ticks_per_block,
+            );
     }
 
     fn is_newly_completed_slot(
@@ -905,25 +948,37 @@ impl DbLedger {
                 || slot_meta.consumed_ticks != backup_slot_meta.as_ref().unwrap().consumed_ticks)
     }
 
-    fn find_slot_in_existing_state<'a>(
+    fn find_slot_meta_in_db_else_create<'a>(
         &self,
-        working_set: &'a mut HashMap<u64, (SlotMeta, Option<SlotMeta>)>,
-        chained_slots: &'a mut HashMap<u64, SlotMeta>,
         slot_index: u64,
-    ) -> Result<&'a mut SlotMeta> {
-        if let Some((ref mut slot, _)) = working_set.get_mut(&slot_index) {
-            Ok(slot)
-        } else if let Some(ref mut slot) = chained_slots.get_mut(&slot_index) {
-            Ok(slot)
-        } else if let Some(slot) = self.meta_cf.get_slot_meta(slot_index)? {
-            chained_slots.insert(slot_index, slot);
-            Ok(chained_slots.get_mut(&slot_index).unwrap())
+        insert_map: &'a mut HashMap<u64, RefCell<SlotMeta>>,
+    ) -> Result<RefMut<'a, SlotMeta>> {
+        if let Some(slot) = self.meta_cf.get_slot_meta(slot_index)? {
+            insert_map.insert(slot_index, RefCell::new(slot));
+            Ok(insert_map.get(&slot_index).unwrap().borrow_mut())
         } else {
-            // If this slot doesn't exist, make a dummy placeholder slot so we
-            // can remember which slots chained to this one when we eventually
-            // get a real blob for this slot
-            chained_slots.insert(slot_index, SlotMeta::new(slot_index, 0));
-            Ok(chained_slots.get_mut(&slot_index).unwrap())
+            // If this slot doesn't exist, make a dummy placeholder slot (denoted by passing
+            // 0 for the num_blocks argument to the SlotMeta constructor). This way we
+            // remember which slots chained to this one when we eventually get a real blob
+            // for this slot
+            insert_map.insert(slot_index, RefCell::new(SlotMeta::new(slot_index, 0)));
+            Ok(insert_map.get(&slot_index).unwrap().borrow_mut())
+        }
+    }
+
+    fn find_slot_meta_in_cached_state<'a>(
+        &self,
+        working_set: &'a HashMap<u64, RefCell<(SlotMeta, Option<SlotMeta>)>>,
+        chained_slots: &'a HashMap<u64, RefCell<SlotMeta>>,
+        slot_index: u64,
+    ) -> Result<Option<RefMut<'a, SlotMeta>>> {
+        println!("FINDING SLOT WITH INDEX: {}", slot_index);
+        if let Some(entry) = working_set.get(&slot_index) {
+            Ok(Some(RefMut::map(entry.borrow_mut(), |s| &mut s.0)))
+        } else if let Some(entry) = chained_slots.get(&slot_index) {
+            Ok(Some(entry.borrow_mut()))
+        } else {
+            Ok(None)
         }
     }
 
@@ -1190,7 +1245,7 @@ mod tests {
         let ledger = DbLedger::open(&ledger_path).unwrap();
 
         // Test meta column family
-        let meta = SlotMeta::new();
+        let meta = SlotMeta::new(DEFAULT_SLOT_HEIGHT, 1);
         let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
         ledger.meta_cf.put(&meta_key, &meta).unwrap();
         let result = ledger
@@ -1316,7 +1371,10 @@ mod tests {
         // Insert second blob, we're missing the first blob, so no consecutive
         // blobs starting from slot 0, index 0 should exist.
         ledger.insert_data_blobs(vec![blobs[1]]).unwrap();
-        assert!(ledger.get_slot_entries(slot_height, 0).unwrap().is_empty());
+        assert!(ledger
+            .get_slot_entries(slot_height, 0, None)
+            .unwrap()
+            .is_empty());
 
         let meta = ledger
             .meta_cf
@@ -1327,7 +1385,7 @@ mod tests {
 
         // Insert first blob, check for consecutive returned entries
         ledger.insert_data_blobs(vec![blobs[0]]).unwrap();
-        let result = ledger.get_slot_entries(slot_height, 0).unwrap();
+        let result = ledger.get_slot_entries(slot_height, 0, None).unwrap();
 
         assert_eq!(result, entries);
 
@@ -1362,7 +1420,7 @@ mod tests {
         // Insert blobs in reverse, check for consecutive returned blobs
         for i in (0..num_blobs).rev() {
             ledger.insert_data_blobs(vec![blobs[i]]).unwrap();
-            let result = ledger.get_slot_entries(slot_height, 0).unwrap();
+            let result = ledger.get_slot_entries(slot_height, 0, None).unwrap();
 
             let meta = ledger
                 .meta_cf
@@ -1452,7 +1510,7 @@ mod tests {
                 .write_shared_blobs(shared_blobs.iter().skip(1).step_by(2))
                 .unwrap();
 
-            assert_eq!(db_ledger.get_slot_entries(0, 0).unwrap(), vec![]);
+            assert_eq!(db_ledger.get_slot_entries(0, 0, None).unwrap(), vec![]);
 
             let meta_key = MetaCf::key(slot);
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
@@ -1463,7 +1521,10 @@ mod tests {
                 .write_shared_blobs(shared_blobs.iter().step_by(2))
                 .unwrap();
 
-            assert_eq!(db_ledger.get_slot_entries(0, 0).unwrap(), original_entries,);
+            assert_eq!(
+                db_ledger.get_slot_entries(0, 0, None).unwrap(),
+                original_entries,
+            );
 
             let meta_key = MetaCf::key(slot);
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
@@ -1505,7 +1566,7 @@ mod tests {
                 )
                 .unwrap();
 
-            assert_eq!(db_ledger.get_slot_entries(0, 0).unwrap(), vec![]);
+            assert_eq!(db_ledger.get_slot_entries(0, 0, None).unwrap(), vec![]);
 
             db_ledger
                 .write_shared_blobs(shared_blobs.iter().step_by(num_duplicates * 2))
@@ -1516,7 +1577,7 @@ mod tests {
                 .step_by(num_duplicates)
                 .collect();
 
-            assert_eq!(db_ledger.get_slot_entries(0, 0).unwrap(), expected,);
+            assert_eq!(db_ledger.get_slot_entries(0, 0, None).unwrap(), expected,);
 
             let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
@@ -1590,16 +1651,16 @@ mod tests {
         let blob_locks: Vec<_> = shared_blobs.iter().map(|b| b.read().unwrap()).collect();
         let blobs: Vec<&Blob> = blob_locks.iter().map(|b| &**b).collect();
 
-        let ledger_path = get_tmp_ledger_path("test_insert_data_blobs_basic");
+        let ledger_path = get_tmp_ledger_path("test_new_blobs_signal");
         let ledger = Arc::new(DbLedger::open(&ledger_path).unwrap());
 
         // Make new thread to listen for signal
         let (sender, recvr) = channel();
         let ledger_clone = ledger.clone();
-        let blobs_signal = &ledger_clone.new_blobs_signal;
         let t_signal_receiver = Builder::new()
             .name("test_new_blobs_signal".to_string())
             .spawn(move || {
+                let blobs_signal = &ledger_clone.new_blobs_signal;
                 let (cvar, lock) = &*blobs_signal;
                 loop {
                     let mut has_updates = lock.lock().unwrap();
@@ -1614,7 +1675,7 @@ mod tests {
             })
             .unwrap();
 
-        // Insert second blob, we're missing the first blob, so no consecutive
+        // Insert second blob, but we're missing the first blob, so no consecutive
         // blobs starting from slot 0, index 0 should exist.
         ledger.insert_data_blobs(vec![blobs[1]]).unwrap();
         let timer = Duration::new(1, 0);
@@ -1643,13 +1704,9 @@ mod tests {
             all_blobs.extend(blobs);
         }
 
+        // Should be no updates, since no new chains from block 0 were formed
         ledger.insert_data_blobs(all_blobs.iter()).unwrap();
-
-        // Wait to get notified of update, should only be one update because there was only
-        // one batch insert, consecutive blobs were formed because we inserted the zero-indexed
-        // blob for each of the new slots
-        assert!(recvr.recv_timeout(timer).is_ok());
-        assert!(recvr.try_recv().is_err());
+        assert!(recvr.recv_timeout(timer).is_err());
 
         // Insert a blob for each slot that doesn't make a consecutive block, we
         // should get no updates
@@ -1749,7 +1806,7 @@ mod tests {
 
             for i in 0..num_entries - 1 {
                 assert_eq!(
-                    db_ledger.get_slot_entries(i, i).unwrap()[0],
+                    db_ledger.get_slot_entries(i, i, None).unwrap()[0],
                     original_entries[i as usize]
                 );
 
