@@ -816,31 +816,42 @@ impl DbLedger {
     fn handle_chaining_for_slot(
         &self,
         write_batch: &WriteBatch,
-        working_set: &mut HashMap<u64, (SlotMeta, Option<SlotMeta>)>,
+        working_set: &mut HashMap<u64, RefCell<(SlotMeta, Option<SlotMeta>)>>,
         chained_slots: &mut HashMap<u64, SlotMeta>,
         slot_height: u64,
     ) -> Result<()> {
-        let (ref mut slot_meta, backup_slot_meta) = working_set
-            .get_mut(&slot_height)
-            .expect("Slot must exist in the working_set hashmap");
-        assert!(slot_meta.num_blocks > 0);
         // The slot that the slot with index slot_height is chaining to
-        let prev_slot_index = {
+        let (prev_slot_index, is_new_slot) = {
+            let (ref slot_meta, backup_slot_meta) = working_set
+                .get(&slot_height)
+                .expect("Slot must exist in the working_set hashmap");
+            assert!(slot_meta.num_blocks > 0);
+            let is_new_slot = backup_slot_meta.is_none();
             if slot_height == 0 {
-                0
+                (0, is_new_slot)
             } else {
-                slot_height - slot_meta.num_blocks
+                (slot_height - slot_meta.num_blocks, is_new_slot)
             }
         };
 
-        if backup_slot_meta.is_none() {
+        if is_new_slot {
             // This is a newly inserted slot so:
             // 1) Chain to the previous slot, and also
             // 2) Determine wheter to set the is_trunk flag
             // TODO: need to detect this when inserting and fill in the empty num_blocks
-            let prev_slot =
-                self.find_slot_in_existing_state(working_set, chained_slots, prev_slot_index)?;
-            self.chain_new_slot(prev_slot, slot_height, slot_meta);
+            let prev_is_trunk = {
+                let prev_slot =
+                    self.find_slot_in_existing_state(working_set, chained_slots, prev_slot_index)?;
+                prev_slot.next_slots.push(slot_height);
+                prev_slot.is_trunk
+            };
+
+            slot_meta.is_trunk = prev_is_trunk
+                && slot_meta.contains_all_ticks(
+                    slot_height,
+                    self.num_bootstrap_ticks,
+                    self.ticks_per_block,
+                );
         }
 
         if self.is_newly_completed_slot(slot_height, &slot_meta, backup_slot_meta) {
@@ -914,21 +925,6 @@ impl DbLedger {
             chained_slots.insert(slot_index, SlotMeta::new(slot_index, 0));
             Ok(chained_slots.get_mut(&slot_index).unwrap())
         }
-    }
-
-    fn chain_new_slot(
-        &self,
-        prev_slot: &mut SlotMeta,
-        current_slot_height: u64,
-        current_slot: &mut SlotMeta,
-    ) {
-        prev_slot.next_slots.push(current_slot_height);
-        current_slot.is_trunk = prev_slot.is_trunk
-            && current_slot.contains_all_ticks(
-                current_slot_height,
-                self.num_bootstrap_ticks,
-                self.ticks_per_block,
-            );
     }
 
     /// Insert a blob into ledger, updating the slot_meta if necessary
