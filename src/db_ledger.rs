@@ -500,21 +500,7 @@ impl DbLedger {
             let meta: &SlotMeta = &RefCell::borrow(&*meta_copy);
             // Check if the working copy of the metadata has changed
             if Some(meta) != meta_backup.as_ref() {
-                // We should signal that there are updates if we extended the chain of consecutive blocks starting
-                // from block 0, which is true iff:
-                // 1) The block with index prev_block_index is itself part of the trunk of consecutive blocks
-                // starting from block 0,
-                if meta.is_trunk &&
-                // AND either:
-                // 1) The slot didn't exist in the database before, and now we have a consecutive
-                // block for that slot
-                ((meta_backup.is_none() && meta.consumed != 0) ||
-                // OR
-                // 2) The slot did exist, but now we have a new consecutive block for that slot
-                (meta_backup.is_some() && meta_backup.as_ref().unwrap().consumed != meta.consumed))
-                {
-                    should_signal = true;
-                }
+                should_signal = should_signal || Self::slot_has_updates(meta, &meta_backup);
                 write_batch.put_cf(
                     self.meta_cf.handle(),
                     &MetaCf::key(*slot_height),
@@ -678,7 +664,7 @@ impl DbLedger {
             let current_key = db_iterator.key().expect("Expect a valid key");
             let current_index = index_from_key(&current_key)
                 .expect("Expect to be able to parse index from valid key");
-            let upper_index = cmp::min(current_index, end_index);
+            let upper_index = min(current_index, end_index);
             for i in prev_index..upper_index {
                 missing_indexes.push(i);
                 if missing_indexes.len() == max_missing {
@@ -789,6 +775,21 @@ impl DbLedger {
         options.set_write_buffer_size(MAX_WRITE_BUFFER_SIZE);
         options.set_max_bytes_for_level_base(MAX_WRITE_BUFFER_SIZE as u64);
         options
+    }
+
+    fn slot_has_updates(slot_meta: &SlotMeta, slot_meta_backup: &Option<SlotMeta>) -> bool {
+        // We should signal that there are updates if we extended the chain of consecutive blocks starting
+        // from block 0, which is true iff:
+        // 1) The block with index prev_block_index is itself part of the trunk of consecutive blocks
+        // starting from block 0,
+        slot_meta.is_trunk &&
+        // AND either:
+        // 1) The slot didn't exist in the database before, and now we have a consecutive
+        // block for that slot
+        ((slot_meta_backup.is_none() && slot_meta.consumed != 0) ||
+        // OR
+        // 2) The slot did exist, but now we have a new consecutive block for that slot
+        (slot_meta_backup.is_some() && slot_meta_backup.as_ref().unwrap().consumed != slot_meta.consumed))
     }
 
     // Chaining based on latest discussion here: https://github.com/solana-labs/solana/pull/2253
@@ -1390,6 +1391,9 @@ mod tests {
             .expect("Expected new metadata object to exist");
         assert_eq!(meta.consumed, 2);
         assert_eq!(meta.received, 2);
+        assert_eq!(meta.consumed_ticks, 0);
+        assert!(meta.next_slots.is_empty());
+        assert!(meta.is_trunk);
 
         // Destroying database without closing it first is undefined behavior
         drop(ledger);
@@ -1492,7 +1496,7 @@ mod tests {
 
             // Write entries
             let num_entries = 20 as u64;
-            let original_entries = make_tiny_test_entries(num_entries as usize);
+            let original_entries = create_ticks(num_entries as usize, Hash::default());
             let shared_blobs = original_entries.clone().to_shared_blobs();
             for (i, b) in shared_blobs.iter().enumerate() {
                 let mut w_b = b.write().unwrap();
@@ -1510,6 +1514,7 @@ mod tests {
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
             assert_eq!(meta.received, num_entries);
             assert_eq!(meta.consumed, 0);
+            assert_eq!(meta.consumed_ticks, 0);
 
             db_ledger
                 .write_shared_blobs(shared_blobs.iter().step_by(2))
@@ -1524,6 +1529,7 @@ mod tests {
             let meta = db_ledger.meta_cf.get(&meta_key).unwrap().unwrap();
             assert_eq!(meta.received, num_entries);
             assert_eq!(meta.consumed, num_entries);
+            assert_eq!(meta.consumed_ticks, num_entries);
         }
 
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
@@ -1807,6 +1813,7 @@ mod tests {
             // Slot 1 is not trunk because slot 0 hasn't been inserted yet
             assert!(!s1.is_trunk);
             assert_eq!(s1.num_blocks, 1);
+            assert_eq!(s1.consumed_ticks, 1);
 
             // 2) Write to the second slot
             db_ledger.write_blobs(&blobs[2..3]).unwrap();
@@ -1815,12 +1822,14 @@ mod tests {
             // Slot 2 is not trunk because slot 0 hasn't been inserted yet
             assert!(!s2.is_trunk);
             assert_eq!(s2.num_blocks, 1);
+            assert_eq!(s2.consumed_ticks, 1);
 
             // Check the first slot again, it should chain to the second slot,
             // but still isn't part of the trunk
             let s1 = db_ledger.meta_cf.get_slot_meta(1).unwrap().unwrap();
             assert_eq!(s1.next_slots, vec![2]);
             assert!(!s1.is_trunk);
+            assert_eq!(s1.consumed_ticks, 1);
 
             // 3) Write to the zeroth slot, check that every slot
             // is now part of the trunk
@@ -1832,7 +1841,155 @@ mod tests {
                     assert_eq!(s.next_slots, vec![i + 1]);
                 }
                 assert_eq!(s.num_blocks, 1);
+                assert_eq!(s.consumed_ticks, 1);
                 assert!(s.is_trunk);
+            }
+        }
+        DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
+    }
+
+    #[test]
+    pub fn test_handle_chaining_missing_slots() {
+        let db_ledger_path = get_tmp_ledger_path("test_handle_chaining_missing_slots");
+        {
+            let mut db_ledger = DbLedger::open(&db_ledger_path).unwrap();
+            let num_slots: usize = 30;
+            let ticks_per_block: usize = 2;
+            db_ledger.ticks_per_block = ticks_per_block as u64;
+            db_ledger.num_bootstrap_ticks = ticks_per_block as u64;
+
+            let ticks = create_ticks((num_slots / 2) * ticks_per_block, Hash::default());
+            let mut blobs = ticks.to_blobs();
+
+            // Leave a gap for every other slot
+            for (i, ref mut b) in blobs.iter_mut().enumerate() {
+                b.set_index((i % ticks_per_block) as u64).unwrap();
+                b.set_slot(((i / 2) * 2 + 1) as u64).unwrap();
+            }
+
+            db_ledger.write_blobs(&blobs[..]).unwrap();
+
+            // Check metadata
+            for i in 0..num_slots {
+                // If it's a slot we just inserted, then next_slots should be empty
+                // because no slots chain to it yet because we left a gap. However, if it's
+                // a slot we haven't inserted, aka one of the gaps, then one of the slots
+                // we just inserted will chain to that gap
+                let s = db_ledger.meta_cf.get_slot_meta(i as u64).unwrap().unwrap();
+                if i % 2 == 0 {
+                    assert_eq!(s.next_slots, vec![i as u64 + 1]);
+                    assert_eq!(s.consumed_ticks, 0);
+                } else {
+                    assert!(s.next_slots.is_empty());
+                    assert_eq!(s.consumed_ticks, ticks_per_block as u64);
+                }
+
+                if i == 0 {
+                    assert!(s.is_trunk);
+                } else {
+                    assert!(!s.is_trunk);
+                }
+            }
+
+            // Fill in the gaps
+            for (i, ref mut b) in blobs.iter_mut().enumerate() {
+                b.set_index((i % ticks_per_block) as u64).unwrap();
+                b.set_slot(((i / 2) * 2) as u64).unwrap();
+            }
+
+            db_ledger.write_blobs(&blobs[..]).unwrap();
+
+            for i in 0..num_slots {
+                // Check that all the slots chain correctly once the missing slots
+                // have been filled
+                let s = db_ledger.meta_cf.get_slot_meta(i as u64).unwrap().unwrap();
+                if i != num_slots - 1 {
+                    assert_eq!(s.next_slots, vec![i as u64 + 1]);
+                } else {
+                    assert!(s.next_slots.is_empty());
+                }
+                assert_eq!(s.consumed_ticks, ticks_per_block as u64);
+                assert!(s.is_trunk);
+            }
+        }
+
+        DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
+    }
+
+    #[test]
+    pub fn test_forward_chaining_is_trunk() {
+        let db_ledger_path = get_tmp_ledger_path("test_forward_chaining_is_trunk");
+        {
+            let mut db_ledger = DbLedger::open(&db_ledger_path).unwrap();
+            let num_slots: usize = 15;
+            let ticks_per_block: usize = 2;
+            db_ledger.ticks_per_block = ticks_per_block as u64;
+            db_ledger.num_bootstrap_ticks = ticks_per_block as u64;
+
+            let entries = create_ticks(num_slots * ticks_per_block, Hash::default());
+            let mut blobs = entries.to_blobs();
+            for (i, ref mut b) in blobs.iter_mut().enumerate() {
+                b.set_index((i % ticks_per_block) as u64).unwrap();
+                b.set_slot((i / ticks_per_block) as u64).unwrap();
+            }
+
+            // Write the blobs such that every 3rd block has a gap in the beginning
+            for (slot_index, slot_ticks) in blobs.chunks(ticks_per_block).enumerate() {
+                if slot_index % 3 == 0 {
+                    db_ledger
+                        .write_blobs(&slot_ticks[1..ticks_per_block])
+                        .unwrap();
+                } else {
+                    db_ledger
+                        .write_blobs(&slot_ticks[..ticks_per_block])
+                        .unwrap();
+                }
+            }
+
+            // Check metadata
+            for i in 0..num_slots {
+                let s = db_ledger.meta_cf.get_slot_meta(i as u64).unwrap().unwrap();
+                // The last slot will not chain to any other slots
+                if i != num_slots - 1 {
+                    assert_eq!(s.next_slots, vec![i as u64 + 1]);
+                } else {
+                    assert!(s.next_slots.is_empty());
+                }
+                assert_eq!(s.num_blocks, 1);
+                if i % 3 == 0 {
+                    assert_eq!(s.consumed_ticks, 0);
+                } else {
+                    assert_eq!(s.consumed_ticks, ticks_per_block as u64);
+                }
+
+                // Other than slot 0, no slots should be part of the trunk
+                if i != 0 {
+                    assert!(!s.is_trunk);
+                } else {
+                    assert!(s.is_trunk);
+                }
+            }
+
+            // Iteratively finish every 3rd slot, and check that all slots up to and including
+            // slot_index + 3 become part of the trunk
+            for (slot_index, slot_ticks) in blobs.chunks(ticks_per_block).enumerate() {
+                if slot_index % 3 == 0 {
+                    db_ledger.write_blobs(&slot_ticks[0..1]).unwrap();
+
+                    for i in 0..num_slots {
+                        let s = db_ledger.meta_cf.get_slot_meta(i as u64).unwrap().unwrap();
+                        if i != num_slots - 1 {
+                            assert_eq!(s.next_slots, vec![i as u64 + 1]);
+                        } else {
+                            assert!(s.next_slots.is_empty());
+                        }
+                        if i <= slot_index + 3 {
+                            assert!(s.is_trunk);
+                        } else {
+                            assert!(!s.is_trunk);
+                        }
+                    }
+                }
             }
         }
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
