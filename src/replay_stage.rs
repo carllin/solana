@@ -56,6 +56,9 @@ pub struct ReplayStage {
     t_replay: JoinHandle<Option<ReplayStageReturnType>>,
 }
 
+// TODO: ReplayStage needs to wait for signals from db_ledger and directly
+// query db_ledger for updates.
+// Issue: https://github.com/solana-labs/solana/issues/2444
 impl ReplayStage {
     /// Process entry blobs, already in order
     #[allow(clippy::too_many_arguments)]

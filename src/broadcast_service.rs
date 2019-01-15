@@ -95,7 +95,7 @@ impl Broadcast {
         inc_new_counter_info!("streamer-broadcast-sent", blobs.len());
 
         db_ledger
-            .write_consecutive_blobs(&blobs)
+            .write_shared_blobs(&blobs)
             .expect("Unrecoverable failure to write to database");
 
         // don't count coding blobs in the blob indexes
