@@ -197,13 +197,14 @@ pub fn process_blob(
     }
 
     // Insert the new blob into the window
-    if is_coding {
+    let mut consumed_entries = if is_coding {
         let blob = &blob.read().unwrap();
         db_ledger.put_coding_blob_bytes(
             slot,
             pix,
             &blob.data[..BLOB_HEADER_SIZE + blob.size().unwrap()],
         )?;
+        vec![]
     } else {
         db_ledger.insert_data_blobs(vec![(*blob.read().unwrap()).borrow()])?
     };
@@ -213,7 +214,9 @@ pub fn process_blob(
         // If write_shared_blobs() of these recovered blobs fails fails, don't return
         // because consumed_entries might be nonempty from earlier, and tick height needs to
         // be updated. Hopefully we can recover these blobs next time successfully.
-        if let Err(e) = try_erasure(db_ledger, &mut consumed_entries) {
+
+        // TODO: Support per-slot erasure. Issue: https://github.com/solana-labs/solana/issues/2441
+        if let Err(e) = try_erasure(db_ledger, &mut consumed_entries, 0) {
             trace!(
                 "erasure::recover failed to write recovered coding blobs. Err: {:?}",
                 e
@@ -270,15 +273,19 @@ pub fn calculate_max_repair_entry_height(
 }
 
 #[cfg(feature = "erasure")]
-fn try_erasure(db_ledger: &Arc<DbLedger>, consume_queue: &mut Vec<Entry>) -> Result<()> {
-    let meta = db_ledger.meta(0)?;
+fn try_erasure(
+    db_ledger: &Arc<DbLedger>,
+    consume_queue: &mut Vec<Entry>,
+    slot_index: u64,
+) -> Result<()> {
+    let meta = db_ledger.meta(slot_index)?;
 
     if let Some(meta) = meta {
-        let (data, coding) = erasure::recover(db_ledger, meta.consumed_slot, meta.consumed)?;
+        let (data, coding) = erasure::recover(db_ledger, slot_index, meta.consumed)?;
         for c in coding {
             let c = c.read().unwrap();
             db_ledger.put_coding_blob_bytes(
-                meta.consumed_slot,
+                0,
                 c.index().unwrap(),
                 &c.data[..BLOB_HEADER_SIZE + c.size().unwrap()],
             )?;
@@ -611,7 +618,8 @@ mod test {
         let db_ledger = Arc::new(generate_db_ledger_from_window(&ledger_path, &window, false));
 
         let mut consume_queue = vec![];
-        try_erasure(&db_ledger, &mut consume_queue).expect("Expected successful erasure attempt");
+        try_erasure(&db_ledger, &mut consume_queue, DEFAULT_SLOT_HEIGHT)
+            .expect("Expected successful erasure attempt");
         window[erased_index].data = erased_data;
 
         {

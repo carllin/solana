@@ -16,7 +16,7 @@ use solana_sdk::hash::Hash;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, KeypairUtil};
 use std::borrow::{Borrow, Cow};
-use std::cell::{RefCell, RefMut};
+use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::fs::{create_dir_all, remove_dir_all};
 use std::io;
@@ -142,7 +142,7 @@ impl SlotMeta {
             consumed: 0,
             received: 0,
             consumed_ticks: 0,
-            num_blocks: num_blocks,
+            num_blocks,
             next_slots: vec![],
             is_trunk: slot_index == 0,
         }
@@ -359,7 +359,7 @@ impl DbLedger {
 
         // Create the erasure column family
         let erasure_cf = ErasureCf::new(db.clone());
-
+        #[allow(clippy::mutex_atomic)]
         let new_blobs_signal = (Condvar::new(), Mutex::new(false));
 
         // TODO: make these constructor arguments
@@ -388,7 +388,7 @@ impl DbLedger {
         Ok(())
     }
 
-    pub fn write_shared_blobs<I>(&self, shared_blobs: I) -> Result<()>
+    pub fn write_shared_blobs<I>(&self, shared_blobs: I) -> Result<Vec<Entry>>
     where
         I: IntoIterator,
         I::Item: Borrow<SharedBlob>,
@@ -406,17 +406,17 @@ impl DbLedger {
         Ok(new_entries)
     }
 
-    pub fn write_blobs<'a, I>(&self, blobs: I) -> Result<()>
+    pub fn write_blobs<'a, I>(&self, blobs: I) -> Result<Vec<Entry>>
     where
         I: IntoIterator,
         I::Item: Borrow<&'a Blob>,
     {
         let blobs = blobs.into_iter().map(|b| *b.borrow());
-        self.insert_data_blobs(blobs)?;
-        Ok(())
+        let entries = self.insert_data_blobs(blobs)?;
+        Ok(entries)
     }
 
-    pub fn write_entries<I>(&self, slot: u64, index: u64, entries: I) -> Result<()>
+    pub fn write_entries<I>(&self, slot: u64, index: u64, entries: I) -> Result<Vec<Entry>>
     where
         I: IntoIterator,
         I::Item: Borrow<Entry>,
@@ -435,7 +435,7 @@ impl DbLedger {
         self.write_blobs(&blobs)
     }
 
-    pub fn insert_data_blobs<I>(&self, new_blobs: I) -> Result<()>
+    pub fn insert_data_blobs<I>(&self, new_blobs: I) -> Result<Vec<Entry>>
     where
         I: IntoIterator,
         I::Item: Borrow<Blob>,
@@ -447,6 +447,7 @@ impl DbLedger {
         let new_blobs: Vec<_> = new_blobs.into_iter().collect();
         let mut prev_inserted_blob_datas = HashMap::new();
 
+        let mut consecutive_entries = vec![];
         for blob in new_blobs.iter() {
             let blob = blob.borrow();
             let blob_slot = blob.slot()?;
@@ -479,12 +480,15 @@ impl DbLedger {
             });
 
             let slot_meta = &mut entry.0.borrow_mut();
-            let _ = self.insert_data_blob(
+            let entries = self.insert_data_blob(
                 blob,
                 &mut prev_inserted_blob_datas,
                 slot_meta,
                 &mut write_batch,
             );
+            if let Ok(entries) = entries {
+                consecutive_entries.extend(entries);
+            }
         }
 
         // Handle chaining for the working set
@@ -508,12 +512,17 @@ impl DbLedger {
 
         self.db.write(write_batch)?;
         if should_signal {
+            #[allow(clippy::mutex_atomic)]
             let mut has_updates = self.new_blobs_signal.1.lock().unwrap();
             *has_updates = true;
             self.new_blobs_signal.0.notify_all();
         }
 
-        Ok(())
+        // TODO: Delete returning these entries and instead have replay_stage query db_ledger
+        // for updates. Returning these entries is to temporarily support current API as to 
+        // not break functionality in db_window.
+        // Issue: https://github.com/solana-labs/solana/issues/2444
+        Ok(consecutive_entries)
     }
 
     // Fill 'buf' with num_blobs or most number of consecutive
@@ -628,7 +637,7 @@ impl DbLedger {
 
     // Given a start and end entry index, find all the missing
     // indexes in the ledger in the range [start_index, end_index)
-    fn  (
+    fn find_missing_indexes(
         db_iterator: &mut DbLedgerRawIterator,
         slot: u64,
         start_index: u64,
@@ -733,14 +742,14 @@ impl DbLedger {
             blob_start_index,
             max_entries,
         )?;
-        Ok(Self::deserialize_blobs(consecutive_blobs))
+        Ok(Self::deserialize_blobs(&consecutive_blobs))
     }
 
-    fn deserialize_blobs<I>(blob_datas: Vec<I>) -> Vec<Entry>
+    fn deserialize_blobs<I>(blob_datas: &[I]) -> Vec<Entry>
     where
         I: Borrow<[u8]>,
     {
-        let entries = blob_datas
+        blob_datas
             .iter()
             .map(|blob_data| {
                 let serialized_entry_data = &blob_data.borrow()[BLOB_HEADER_SIZE..];
@@ -748,9 +757,7 @@ impl DbLedger {
                     .expect("Ledger should only contain well formed data");
                 entry
             })
-            .collect();
-
-        entries
+            .collect()
     }
 
     fn get_cf_options() -> Options {
@@ -798,12 +805,7 @@ impl DbLedger {
         let mut new_chained_slots = HashMap::new();
         let working_set_slot_heights: Vec<_> = working_set.iter().map(|s| *s.0).collect();
         for slot_height in working_set_slot_heights {
-            self.handle_chaining_for_slot(
-                write_batch,
-                working_set,
-                &mut new_chained_slots,
-                slot_height,
-            )?;
+            self.handle_chaining_for_slot(working_set, &mut new_chained_slots, slot_height)?;
         }
 
         // Write all the newly changed slots in new_chained_slots to the write_batch
@@ -820,7 +822,6 @@ impl DbLedger {
 
     fn handle_chaining_for_slot(
         &self,
-        write_batch: &WriteBatch,
         working_set: &HashMap<u64, (Rc<RefCell<SlotMeta>>, Option<SlotMeta>)>,
         new_chained_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
         slot_height: u64,
@@ -984,7 +985,7 @@ impl DbLedger {
         prev_inserted_blob_datas: &mut HashMap<(u64, u64), &'a [u8]>,
         slot_meta: &mut SlotMeta,
         write_batch: &mut WriteBatch,
-    ) -> Result<()> {
+    ) -> Result<Vec<Entry>> {
         let blob_index = blob.index()?;
         let blob_slot = blob.slot()?;
         let blob_size = blob.size()?;
@@ -995,7 +996,7 @@ impl DbLedger {
             return Err(Error::DbLedgerError(DbLedgerError::BlobForIndexExists));
         }
 
-        let (new_consumed, new_consumed_ticks) = {
+        let (new_consumed, new_consumed_ticks, blob_datas) = {
             if slot_meta.consumed == blob_index {
                 let blob_datas = self.get_slot_consecutive_blobs(
                     blob_slot,
@@ -1007,6 +1008,12 @@ impl DbLedger {
                 )?;
 
                 let mut new_consumed_ticks = 0;
+                // Reconstruct entry from the blob we are inserting to check if it's a tick
+                let (mut entries, is_tick) = reconstruct_entries_from_blobs(vec![blob]).expect(
+                    "Blob made it past validation, so must be deserializable at this point",
+                );
+                new_consumed_ticks += is_tick;
+
                 // Check all the consecutive blobs for ticks
                 for blob_data in blob_datas.iter() {
                     let serialized_entry_data = &blob_data[BLOB_HEADER_SIZE..];
@@ -1016,21 +1023,18 @@ impl DbLedger {
                     if entry.is_tick() {
                         new_consumed_ticks += 1;
                     }
+                    entries.push(entry);
                 }
 
-                // Reconstruct entry from the blob we are inserting to check if it's a tick
-                let (_, is_tick) = reconstruct_entries_from_blobs(vec![blob]).expect(
-                    "Blob made it past validation, so must be deserializable at this point",
-                );
-                new_consumed_ticks += is_tick;
                 (
                     // Add one because we skipped this current blob when calling
                     // get_slot_consecutive_blobs() earlier
                     slot_meta.consumed + blob_datas.len() as u64 + 1,
                     new_consumed_ticks,
+                    entries,
                 )
             } else {
-                (slot_meta.consumed, 0)
+                (slot_meta.consumed, 0, vec![])
             }
         };
 
@@ -1046,7 +1050,11 @@ impl DbLedger {
         slot_meta.received = max(blob_index + 1, slot_meta.received);
         slot_meta.consumed = new_consumed;
         slot_meta.consumed_ticks += new_consumed_ticks;
-        Ok(())
+        // TODO: Delete returning these entries and instead have replay_stage query db_ledger
+        // for updates. Returning these entries is to temporarily support current API as to 
+        // not break functionality in db_window.
+        // Issue: https://github.com/solana-labs/solana/issues/2444
+        Ok(blob_datas)
     }
 
     /// Returns the next consumed index and the number of ticks in the new consumed
@@ -1228,7 +1236,7 @@ mod tests {
     use solana_sdk::hash::Hash;
     use std::sync::mpsc::channel;
     use std::thread::sleep;
-    use std::thread::{self, Builder, JoinHandle};
+    use std::thread::Builder;
     use std::time::Duration;
 
     #[test]
@@ -1649,7 +1657,6 @@ mod tests {
         // Create ticks for slot 0
         let entries = create_ticks(ticks_per_block, Hash::default());
         let mut blobs = entries.to_blobs();
-        let slot_height = 0;
 
         for (i, b) in blobs.iter_mut().enumerate() {
             b.set_index(i as u64).unwrap();

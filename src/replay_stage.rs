@@ -3,12 +3,11 @@
 use crate::bank::Bank;
 use crate::cluster_info::ClusterInfo;
 use crate::counter::Counter;
-use crate::db_ledger::DbLedger;
-use crate::entry::{Entry, EntryReceiver, EntrySender, EntrySlice};
-use crate::leader_scheduler::LeaderScheduler;
-use crate::ledger::Block;
-use crate::leader_scheduler::TICKS_PER_BLOCK;
+use crate::entry::{EntryReceiver, EntrySender};
 use solana_sdk::hash::Hash;
+
+use crate::entry::EntrySlice;
+use crate::leader_scheduler::TICKS_PER_BLOCK;
 use crate::packet::BlobError;
 use crate::result::{Error, Result};
 use crate::service::Service;
@@ -16,8 +15,6 @@ use crate::streamer::{responder, BlobSender};
 use crate::vote_signer_proxy::VoteSignerProxy;
 use log::Level;
 use solana_metrics::{influxdb, submit};
-use solana_sdk::hash::Hash;
-use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, KeypairUtil};
 use solana_sdk::timing::duration_as_ms;
 use std::net::UdpSocket;
@@ -59,13 +56,16 @@ pub struct ReplayStage {
     t_replay: JoinHandle<Option<ReplayStageReturnType>>,
 }
 
+// TODO: ReplayStage needs to wait for signals from db_ledger and directly
+// query db_ledger for updates.
+// Issue: https://github.com/solana-labs/solana/issues/2444
 impl ReplayStage {
     /// Process entry blobs, already in order
     #[allow(clippy::too_many_arguments)]
     fn process_entries(
-        entries: Vec<Entry>,
         bank: &Arc<Bank>,
         cluster_info: &Arc<RwLock<ClusterInfo>>,
+        window_receiver: &EntryReceiver,
         keypair: &Arc<Keypair>,
         vote_signer: &Arc<VoteSignerProxy>,
         vote_blob_sender: Option<&BlobSender>,
@@ -75,6 +75,13 @@ impl ReplayStage {
     ) -> Result<()> {
         let timer = Duration::new(1, 0);
         //coalesce all the available entries into a single vote
+        let mut entries = window_receiver.recv_timeout(timer)?;
+        while let Ok(mut more) = window_receiver.try_recv() {
+            entries.append(&mut more);
+            if entries.len() >= MAX_ENTRY_RECV_PER_ITER {
+                break;
+            }
+        }
 
         submit(
             influxdb::Point::new("replicate-stage")
@@ -83,6 +90,7 @@ impl ReplayStage {
         );
 
         let mut res = Ok(());
+        let mut num_entries_to_write = entries.len();
         let now = Instant::now();
         if !entries.as_slice().verify(last_entry_id) {
             inc_new_counter_info!("replicate_stage-verify-fail", entries.len());
@@ -92,6 +100,11 @@ impl ReplayStage {
             "replicate_stage-verify-duration",
             duration_as_ms(&now.elapsed()) as usize
         );
+
+        let (current_leader, _) = bank
+            .get_current_leader()
+            .expect("Scheduled leader should be calculated by this point");
+        let my_id = keypair.pubkey();
 
         // Next vote tick is ceiling of (current tick/ticks per block)
         let mut num_ticks_to_next_vote = TICKS_PER_BLOCK - (bank.tick_height() % TICKS_PER_BLOCK);
@@ -133,12 +146,26 @@ impl ReplayStage {
                             .unwrap();
                     }
                 }
+                let (scheduled_leader, _) = bank
+                    .get_current_leader()
+                    .expect("Scheduled leader should be calculated by this point");
 
+                // TODO: Remove this soon once we boot the leader from ClusterInfo
+                if scheduled_leader != current_leader {
+                    cluster_info.write().unwrap().set_leader(scheduled_leader);
+                }
+
+                if my_id == scheduled_leader {
+                    num_entries_to_write = i + 1;
+                    break;
+                }
                 start_entry_index = i + 1;
                 num_ticks_to_next_vote = TICKS_PER_BLOCK;
             }
         }
 
+        // If leader rotation happened, only write the entries up to leader rotation.
+        entries.truncate(num_entries_to_write);
         *last_entry_id = entries
             .last()
             .expect("Entries cannot be empty at this point")
@@ -171,11 +198,10 @@ impl ReplayStage {
     pub fn new(
         keypair: Arc<Keypair>,
         vote_signer: Arc<VoteSignerProxy>,
-        db_ledger: Arc<DbLedger>,
         bank: Arc<Bank>,
         cluster_info: Arc<RwLock<ClusterInfo>>,
+        window_receiver: EntryReceiver,
         exit: Arc<AtomicBool>,
-        // TODO: entry height is going to be replaced by slot index + blob index
         entry_height: u64,
         last_entry_id: Hash,
     ) -> (Self, EntryReceiver) {
@@ -185,101 +211,48 @@ impl ReplayStage {
         let t_responder = responder("replay_stage", Arc::new(send), vote_blob_receiver);
 
         let keypair = Arc::new(keypair);
-        let (_, mut current_block) = bank
-            .get_current_leader()
-            .expect("Scheduled leader should be calculated by this point");
-        let mut max_tick_height_for_block = bank
-            .leader_scheduler
-            .read()
-            .unwrap()
-            .max_tick_height_for_block(current_block);
-
-        // TODO: get actual slot index and blob index from bank after we transition
-        // bank to parse db_ledger instead of ledger.
-        let mut current_blob_index = 0;
         let t_replay = Builder::new()
             .name("solana-replay-stage".to_string())
             .spawn(move || {
                 let _exit = Finalizer::new(exit);
                 let mut entry_height_ = entry_height;
                 let mut last_entry_id = last_entry_id;
-                'outer: loop {
+                loop {
                     let (leader_id, _) = bank
                         .get_current_leader()
                         .expect("Scheduled leader should be calculated by this point");
 
-                    // Check db_ledger to see if there are any available updates
-                    loop {
-                        let current_tick_height = bank.tick_height();
-                        // We've reached the end of a block, reset our state and check
-                        // for leader rotation
-                        if max_tick_height_for_block == current_tick_height {
-                            current_block += 1;
-                            current_blob_index = 0;
-                            max_tick_height_for_block = bank
-                                .leader_scheduler
-                                .read()
-                                .unwrap()
-                                .max_tick_height_for_block(current_block);
-
-                            // Check for leader rotation
-                            let my_id = keypair.pubkey();
-                            let current_leader =
-                                Self::process_leader_rotation(my_id, &bank, &cluster_info);
-                            if my_id == current_leader {
-                                return Some(ReplayStageReturnType::LeaderRotation(
-                                    bank.tick_height(),
-                                    entry_height_,
-                                    // We should never start the TPU / this stage on an exact entry that causes leader
-                                    // rotation (Fullnode should automatically transition on startup if it detects
-                                    // are no longer a validator. Hence we can assume that some entry must have
-                                    // triggered leader rotation
-                                    last_entry_id,
-                                ));
-                            }
-                        }
-
-                        if let Ok(entries) = db_ledger.get_slot_entries(
-                            current_block,
-                            current_blob_index,
-                            MAX_ENTRY_RECV_PER_ITER as u64,
-                        ) {
-                            let entries_len = entries.len();
-                            match Self::process_entries(
-                                entries,
-                                &bank,
-                                &cluster_info,
-                                &keypair,
-                                &vote_account_keypair,
-                                Some(&vote_blob_sender),
-                                &ledger_entry_sender,
-                                &mut entry_height_,
-                                &mut last_entry_id,
-                            ) {
-                                Err(Error::RecvTimeoutError(RecvTimeoutError::Disconnected)) => {
-                                    break 'outer;
-                                }
-                                Err(Error::RecvTimeoutError(RecvTimeoutError::Timeout)) => (),
-                                Err(e) => error!("{:?}", e),
-                                Ok(()) => {
-                                    current_blob_index += entries_len as u64;
-                                }
-                            }
-                        } else {
-                            break;
-                        }
+                    if leader_id == keypair.pubkey() {
+                        inc_new_counter_info!(
+                            "replay_stage-new_leader",
+                            bank.tick_height() as usize
+                        );
+                        return Some(ReplayStageReturnType::LeaderRotation(
+                            bank.tick_height(),
+                            entry_height_,
+                            // We should never start the TPU / this stage on an exact entry that causes leader
+                            // rotation (Fullnode should automatically transition on startup if it detects
+                            // are no longer a validator. Hence we can assume that some entry must have
+                            // triggered leader rotation
+                            last_entry_id,
+                        ));
                     }
 
-                    // Block until there are updates again
-                    {
-                        let (cvar, lock) = &db_ledger.new_blobs_signal;
-                        let mut has_updates = lock.lock().unwrap();
-                        // Check boolean predicate to protect against spurious wakeups
-                        while !*has_updates {
-                            has_updates = cvar.wait(has_updates).unwrap();
-                        }
-
-                        *has_updates = false;
+                    match Self::process_entries(
+                        &bank,
+                        &cluster_info,
+                        &window_receiver,
+                        &keypair,
+                        &vote_signer,
+                        Some(&vote_blob_sender),
+                        &ledger_entry_sender,
+                        &mut entry_height_,
+                        &mut last_entry_id,
+                    ) {
+                        Err(Error::RecvTimeoutError(RecvTimeoutError::Disconnected)) => break,
+                        Err(Error::RecvTimeoutError(RecvTimeoutError::Timeout)) => (),
+                        Err(e) => error!("{:?}", e),
+                        Ok(()) => (),
                     }
                 }
 
@@ -294,21 +267,6 @@ impl ReplayStage {
             },
             ledger_entry_receiver,
         )
-    }
-
-    fn process_leader_rotation(
-        my_id: Pubkey,
-        bank: &Bank,
-        cluster_info: &Arc<RwLock<ClusterInfo>>,
-    ) -> Pubkey {
-        let (scheduled_leader, _) = bank
-            .get_current_leader()
-            .expect("Scheduled leader should be calculated by this point");
-
-        // TODO: Remove this soon once we boot the leader from ClusterInfo
-        cluster_info.write().unwrap().set_leader(scheduled_leader);
-
-        scheduled_leader
     }
 }
 
