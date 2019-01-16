@@ -2,8 +2,9 @@
 //! Proof of History ledger as well as iterative read, append write, and random
 //! access read to a persistent file-based ledger.
 
-use crate::entry::{reconstruct_entries_from_blobs, Entry};
+use crate::entry::Entry;
 use crate::genesis_block::GenesisBlock;
+use crate::leader_scheduler::{DEFAULT_BOOTSTRAP_HEIGHT, TICKS_PER_BLOCK};
 use crate::packet::{Blob, SharedBlob, BLOB_HEADER_SIZE};
 use crate::result::{Error, Result};
 use bincode::{deserialize, serialize};
@@ -20,6 +21,7 @@ use std::cell::RefCell;
 use std::cmp;
 use std::fs;
 use std::io;
+use std::iter::once;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -126,7 +128,9 @@ pub struct SlotMeta {
     pub consumed: u64,
     // The entry height of the highest blob received for this slot.
     pub received: u64,
-    // The number of ticks in the range [0..consumed]
+    // The number of ticks in the range [0..consumed]. Used to detect when
+    // a slot contains all expected ticks, so that components like repair/ReplayStage
+    // know to look at the next slot.
     pub consumed_ticks: u64,
     // The number of blocks in this slot
     pub num_blocks: u64,
@@ -362,8 +366,9 @@ impl DbLedger {
         let erasure_cf = ErasureCf::new(db.clone());
 
         // TODO: make these constructor arguments
-        let ticks_per_block = 100;
-        let num_bootstrap_ticks = 1000;
+        // Issue: https://github.com/solana-labs/solana/issues/2458
+        let ticks_per_block = TICKS_PER_BLOCK;
+        let num_bootstrap_ticks = DEFAULT_BOOTSTRAP_HEIGHT;
         Ok(DbLedger {
             db,
             meta_cf,
@@ -472,6 +477,7 @@ impl DbLedger {
                     // for details
                     if meta.num_blocks == 0 {
                         // TODO: derive num_blocks for this metadata from the blob itself
+                        // Issue: https://github.com/solana-labs/solana/issues/2459.
                         meta.num_blocks = 1;
                         // Set backup as None so that all the logic for inserting new slots
                         // still runs, as this placeholder slot is essentially equivalent to
@@ -482,6 +488,7 @@ impl DbLedger {
                     }
                 } else {
                     // TODO: derive num_blocks for this metadata from the blob itself
+                    // Issue: https://github.com/solana-labs/solana/issues/2459
                     (Rc::new(RefCell::new(SlotMeta::new(blob_slot, 1))), None)
                 }
             });
@@ -857,7 +864,6 @@ impl DbLedger {
                     // This is a newly inserted slot so:
                     // 1) Chain to the previous slot, and also
                     // 2) Determine whether to set the is_trunk flag
-                    // TODO: need to detect this when inserting and fill in the empty num_blocks
                     self.chain_new_slot_to_prev_slot(
                         prev_slot_index,
                         &mut prev_slot.borrow_mut(),
@@ -987,7 +993,7 @@ impl DbLedger {
     /// Insert a blob into ledger, updating the slot_meta if necessary
     fn insert_data_blob<'a>(
         &self,
-        blob: &'a Blob,
+        blob_to_insert: &'a Blob,
         prev_inserted_blob_datas: &mut HashMap<(u64, u64), &'a [u8]>,
         slot_meta: &mut SlotMeta,
         write_batch: &mut WriteBatch,
@@ -1007,21 +1013,18 @@ impl DbLedger {
                 let blob_datas = self.get_slot_consecutive_blobs(
                     blob_slot,
                     prev_inserted_blob_datas,
-                    // Skip this blob_index because we haven't inserted the current into the
-                    // database or prev_inserted_blob_datas
+                    // Don't start looking for consecutive blobs at blob_index,
+                    // because we haven't inserted/committed the new blob_to_insert
+                    // into the database or prev_inserted_blob_datas hashmap yet.
                     blob_index + 1,
                     None,
                 )?;
 
+                let blob_to_insert = Cow::Borrowed(&blob_to_insert.data[..]);
                 let mut new_consumed_ticks = 0;
-                // Reconstruct entry from the blob we are inserting to check if it's a tick
-                let (mut entries, is_tick) = reconstruct_entries_from_blobs(vec![blob]).expect(
-                    "Blob made it past validation, so must be deserializable at this point",
-                );
-                new_consumed_ticks += is_tick;
-
+                let mut entries = vec![];
                 // Check all the consecutive blobs for ticks
-                for blob_data in blob_datas.iter() {
+                for blob_data in once(&blob_to_insert).chain(blob_datas.iter()) {
                     let serialized_entry_data = &blob_data[BLOB_HEADER_SIZE..];
                     let entry: Entry = deserialize(serialized_entry_data).expect(
                         "Blob made it past validation, so must be deserializable at this point",
@@ -1045,7 +1048,7 @@ impl DbLedger {
         };
 
         let key = DataCf::key(blob_slot, blob_index);
-        let serialized_blob_data = &blob.data[..BLOB_HEADER_SIZE + blob_size];
+        let serialized_blob_data = &blob_to_insert.data[..BLOB_HEADER_SIZE + blob_size];
 
         // Commit step: commit all changes to the mutable structures at once, or none at all.
         // We don't want only some of these changes going through.
@@ -1056,7 +1059,7 @@ impl DbLedger {
         slot_meta.received = cmp::max(blob_index + 1, slot_meta.received);
         slot_meta.consumed = new_consumed;
         slot_meta.consumed_ticks += new_consumed_ticks;
-        // TODO: Delete returning these entries and instead have replay_stage query db_ledger
+        // TODO: Remove returning these entries and instead have replay_stage query db_ledger
         // for updates. Returning these entries is to temporarily support current API as to
         // not break functionality in db_window.
         // Issue: https://github.com/solana-labs/solana/issues/2444
