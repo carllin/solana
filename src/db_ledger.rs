@@ -189,6 +189,11 @@ impl MetaCf {
         let key = Self::key(slot_height);
         self.get(&key)
     }
+
+    pub fn put_slot_meta(&self, slot_height: u64, slot_meta: &SlotMeta) -> Result<()> {
+        let key = Self::key(slot_height);
+        self.put(&key, slot_meta)
+    }
 }
 
 impl LedgerColumnFamily for MetaCf {
@@ -750,6 +755,25 @@ impl DbLedger {
             max_entries,
         )?;
         Ok(Self::deserialize_blobs(&consecutive_blobs))
+    }
+
+    // Returns slots connecting to any element of the list `slot_indexes`.
+    pub fn get_slots_since(&self, slot_indexes: &[u64]) -> Result<Vec<u64>> {
+        // Return error if there was a database error during lookup of any of the
+        // slot indexes
+        let slots: Result<Vec<Option<SlotMeta>>> = slot_indexes
+            .into_iter()
+            .map(|slot_index| self.meta_cf.get_slot_meta(*slot_index))
+            .collect();
+
+        let slots = slots?;
+        let slots: Vec<_> = slots
+            .into_iter()
+            .filter_map(|x| x)
+            .flat_map(|x| x.next_slots)
+            .collect();
+
+        Ok(slots)
     }
 
     fn deserialize_blobs<I>(blob_datas: &[I]) -> Vec<Entry>
@@ -2001,6 +2025,40 @@ mod tests {
                 }
             }
         }
+        DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
+    }
+
+    #[test]
+    pub fn test_get_slots_since() {
+        let db_ledger_path = get_tmp_ledger_path("test_get_slots_since");
+
+        {
+            let db_ledger = DbLedger::open(&db_ledger_path).unwrap();
+
+            // Slot doesn't exist
+            assert!(db_ledger.get_slots_since(&vec![0]).unwrap().is_empty());
+
+            let mut meta0 = SlotMeta::new(0, 1);
+            db_ledger.meta_cf.put_slot_meta(0, &meta0).unwrap();
+
+            // Slot exists, chains to nothing
+            assert!(db_ledger.get_slots_since(&vec![0]).unwrap().is_empty());
+            meta0.next_slots = vec![1, 2];
+            db_ledger.meta_cf.put_slot_meta(0, &meta0).unwrap();
+
+            // Slot exists, chains to some other slots
+            assert_eq!(db_ledger.get_slots_since(&vec![0]).unwrap(), vec![1, 2]);
+            assert_eq!(db_ledger.get_slots_since(&vec![0, 1]).unwrap(), vec![1, 2]);
+
+            let mut meta3 = SlotMeta::new(3, 1);
+            meta3.next_slots = vec![10, 5];
+            db_ledger.meta_cf.put_slot_meta(3, &meta3).unwrap();
+            assert_eq!(
+                db_ledger.get_slots_since(&vec![0, 1, 3]).unwrap(),
+                vec![1, 2, 10, 5]
+            );
+        }
+
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
     }
 
