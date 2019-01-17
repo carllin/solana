@@ -228,7 +228,7 @@ impl Fullnode {
         }
 
         // Get the scheduled leader
-        let (scheduled_leader, _) = bank
+        let (scheduled_leader, slot_index) = bank
             .get_current_leader()
             .expect("Leader not known after processing bank");
 
@@ -258,6 +258,8 @@ impl Fullnode {
         // Setup channels for rotation indications
         let (to_leader_sender, to_leader_receiver) = channel();
         let (to_validator_sender, to_validator_receiver) = channel();
+
+        let blob_index = Self::get_consumed_for_slot(&db_ledger, slot_index);
 
         let tvu = Tvu::new(
             vote_signer,
@@ -290,7 +292,8 @@ impl Fullnode {
                 .try_clone()
                 .expect("Failed to clone broadcast socket"),
             cluster_info.clone(),
-            entry_height,
+            slot_index,
+            blob_index,
             config.sigverify_disabled,
             max_tick_height,
             last_entry_id,
@@ -330,8 +333,8 @@ impl Fullnode {
         // in the active set, then the leader scheduler will pick the same leader again, so
         // check for that
         if scheduled_leader == self.keypair.pubkey() {
-            let (last_entry_id, entry_height) = self.node_services.tvu.get_state();
-            self.validator_to_leader(self.bank.tick_height(), entry_height, last_entry_id);
+            let (last_entry_id, _) = self.node_services.tvu.get_state();
+            self.validator_to_leader(self.bank.tick_height(), last_entry_id);
             Ok(())
         } else {
             self.node_services.tpu.switch_to_forwarder(
@@ -345,7 +348,7 @@ impl Fullnode {
         }
     }
 
-    pub fn validator_to_leader(&mut self, tick_height: u64, entry_height: u64, last_id: Hash) {
+    pub fn validator_to_leader(&mut self, tick_height: u64, last_id: Hash) {
         trace!("validator_to_leader");
         self.cluster_info
             .write()
@@ -356,7 +359,10 @@ impl Fullnode {
             let ls_lock = self.bank.leader_scheduler.read().unwrap();
             ls_lock.max_height_for_leader(tick_height + 1)
         };
-
+        let (_, slot_index) = self
+            .bank
+            .get_current_leader()
+            .expect("Leader must be known during leader rotation");
         let (to_validator_sender, to_validator_receiver) = channel();
         self.role_notifiers.1 = to_validator_receiver;
         self.node_services.tpu.switch_to_leader(
@@ -372,7 +378,8 @@ impl Fullnode {
             self.cluster_info.clone(),
             self.sigverify_disabled,
             max_tick_height,
-            entry_height,
+            slot_index,
+            0,
             &last_id,
             self.keypair.pubkey(),
             &to_validator_sender,
@@ -387,8 +394,8 @@ impl Fullnode {
             let should_be_forwarder = self.role_notifiers.1.try_recv();
             let should_be_leader = self.role_notifiers.0.try_recv();
             match should_be_leader {
-                Ok(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
-                    self.validator_to_leader(tick_height, entry_height, last_entry_id);
+                Ok(TvuReturnType::LeaderRotation(tick_height, last_entry_id)) => {
+                    self.validator_to_leader(tick_height, last_entry_id);
                     return Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation));
                 }
                 _ => match should_be_forwarder {
@@ -465,6 +472,15 @@ impl Fullnode {
         let genesis_block =
             GenesisBlock::load(ledger_path).expect("Expected to successfully open genesis block");
         (genesis_block, db_ledger)
+    }
+
+    fn get_consumed_for_slot(db_ledger: &DbLedger, slot_index: u64) -> u64 {
+        let meta = db_ledger.meta(slot_index).expect("Database error");
+        if let Some(meta) = meta {
+            meta.consumed
+        } else {
+            0
+        }
     }
 }
 
@@ -726,6 +742,7 @@ mod tests {
         let num_slots_per_epoch = 3;
         let leader_rotation_interval = 5;
         let seed_rotation_interval = num_slots_per_epoch * leader_rotation_interval;
+        let bootstrap_height = genesis_tick_height;
 
         // Set the bootstrap height exactly the current tick height, so that we can
         // test if the bootstrap leader knows to immediately transition to a validator
@@ -896,8 +913,7 @@ mod tests {
             let should_be_forwarder = validator.role_notifiers.1.try_recv();
             let should_be_leader = validator.role_notifiers.0.try_recv();
             match should_be_leader {
-                Ok(TvuReturnType::LeaderRotation(tick_height, entry_height, _)) => {
-                    assert_eq!(validator.node_services.tvu.get_state().1, entry_height);
+                Ok(TvuReturnType::LeaderRotation(tick_height, _)) => {
                     assert_eq!(validator.bank.tick_height(), tick_height);
                     assert_eq!(tick_height, bootstrap_height);
                     break;
@@ -914,6 +930,7 @@ mod tests {
         //close the validator so that rocksdb has locks available
         validator.close().unwrap();
         let (bank, entry_height, _) = Fullnode::new_bank_from_ledger(
+            &None,
             &validator_ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         );

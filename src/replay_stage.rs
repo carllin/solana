@@ -243,7 +243,6 @@ impl ReplayStage {
                         to_leader_sender
                             .send(TvuReturnType::LeaderRotation(
                                 bank.tick_height(),
-                                *entry_height_.read().unwrap(),
                                 *last_entry_id.read().unwrap(),
                             ))
                             .unwrap();
@@ -429,7 +428,6 @@ mod test {
         assert_eq!(
             Some(TvuReturnType::LeaderRotation(
                 bootstrap_height,
-                expected_entry_height,
                 expected_last_id,
             )),
             {
@@ -666,7 +664,6 @@ mod test {
         assert_eq!(
             Some(TvuReturnType::LeaderRotation(
                 bootstrap_height,
-                expected_entry_height,
                 expected_last_id,
             )),
             {

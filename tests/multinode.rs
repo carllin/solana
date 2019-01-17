@@ -1265,8 +1265,8 @@ fn run_node(id: Pubkey, mut fullnode: Fullnode, should_exit: Arc<AtomicBool>) ->
             let should_be_fwdr = fullnode.role_notifiers.1.try_recv();
             let should_be_leader = fullnode.role_notifiers.0.try_recv();
             match should_be_leader {
-                Ok(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
-                    fullnode.validator_to_leader(tick_height, entry_height, last_entry_id);
+                Ok(TvuReturnType::LeaderRotation(tick_height, last_entry_id)) => {
+                    fullnode.validator_to_leader(tick_height, last_entry_id);
                 }
                 Err(_) => match should_be_fwdr {
                     Ok(TpuReturnType::LeaderRotation) => {
