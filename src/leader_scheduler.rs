@@ -189,14 +189,14 @@ impl LeaderScheduler {
         }
     }
 
-    // Returns the last tick height for a given block index
-    pub fn max_tick_height_for_block(&self, block_index: u64) -> u64 {
+    // Returns the last tick height for a given slot index
+    pub fn max_tick_height_for_slot(&self, slot_index: u64) -> u64 {
         if self.use_only_bootstrap_leader {
             std::u64::MAX
-        } else if block_index == 0 {
+        } else if slot_index == 0 {
             self.bootstrap_height
         } else {
-            (block_index - 1) * self.leader_rotation_interval + self.bootstrap_height
+            (slot_index - 1) * self.leader_rotation_interval + self.bootstrap_height
         }
     }
 
@@ -307,18 +307,6 @@ impl LeaderScheduler {
     pub fn get_leader_for_slot(&self, slot_height: u64) -> Option<Pubkey> {
         let tick_height = self.slot_height_to_first_tick_height(slot_height);
         self.get_scheduled_leader(tick_height).map(|(id, _)| id)
-    }
-
-    // Give a total tick count, returns 1) the block index and 2) the number of ticks in that block
-    pub fn get_block_and_index(&self, tick_height: u64) -> (u64, u64) {
-        if tick_height <= self.bootstrap_height {
-            (0, tick_height)
-        } else {
-            let block_index =
-                (tick_height - self.bootstrap_height - 1) / self.leader_rotation_interval + 1;
-            let last_height_for_previous_block = self.max_tick_height_for_block(block_index - 1);
-            (block_index, tick_height - last_height_for_previous_block)
-        }
     }
 
     #[cfg(test)]
