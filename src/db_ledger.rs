@@ -189,6 +189,11 @@ impl MetaCf {
         let key = Self::key(slot_height);
         self.get(&key)
     }
+
+    pub fn put_slot_meta(&self, slot_height: u64, slot_meta: &SlotMeta) -> Result<()> {
+        let key = Self::key(slot_height);
+        self.put(&key, slot_meta)
+    }
 }
 
 impl LedgerColumnFamily for MetaCf {
@@ -750,6 +755,25 @@ impl DbLedger {
             max_entries,
         )?;
         Ok(Self::deserialize_blobs(&consecutive_blobs))
+    }
+
+    // Returns slots connecting to any element of the list `slot_indexes`.
+    pub fn get_slots_since(&self, slot_indexes: &[u64]) -> Result<Vec<u64>> {
+        // Return error if there was a database error during lookup of any of the
+        // slot indexes
+        let slots: Result<Vec<Option<SlotMeta>>> = slot_indexes
+            .into_iter()
+            .map(|slot_index| self.meta_cf.get_slot_meta(*slot_index))
+            .collect();
+
+        let slots = slots?;
+        let slots: Vec<_> = slots
+            .into_iter()
+            .filter_map(|x| x)
+            .flat_map(|x| x.next_slots)
+            .collect();
+
+        Ok(slots)
     }
 
     fn deserialize_blobs<I>(blob_datas: &[I]) -> Vec<Entry>
@@ -1508,7 +1532,7 @@ mod tests {
 
             // Write entries
             let num_entries = 20 as u64;
-            let original_entries = create_ticks(num_entries as usize, Hash::default());
+            let original_entries = create_ticks(num_entries, Hash::default());
             let shared_blobs = original_entries.clone().to_shared_blobs();
             for (i, b) in shared_blobs.iter().enumerate() {
                 let mut w_b = b.write().unwrap();
@@ -1654,12 +1678,11 @@ mod tests {
     pub fn test_new_blobs_signal() {
         // Initialize ledger
         let ledger_path = get_tmp_ledger_path("test_new_blobs_signal");
-        let mut ledger = DbLedger::open(&ledger_path).unwrap();
-        let ticks_per_block = 10 as usize;
+        let ticks_per_block = 10;
         let num_bootstrap_ticks = 10;
-        ledger.ticks_per_block = ticks_per_block as u64;
-        ledger.num_bootstrap_ticks = num_bootstrap_ticks;
-        let ledger = Arc::new(ledger);
+        let blocks_per_slot = 1;
+        let config = DbLedgerConfig::new(num_bootstrap_ticks, ticks_per_block, blocks_per_slot);
+        let ledger = Arc::new(DbLedger::open_config(&ledger_path, &config).unwrap());
 
         // Create ticks for slot 0
         let entries = create_ticks(ticks_per_block, Hash::default());
@@ -1702,7 +1725,7 @@ mod tests {
         assert!(recvr.try_recv().is_err());
         // Insert the rest of the ticks
         ledger
-            .insert_data_blobs(&blobs[1..ticks_per_block])
+            .insert_data_blobs(&blobs[1..ticks_per_block as usize])
             .unwrap();
         // Wait to get notified of update, should only be one update
         assert!(recvr.recv_timeout(timer).is_ok());
@@ -1717,7 +1740,7 @@ mod tests {
             let entries = create_ticks(num_slots, Hash::default());
             let mut blobs = entries.to_blobs();
             for (i, ref mut b) in blobs.iter_mut().enumerate() {
-                if i < slot_index - 1 {
+                if (i as u64) < slot_index - 1 {
                     b.set_index(i as u64).unwrap();
                 } else {
                     b.set_index(i as u64 + 1).unwrap();
@@ -1864,17 +1887,18 @@ mod tests {
         let db_ledger_path = get_tmp_ledger_path("test_handle_chaining_missing_slots");
         {
             let mut db_ledger = DbLedger::open(&db_ledger_path).unwrap();
-            let num_slots: usize = 30;
-            let ticks_per_block: usize = 2;
-            db_ledger.ticks_per_block = ticks_per_block as u64;
-            db_ledger.num_bootstrap_ticks = ticks_per_block as u64;
+            let num_slots = 30;
+            let ticks_per_block = 2;
+            db_ledger.ticks_per_block = ticks_per_block;
+            db_ledger.num_bootstrap_ticks = ticks_per_block;
+            db_ledger.num_blocks_per_slot = 1;
 
             let ticks = create_ticks((num_slots / 2) * ticks_per_block, Hash::default());
             let mut blobs = ticks.to_blobs();
 
             // Leave a gap for every other slot
             for (i, ref mut b) in blobs.iter_mut().enumerate() {
-                b.set_index((i % ticks_per_block) as u64).unwrap();
+                b.set_index((i as u64 % ticks_per_block) as u64).unwrap();
                 b.set_slot(((i / 2) * 2 + 1) as u64).unwrap();
             }
 
@@ -1904,7 +1928,7 @@ mod tests {
 
             // Fill in the gaps
             for (i, ref mut b) in blobs.iter_mut().enumerate() {
-                b.set_index((i % ticks_per_block) as u64).unwrap();
+                b.set_index((i as u64 % ticks_per_block) as u64).unwrap();
                 b.set_slot(((i / 2) * 2) as u64).unwrap();
             }
 
@@ -1932,27 +1956,28 @@ mod tests {
         let db_ledger_path = get_tmp_ledger_path("test_forward_chaining_is_trunk");
         {
             let mut db_ledger = DbLedger::open(&db_ledger_path).unwrap();
-            let num_slots: usize = 15;
-            let ticks_per_block: usize = 2;
-            db_ledger.ticks_per_block = ticks_per_block as u64;
-            db_ledger.num_bootstrap_ticks = ticks_per_block as u64;
+            let num_slots = 15;
+            let ticks_per_block = 2;
+            db_ledger.ticks_per_block = ticks_per_block;
+            db_ledger.num_bootstrap_ticks = ticks_per_block;
+            db_ledger.num_blocks_per_slot = 1;
 
             let entries = create_ticks(num_slots * ticks_per_block, Hash::default());
             let mut blobs = entries.to_blobs();
             for (i, ref mut b) in blobs.iter_mut().enumerate() {
-                b.set_index((i % ticks_per_block) as u64).unwrap();
-                b.set_slot((i / ticks_per_block) as u64).unwrap();
+                b.set_index(i as u64 % ticks_per_block).unwrap();
+                b.set_slot(i  as u64 / ticks_per_block).unwrap();
             }
 
             // Write the blobs such that every 3rd block has a gap in the beginning
-            for (slot_index, slot_ticks) in blobs.chunks(ticks_per_block).enumerate() {
+            for (slot_index, slot_ticks) in blobs.chunks(ticks_per_block as usize).enumerate() {
                 if slot_index % 3 == 0 {
                     db_ledger
-                        .write_blobs(&slot_ticks[1..ticks_per_block])
+                        .write_blobs(&slot_ticks[1..ticks_per_block as usize])
                         .unwrap();
                 } else {
                     db_ledger
-                        .write_blobs(&slot_ticks[..ticks_per_block])
+                        .write_blobs(&slot_ticks[..ticks_per_block as usize])
                         .unwrap();
                 }
             }
@@ -1983,7 +2008,7 @@ mod tests {
 
             // Iteratively finish every 3rd slot, and check that all slots up to and including
             // slot_index + 3 become part of the trunk
-            for (slot_index, slot_ticks) in blobs.chunks(ticks_per_block).enumerate() {
+            for (slot_index, slot_ticks) in blobs.chunks(ticks_per_block as usize).enumerate() {
                 if slot_index % 3 == 0 {
                     db_ledger.write_blobs(&slot_ticks[0..1]).unwrap();
 
@@ -1994,7 +2019,7 @@ mod tests {
                         } else {
                             assert!(s.next_slots.is_empty());
                         }
-                        if i <= slot_index + 3 {
+                        if i <= (slot_index + 3) as u64 {
                             assert!(s.is_trunk);
                         } else {
                             assert!(!s.is_trunk);
@@ -2003,6 +2028,40 @@ mod tests {
                 }
             }
         }
+        DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
+    }
+
+    #[test]
+    pub fn test_get_slots_since() {
+        let db_ledger_path = get_tmp_ledger_path("test_get_slots_since");
+
+        {
+            let db_ledger = DbLedger::open(&db_ledger_path).unwrap();
+
+            // Slot doesn't exist
+            assert!(db_ledger.get_slots_since(&vec![0]).unwrap().is_empty());
+
+            let mut meta0 = SlotMeta::new(0, 1);
+            db_ledger.meta_cf.put_slot_meta(0, &meta0).unwrap();
+
+            // Slot exists, chains to nothing
+            assert!(db_ledger.get_slots_since(&vec![0]).unwrap().is_empty());
+            meta0.next_slots = vec![1, 2];
+            db_ledger.meta_cf.put_slot_meta(0, &meta0).unwrap();
+
+            // Slot exists, chains to some other slots
+            assert_eq!(db_ledger.get_slots_since(&vec![0]).unwrap(), vec![1, 2]);
+            assert_eq!(db_ledger.get_slots_since(&vec![0, 1]).unwrap(), vec![1, 2]);
+
+            let mut meta3 = SlotMeta::new(3, 1);
+            meta3.next_slots = vec![10, 5];
+            db_ledger.meta_cf.put_slot_meta(3, &meta3).unwrap();
+            assert_eq!(
+                db_ledger.get_slots_since(&vec![0, 1, 3]).unwrap(),
+                vec![1, 2, 10, 5]
+            );
+        }
+
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
     }
 
