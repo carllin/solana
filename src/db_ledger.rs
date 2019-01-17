@@ -1022,9 +1022,9 @@ impl DbLedger {
         slot_meta: &mut SlotMeta,
         write_batch: &mut WriteBatch,
     ) -> Result<Vec<Entry>> {
-        let blob_index = blob.index();
-        let blob_slot = blob.slot();
-        let blob_size = blob.size();
+        let blob_index = blob_to_insert.index();
+        let blob_slot = blob_to_insert.slot();
+        let blob_size = blob_to_insert.size();
 
         if blob_index < slot_meta.consumed
             || prev_inserted_blob_datas.contains_key(&(blob_slot, blob_index))
@@ -1321,7 +1321,13 @@ mod tests {
     fn test_read_blobs_bytes() {
         let shared_blobs = make_tiny_test_entries(10).to_shared_blobs();
         let slot = DEFAULT_SLOT_HEIGHT;
-        index_blobs(&shared_blobs, &Keypair::new().pubkey(), 0, &[slot; 10]);
+        index_blobs(
+            &shared_blobs,
+            &Keypair::new().pubkey(),
+            &mut 0,
+            &mut 0,
+            &[slot; 10],
+        );
 
         let blob_locks: Vec<_> = shared_blobs.iter().map(|b| b.read().unwrap()).collect();
         let blobs: Vec<&Blob> = blob_locks.iter().map(|b| &**b).collect();
