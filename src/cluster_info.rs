@@ -806,8 +806,8 @@ impl ClusterInfo {
             .unwrap()
     }
 
-    // TODO: To support repairing multiple slots, change broadcast to support
-    // broadcasting per slot, window requests should be by slot + index.
+    // TODO: To support repairing multiple slots, broadcast needs to reset
+    // blob index for every slot, and window requests should be by slot + index.
     // Issue: https://github.com/solana-labs/solana/issues/2440
     fn run_window_request(
         from: &NodeInfo,

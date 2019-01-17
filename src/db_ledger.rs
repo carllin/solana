@@ -314,12 +314,12 @@ impl LedgerColumnFamilyRaw for ErasureCf {
 pub struct DbLedger {
     // Underlying database is automatically closed in the Drop implementation of DB
     db: Arc<DB>,
-    pub meta_cf: MetaCf,
-    pub data_cf: DataCf,
-    pub erasure_cf: ErasureCf,
-    pub new_blobs_signal: (Condvar, Mutex<bool>),
-    pub ticks_per_block: u64,
-    pub num_bootstrap_ticks: u64,
+    meta_cf: MetaCf,
+    data_cf: DataCf,
+    erasure_cf: ErasureCf,
+    new_blobs_signal: (Condvar, Mutex<bool>),
+    ticks_per_block: u64,
+    num_bootstrap_ticks: u64,
 }
 
 // TODO: Once we support a window that knows about different leader
