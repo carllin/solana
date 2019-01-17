@@ -269,12 +269,12 @@ impl Fullnode {
         }
 
         // Get the scheduled leader
-        let (scheduled_leader, _) = bank
+        let (scheduled_leader, slot_index) = bank
             .get_current_leader()
             .expect("Leader not known after processing bank");
 
         cluster_info.write().unwrap().set_leader(scheduled_leader);
-
+        let blob_index = Self::get_consumed_for_slot(&db_ledger, slot_index);
         let node_role = if scheduled_leader != keypair.pubkey() {
             // Start in validator mode.
             let sockets = Sockets {
@@ -346,7 +346,8 @@ impl Fullnode {
                     .try_clone()
                     .expect("Failed to clone broadcast socket"),
                 cluster_info.clone(),
-                entry_height,
+                slot_index,
+                blob_index,
                 bank.leader_scheduler.clone(),
                 entry_receiver,
                 max_tick_height,
@@ -426,7 +427,7 @@ impl Fullnode {
         // check for that
         if scheduled_leader == self.keypair.pubkey() {
             let tick_height = self.bank.tick_height();
-            self.validator_to_leader(tick_height, entry_height, last_entry_id);
+            self.validator_to_leader(tick_height, last_entry_id);
             Ok(())
         } else {
             let sockets = Sockets {
@@ -469,7 +470,7 @@ impl Fullnode {
         }
     }
 
-    fn validator_to_leader(&mut self, tick_height: u64, entry_height: u64, last_id: Hash) {
+    fn validator_to_leader(&mut self, tick_height: u64, last_id: Hash) {
         trace!("validator_to_leader");
         self.cluster_info
             .write()
@@ -480,6 +481,12 @@ impl Fullnode {
             let ls_lock = self.bank.leader_scheduler.read().unwrap();
             ls_lock.max_height_for_leader(tick_height + 1)
         };
+
+        let (_, slot_index) = self
+            .bank
+            .get_current_leader()
+            .expect("Leader must be known during leader rotation");
+        let blob_index = Self::get_consumed_for_slot(&self.db_ledger, slot_index);
 
         let (tpu, blob_receiver, tpu_exit) = Tpu::new(
             &self.bank,
@@ -504,7 +511,8 @@ impl Fullnode {
                 .try_clone()
                 .expect("Failed to clone broadcast socket"),
             self.cluster_info.clone(),
-            entry_height,
+            slot_index,
+            blob_index,
             self.bank.leader_scheduler.clone(),
             blob_receiver,
             max_tick_height,
@@ -535,7 +543,7 @@ impl Fullnode {
             Some(NodeRole::Validator(validator_services)) => match validator_services.join()? {
                 Some(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
                     //TODO: Fix this to return actual poh height.
-                    self.validator_to_leader(tick_height, entry_height, last_entry_id);
+                    self.validator_to_leader(tick_height, last_entry_id);
                     Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation))
                 }
                 _ => Ok(None),
@@ -603,6 +611,15 @@ impl Fullnode {
         Arc::new(
             DbLedger::open(ledger_path).expect("Expected to successfully open database ledger"),
         )
+    }
+
+    fn get_consumed_for_slot(db_ledger: &DbLedger, slot_index: u64) -> u64 {
+        let meta = db_ledger.meta(slot_index).expect("Database error");
+        if let Some(meta) = meta {
+            meta.consumed
+        } else {
+            0
+        }
     }
 }
 
