@@ -30,7 +30,7 @@ use std::thread;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TvuReturnType {
-    LeaderRotation(u64, u64, Hash),
+    LeaderRotation(u64, Hash),
 }
 
 pub struct Tvu {
@@ -53,6 +53,8 @@ impl Tvu {
     /// # Arguments
     /// * `bank` - The bank state.
     /// * `entry_height` - Initial ledger height
+    /// * `slot_index` - Slot of the last processed blob
+    /// * `blob_index` - Index of last processed blob
     /// * `last_entry_id` - Hash of the last entry
     /// * `cluster_info` - The cluster_info state.
     /// * `sockets` - My fetch, repair, and restransmit sockets
@@ -60,6 +62,7 @@ impl Tvu {
     pub fn new(
         vote_signer: &Arc<VoteSignerProxy>,
         bank: &Arc<Bank>,
+        blob_index: u64,
         entry_height: u64,
         last_entry_id: Hash,
         cluster_info: &Arc<RwLock<ClusterInfo>>,
@@ -90,7 +93,7 @@ impl Tvu {
         //TODO
         //the packets coming out of blob_receiver need to be sent to the GPU and verified
         //then sent to the window, which does the erasure coding reconstruction
-        let (retransmit_stage, blob_window_receiver) = RetransmitStage::new(
+        let retransmit_stage = RetransmitStage::new(
             bank,
             db_ledger.clone(),
             &cluster_info,
@@ -105,11 +108,11 @@ impl Tvu {
         let (replay_stage, ledger_entry_receiver) = ReplayStage::new(
             keypair.clone(),
             vote_signer.clone(),
+            db_ledger.clone(),
             bank.clone(),
             cluster_info.clone(),
-            blob_window_receiver,
             exit.clone(),
-            entry_height,
+            blob_index,
             last_entry_id,
         );
 
@@ -155,15 +158,9 @@ impl Service for Tvu {
         self.fetch_stage.join()?;
         self.storage_stage.join()?;
         match self.replay_stage.join()? {
-            Some(ReplayStageReturnType::LeaderRotation(
-                tick_height,
-                entry_height,
-                last_entry_id,
-            )) => Ok(Some(TvuReturnType::LeaderRotation(
-                tick_height,
-                entry_height,
-                last_entry_id,
-            ))),
+            Some(ReplayStageReturnType::LeaderRotation(tick_height, last_entry_id)) => Ok(Some(
+                TvuReturnType::LeaderRotation(tick_height, last_entry_id),
+            )),
             _ => Ok(None),
         }
     }
@@ -277,6 +274,7 @@ pub mod tests {
         let tvu = Tvu::new(
             &Arc::new(vote_signer),
             &bank,
+            0,
             0,
             cur_hash,
             &cref1,

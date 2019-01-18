@@ -322,7 +322,7 @@ pub struct DbLedger {
     meta_cf: MetaCf,
     data_cf: DataCf,
     erasure_cf: ErasureCf,
-    new_blobs_signal: (Condvar, Mutex<bool>),
+    pub new_blobs_signal: (Condvar, Mutex<bool>),
     ticks_per_block: u64,
     num_bootstrap_ticks: u64,
 }
@@ -492,6 +492,16 @@ impl DbLedger {
             });
 
             let slot_meta = &mut entry.0.borrow_mut();
+
+            // This slot is full, skip the bogus blob
+            if slot_meta.contains_all_ticks(
+                blob_slot,
+                self.num_bootstrap_ticks,
+                self.ticks_per_block,
+            ) {
+                continue;
+            }
+
             let entries = self.insert_data_blob(
                 blob,
                 &mut prev_inserted_blob_datas,

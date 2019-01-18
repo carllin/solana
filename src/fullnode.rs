@@ -299,6 +299,7 @@ impl Fullnode {
             let tvu = Tvu::new(
                 &vote_signer,
                 &bank,
+                blob_index,
                 entry_height,
                 *last_entry_id,
                 &cluster_info,
@@ -449,6 +450,7 @@ impl Fullnode {
             let tvu = Tvu::new(
                 &self.vote_signer,
                 &self.bank,
+                0,
                 entry_height,
                 last_entry_id,
                 &self.cluster_info,
@@ -541,7 +543,7 @@ impl Fullnode {
                 _ => Ok(None),
             },
             Some(NodeRole::Validator(validator_services)) => match validator_services.join()? {
-                Some(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
+                Some(TvuReturnType::LeaderRotation(tick_height, last_entry_id)) => {
                     //TODO: Fix this to return actual poh height.
                     self.validator_to_leader(tick_height, last_entry_id);
                     Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation))
@@ -638,7 +640,7 @@ impl Service for Fullnode {
 
         match self.node_role {
             Some(NodeRole::Validator(validator_service)) => {
-                if let Some(TvuReturnType::LeaderRotation(_, _, _)) = validator_service.join()? {
+                if let Some(TvuReturnType::LeaderRotation(_, _)) = validator_service.join()? {
                     return Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation));
                 }
             }
@@ -1099,7 +1101,7 @@ mod tests {
                 let join_result = validator_services
                     .join()
                     .expect("Expected successful validator join");
-                if let Some(TvuReturnType::LeaderRotation(tick_height, _, _)) = join_result {
+                if let Some(TvuReturnType::LeaderRotation(tick_height, _)) = join_result {
                     assert_eq!(tick_height, bootstrap_height);
                 } else {
                     panic!("Expected validator to have exited due to leader rotation");
