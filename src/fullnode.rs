@@ -785,7 +785,7 @@ mod tests {
             "test_leader_to_leader_transition",
             10_000,
             num_ending_ticks,
-            bootstrap_leader_keypair.pubkey(),
+            &bootstrap_leader_keypair,
             500,
         );
 
@@ -865,7 +865,7 @@ mod tests {
             "test_wrong_role_transition",
             10_000,
             num_ending_ticks,
-            bootstrap_leader_keypair.pubkey(),
+            &bootstrap_leader_keypair,
             500,
         );
 
@@ -993,7 +993,7 @@ mod tests {
             "test_validator_to_leader_transition",
             10_000,
             num_ending_ticks,
-            leader_id,
+            &leader_keypair,
             500,
         );
 

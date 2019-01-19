@@ -3,7 +3,7 @@
 //! access read to a persistent file-based ledger.
 
 use crate::entry::{create_ticks, Entry};
-use crate::leader_scheduler::{DEFAULT_BOOTSTRAP_HEIGHT, TICKS_PER_BLOCK};
+use crate::leader_scheduler::{DEFAULT_BLOCKS_PER_SLOT, DEFAULT_BOOTSTRAP_HEIGHT, TICKS_PER_BLOCK};
 use crate::mint::Mint;
 use crate::packet::{Blob, SharedBlob, BLOB_HEADER_SIZE};
 use crate::result::{Error, Result};
@@ -166,6 +166,10 @@ impl SlotMeta {
             }
         };
 
+        println!(
+            "num_expected_ticks: {}, tpb: {}, nbt: {}",
+            num_expected_slot_ticks, ticks_per_block, num_bootstrap_ticks
+        );
         num_expected_slot_ticks == self.consumed_ticks
     }
 }
@@ -325,6 +329,7 @@ pub struct DbLedger {
     pub new_blobs_signal: (Condvar, Mutex<bool>),
     ticks_per_block: u64,
     num_bootstrap_ticks: u64,
+    num_blocks_per_slot: u64,
 }
 
 // TODO: Once we support a window that knows about different leader
@@ -375,6 +380,7 @@ impl DbLedger {
         // Issue: https://github.com/solana-labs/solana/issues/2458
         let ticks_per_block = TICKS_PER_BLOCK;
         let num_bootstrap_ticks = DEFAULT_BOOTSTRAP_HEIGHT;
+        let num_blocks_per_slot = DEFAULT_BLOCKS_PER_SLOT;
         Ok(DbLedger {
             db,
             meta_cf,
@@ -383,6 +389,7 @@ impl DbLedger {
             new_blobs_signal,
             ticks_per_block,
             num_bootstrap_ticks,
+            num_blocks_per_slot,
         })
     }
 
@@ -476,18 +483,28 @@ impl DbLedger {
                     if meta.num_blocks == 0 {
                         // TODO: derive num_blocks for this metadata from the blob itself
                         // Issue: https://github.com/solana-labs/solana/issues/2459.
-                        meta.num_blocks = 1;
+                        meta.num_blocks = self.num_blocks_per_slot;
                         // Set backup as None so that all the logic for inserting new slots
                         // still runs, as this placeholder slot is essentially equivalent to
                         // inserting a new slot
                         (Rc::new(RefCell::new(meta.clone())), None)
                     } else {
+                        println!(
+                            "blob_slot index: {}, ct: {}",
+                            blob_slot, meta.consumed_ticks
+                        );
                         (Rc::new(RefCell::new(meta.clone())), Some(meta))
                     }
                 } else {
                     // TODO: derive num_blocks for this metadata from the blob itself
                     // Issue: https://github.com/solana-labs/solana/issues/2459
-                    (Rc::new(RefCell::new(SlotMeta::new(blob_slot, 1))), None)
+                    (
+                        Rc::new(RefCell::new(SlotMeta::new(
+                            blob_slot,
+                            self.num_blocks_per_slot,
+                        ))),
+                        None,
+                    )
                 }
             });
 
@@ -499,6 +516,12 @@ impl DbLedger {
                 self.num_bootstrap_ticks,
                 self.ticks_per_block,
             ) {
+                println!(
+                    "cat: bs: {}, bi: {}, ct: {}",
+                    blob_slot,
+                    blob.index()?,
+                    slot_meta.consumed_ticks
+                );
                 continue;
             }
 
@@ -879,7 +902,8 @@ impl DbLedger {
             // 2) slot_height != 0
             // then try to chain this slot to a previous slot
             if slot_height != 0 {
-                let prev_slot_index = slot_height - slot_meta.num_blocks;
+                let prev_slot_index =
+                    slot_height - (slot_meta.num_blocks / self.num_blocks_per_slot);
 
                 // Check if slot_meta is a new slot
                 if meta_backup.is_none() {
@@ -1126,6 +1150,38 @@ impl DbLedger {
 
         Ok(blobs)
     }
+
+    // Handle special case of writing genesis blobs. For instance, the first two entries
+    // don't count as ticks, even if they're empty entries
+    fn write_genesis_blobs(&self, blobs: &[Blob]) -> Result<()> {
+        // TODO: change bootstrap height to number of slots
+        let meta_key = MetaCf::key(DEFAULT_SLOT_HEIGHT);
+        let mut bootstrap_meta = SlotMeta::new(0, self.num_bootstrap_ticks / self.ticks_per_block);
+        let last = blobs.last().unwrap();
+        let num_ending_ticks = blobs.iter().skip(2).fold(0, |tick_count, blob| {
+            let entry: Entry = deserialize(&blob.data[BLOB_HEADER_SIZE..])
+                .expect("Blob has to be deseriablizable");
+            tick_count + entry.is_tick() as u64
+        });
+        bootstrap_meta.consumed = last.index()? + 1;
+        bootstrap_meta.received = last.index()? + 1;
+        bootstrap_meta.is_trunk = true;
+        bootstrap_meta.consumed_ticks = num_ending_ticks;
+
+        let mut batch = WriteBatch::default();
+        batch.put_cf(
+            self.meta_cf.handle(),
+            &meta_key,
+            &serialize(&bootstrap_meta)?,
+        )?;
+        for blob in blobs {
+            let key = DataCf::key(blob.slot()?, blob.index()?);
+            let serialized_blob_datas = &blob.data[..BLOB_HEADER_SIZE + blob.size()?];
+            batch.put_cf(self.data_cf.handle(), &key, serialized_blob_datas)?;
+        }
+        self.db.write(batch)?;
+        Ok(())
+    }
 }
 
 // TODO: all this goes away with EntryTree
@@ -1186,7 +1242,7 @@ where
         })
         .collect();
 
-    db_ledger.write_blobs(&blobs[..])?;
+    db_ledger.write_genesis_blobs(&blobs[..])?;
     Ok(())
 }
 
@@ -1230,24 +1286,29 @@ pub fn create_tmp_sample_ledger(
     name: &str,
     num_tokens: u64,
     num_ending_ticks: usize,
-    bootstrap_leader_id: Pubkey,
+    bootstrap_leader_keypair: &Keypair,
     bootstrap_leader_tokens: u64,
 ) -> (Mint, String, Vec<Entry>) {
-    let mint = Mint::new_with_leader(num_tokens, bootstrap_leader_id, bootstrap_leader_tokens);
+    let mint = Mint::new_with_leader(
+        num_tokens,
+        bootstrap_leader_keypair.pubkey(),
+        bootstrap_leader_tokens,
+    );
     let path = get_tmp_ledger_path(name);
+    DbLedger::destroy(&path).expect("Expected successful database destruction");
 
     // Create the entries
-    let mut genesis = mint.create_entries();
+    let genesis_entries = mint.create_entries();
+    genesis(&path, bootstrap_leader_keypair, &genesis_entries)
+        .expect("Expect successful write of genesis entries");
     let ticks = create_ticks(num_ending_ticks, mint.last_id());
-    genesis.extend(ticks);
 
-    DbLedger::destroy(&path).expect("Expected successful database destruction");
     let db_ledger = DbLedger::open(&path).unwrap();
     db_ledger
-        .write_entries(DEFAULT_SLOT_HEIGHT, 0, &genesis)
+        .write_entries(DEFAULT_SLOT_HEIGHT, 0, &ticks)
         .unwrap();
 
-    (mint, path, genesis)
+    (mint, path, genesis_entries)
 }
 
 pub fn tmp_copy_ledger(from: &str, name: &str) -> String {
@@ -1845,6 +1906,7 @@ mod tests {
             let mut db_ledger = DbLedger::open(&db_ledger_path).unwrap();
             db_ledger.ticks_per_block = 1;
             db_ledger.num_bootstrap_ticks = 1;
+            db_ledger.num_blocks_per_slot = 1;
 
             let entries = create_ticks(3, Hash::default());
             let mut blobs = entries.to_blobs();
@@ -1904,6 +1966,7 @@ mod tests {
             let ticks_per_block: usize = 2;
             db_ledger.ticks_per_block = ticks_per_block as u64;
             db_ledger.num_bootstrap_ticks = ticks_per_block as u64;
+            db_ledger.num_blocks_per_slot = 1;
 
             let ticks = create_ticks((num_slots / 2) * ticks_per_block, Hash::default());
             let mut blobs = ticks.to_blobs();
@@ -1972,6 +2035,7 @@ mod tests {
             let ticks_per_block: usize = 2;
             db_ledger.ticks_per_block = ticks_per_block as u64;
             db_ledger.num_bootstrap_ticks = ticks_per_block as u64;
+            db_ledger.num_blocks_per_slot = 1;
 
             let entries = create_ticks(num_slots * ticks_per_block, Hash::default());
             let mut blobs = entries.to_blobs();

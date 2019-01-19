@@ -966,7 +966,7 @@ fn test_leader_to_validator_transition() {
         "test_leader_to_validator_transition",
         10_000,
         num_ending_ticks,
-        leader_info.id,
+        &validator_keypair,
         500,
     );
 
@@ -1106,7 +1106,7 @@ fn test_leader_validator_basic() {
         "test_leader_validator_basic",
         10_000,
         num_ending_ticks,
-        leader_info.id,
+        &leader_keypair,
         500,
     );
 
@@ -1288,7 +1288,7 @@ fn test_dropped_handoff_recovery() {
         "test_dropped_handoff_recovery",
         10_000,
         num_ending_ticks,
-        bootstrap_leader_info.id,
+        &bootstrap_leader_keypair,
         500,
     );
 
@@ -1443,12 +1443,12 @@ fn test_full_leader_validator_network() {
     solana_logger::setup();
 
     // Create the bootstrap leader node information
-    let bootstrap_leader_keypair = Keypair::new();
+    let bootstrap_leader_keypair = Arc::new(Keypair::new());
     let bootstrap_leader_node = Node::new_localhost_with_pubkey(bootstrap_leader_keypair.pubkey());
     let bootstrap_leader_info = bootstrap_leader_node.info.clone();
 
     let mut node_keypairs = VecDeque::new();
-    node_keypairs.push_back(Arc::new(bootstrap_leader_keypair));
+    node_keypairs.push_back(bootstrap_leader_keypair.clone());
 
     // Create the validator keypairs
     for _ in 0..N {
@@ -1462,7 +1462,7 @@ fn test_full_leader_validator_network() {
         "test_full_leader_validator_network",
         10_000,
         num_ending_ticks,
-        bootstrap_leader_info.id,
+        &bootstrap_leader_keypair,
         500,
     );
 
@@ -1715,7 +1715,7 @@ fn test_broadcast_last_tick() {
         "test_broadcast_last_tick",
         10_000,
         0,
-        bootstrap_leader_info.id,
+        &bootstrap_leader_keypair,
         500,
     );
 

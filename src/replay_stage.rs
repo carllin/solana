@@ -25,7 +25,6 @@ use std::sync::{Arc, RwLock};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Instant;
 
-pub const BLOCK_TICK_COUNT: u64 = 4;
 pub const MAX_ENTRY_RECV_PER_ITER: usize = 512;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -216,36 +215,16 @@ impl ReplayStage {
                             }
                         }
 
-                        let current_tick_height = bank.tick_height();
-                        // We've reached the end of a slot, reset our state and check
-                        // for leader rotation
-                        if max_tick_height_for_slot == current_tick_height {
-                            // Check for leader rotation
-                            let my_id = keypair.pubkey();
-                            let current_leader = Self::get_leader(&bank, &cluster_info);
-                            if my_id == current_leader {
-                                return Some(ReplayStageReturnType::LeaderRotation(
-                                    bank.tick_height(),
-                                    // We should never start the TPU / this stage on an exact entry that causes leader
-                                    // rotation (Fullnode should automatically transition on startup if it detects
-                                    // are no longer a validator. Hence we can assume that some new entry must have
-                                    // triggered leader rotation
-                                    last_entry_id,
-                                ));
-                            }
-
-                            // Check for any slots that chain to this one
-                            prev_slot = current_slot;
-                            current_slot = None;
-                            continue;
-                        }
-
                         // Fetch the next entries from the database
                         if let Ok(entries) = db_ledger.get_slot_entries(
                             current_slot.unwrap(),
                             current_blob_index,
                             Some(MAX_ENTRY_RECV_PER_ITER as u64),
                         ) {
+                            if entries.is_empty() {
+                                println!("empty entries");
+                                break;
+                            }
                             let entries_len = entries.len();
                             match Self::process_entries(
                                 entries,
@@ -268,6 +247,41 @@ impl ReplayStage {
                         } else {
                             break;
                         }
+
+                        let current_tick_height = bank.tick_height();
+                        println!(
+                            "mthfs: {}, current_tick_height: {}",
+                            max_tick_height_for_slot, current_tick_height
+                        );
+                        // We've reached the end of a slot, reset our state and check
+                        // for leader rotation
+                        if max_tick_height_for_slot == current_tick_height {
+                            // Check for leader rotation
+                            let my_id = keypair.pubkey();
+                            let current_leader = Self::get_leader(&bank, &cluster_info);
+                            println!("current_leader: {}", current_leader);
+                            if my_id == current_leader {
+                                return Some(ReplayStageReturnType::LeaderRotation(
+                                    current_tick_height,
+                                    // We should never start the TPU / this stage on an exact entry that causes leader
+                                    // rotation (Fullnode should automatically transition on startup if it detects
+                                    // are no longer a validator. Hence we can assume that some new entry must have
+                                    // triggered leader rotation
+                                    last_entry_id,
+                                ));
+                            }
+
+                            // Check for any slots that chain to this one
+                            prev_slot = current_slot;
+                            current_slot = None;
+                            continue;
+                        }
+
+                        println!(
+                            "current_slot: {}, bi: {}",
+                            current_slot.unwrap(),
+                            current_blob_index
+                        );
                     }
 
                     // Block until there are updates again
@@ -339,7 +353,8 @@ mod test {
     use crate::entry::Entry;
     use crate::fullnode::Fullnode;
     use crate::leader_scheduler::{
-        make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig,
+        make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig, DEFAULT_BOOTSTRAP_HEIGHT,
+        DEFAULT_LEADER_ROTATION_INTERVAL,
     };
 
     use crate::packet::BlobError;
@@ -366,7 +381,7 @@ mod test {
         let cluster_info_me = ClusterInfo::new(my_node.info.clone());
 
         // Create keypair for the old leader
-        let old_leader_id = Keypair::new().pubkey();
+        let old_leader_keypair = Keypair::new();
 
         // Create a ledger
         let num_ending_ticks = 1;
@@ -374,7 +389,7 @@ mod test {
             "test_replay_stage_leader_rotation_exit",
             10_000,
             num_ending_ticks,
-            old_leader_id,
+            &old_leader_keypair,
             500,
         );
         let mut last_id = genesis_entries
@@ -407,9 +422,10 @@ mod test {
 
         // Set up the LeaderScheduler so that this this node becomes the leader at
         // bootstrap_height = num_bootstrap_slots * leader_rotation_interval
-        let leader_rotation_interval = 16;
-        let num_bootstrap_slots = 2;
-        let bootstrap_height = num_bootstrap_slots * leader_rotation_interval;
+        /*let leader_rotation_interval = 16;
+        let num_bootstrap_slots = 2;*/
+        let leader_rotation_interval = DEFAULT_LEADER_ROTATION_INTERVAL;
+        let bootstrap_height = DEFAULT_BOOTSTRAP_HEIGHT;
         let leader_scheduler_config = LeaderSchedulerConfig::new(
             Some(bootstrap_height),
             Some(leader_rotation_interval),
@@ -427,6 +443,7 @@ mod test {
         // Set up the replay stage
         {
             let db_ledger = Arc::new(DbLedger::open(&my_ledger_path).unwrap());
+            let meta = db_ledger.meta(DEFAULT_SLOT_HEIGHT).unwrap().unwrap();
             let exit = Arc::new(AtomicBool::new(false));
             let (replay_stage, ledger_writer_recv) = ReplayStage::new(
                 my_keypair,
@@ -435,7 +452,7 @@ mod test {
                 Arc::new(bank),
                 Arc::new(RwLock::new(cluster_info_me)),
                 exit.clone(),
-                0,
+                meta.consumed,
                 last_entry_id,
             );
 
@@ -459,7 +476,6 @@ mod test {
             let expected_last_id = entries_to_send[leader_rotation_index].id;
 
             // Write the entries to the ledger, replay_stage should get notified of changes
-            let meta = db_ledger.meta(DEFAULT_SLOT_HEIGHT).unwrap().unwrap();
             db_ledger
                 .write_entries(DEFAULT_SLOT_HEIGHT, meta.consumed, &entries_to_send)
                 .unwrap();
@@ -496,7 +512,7 @@ mod test {
         let my_node = Node::new_localhost_with_pubkey(my_id);
 
         // Create keypair for the leader
-        let leader_id = Keypair::new().pubkey();
+        let leader_keypair = Keypair::new();
         let leader_scheduler = Arc::new(RwLock::new(LeaderScheduler::default()));
 
         let num_ending_ticks = 0;
@@ -504,7 +520,7 @@ mod test {
             "test_vote_error_replay_stage_correctness",
             10_000,
             num_ending_ticks,
-            leader_id,
+            &leader_keypair,
             500,
         );
 
@@ -576,14 +592,14 @@ mod test {
         let my_node = Node::new_localhost_with_pubkey(my_id);
 
         // Create keypair for the leader
-        let leader_id = Keypair::new().pubkey();
+        let leader_keypair = Keypair::new();
 
         // Create the ledger
         let (mint, my_ledger_path, genesis_entries) = create_tmp_sample_ledger(
             "test_vote_error_replay_stage_leader_rotation",
             10_000,
             0,
-            leader_id,
+            &leader_keypair,
             500,
         );
 
@@ -708,8 +724,6 @@ mod test {
         let cluster_info_me = Arc::new(RwLock::new(ClusterInfo::new(my_node.info.clone())));
         let (ledger_entry_sender, _ledger_entry_receiver) = channel();
         let mut last_entry_id = Hash::default();
-        // Create keypair for the old leader
-
         let mut last_id = Hash::default();
         let mut entries = Vec::new();
         for _ in 0..5 {
