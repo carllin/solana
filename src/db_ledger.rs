@@ -166,10 +166,6 @@ impl SlotMeta {
             }
         };
 
-        println!(
-            "num_expected_ticks: {}, tpb: {}, nbt: {}",
-            num_expected_slot_ticks, ticks_per_block, num_bootstrap_ticks
-        );
         num_expected_slot_ticks == self.consumed_ticks
     }
 }
@@ -1329,7 +1325,9 @@ pub fn tmp_copy_ledger(from: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entry::{create_ticks, make_tiny_test_entries, make_tiny_test_entries_from_id, EntrySlice};
+    use crate::entry::{
+        create_ticks, make_tiny_test_entries, make_tiny_test_entries_from_id, EntrySlice,
+    };
     use crate::packet::index_blobs;
     use solana_sdk::hash::Hash;
     use std::sync::mpsc::channel;
