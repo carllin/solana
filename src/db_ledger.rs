@@ -166,10 +166,6 @@ impl SlotMeta {
             }
         };
 
-        println!(
-            "num_expected_ticks: {}, tpb: {}, nbt: {}",
-            num_expected_slot_ticks, ticks_per_block, num_bootstrap_ticks
-        );
         num_expected_slot_ticks == self.consumed_ticks
     }
 }

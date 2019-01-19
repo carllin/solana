@@ -20,7 +20,6 @@ use solana_sdk::timing::duration_as_ms;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Instant;
@@ -59,12 +58,14 @@ impl ReplayStage {
     /// Process entry blobs, already in order
     #[allow(clippy::too_many_arguments)]
     fn process_entries(
-        entries: Vec<Entry>,
+        mut entries: Vec<Entry>,
         bank: &Arc<Bank>,
         cluster_info: &Arc<RwLock<ClusterInfo>>,
+        keypair: &Arc<Keypair>,
         vote_signer: Option<&Arc<VoteSignerProxy>>,
         vote_blob_sender: Option<&BlobSender>,
         ledger_entry_sender: &EntrySender,
+        current_blob_index: &mut u64,
         last_entry_id: &mut Hash,
     ) -> Result<()> {
         //coalesce all the available entries into a single vote
@@ -75,6 +76,7 @@ impl ReplayStage {
         );
 
         let mut res = Ok(());
+        let mut num_entries_to_write = entries.len();
         let now = Instant::now();
         if !entries.as_slice().verify(last_entry_id) {
             inc_new_counter_info!("replicate_stage-verify-fail", entries.len());
@@ -84,6 +86,11 @@ impl ReplayStage {
             "replicate_stage-verify-duration",
             duration_as_ms(&now.elapsed()) as usize
         );
+
+        let (mut current_leader, _) = bank
+            .get_current_leader()
+            .expect("Scheduled leader should be calculated by this point");
+        let my_id = keypair.pubkey();
 
         // Next vote tick is ceiling of (current tick/ticks per block)
         let mut num_ticks_to_next_vote = TICKS_PER_BLOCK - (bank.tick_height() % TICKS_PER_BLOCK);
@@ -128,11 +135,32 @@ impl ReplayStage {
                     }
                 }
 
+                let (scheduled_leader, _) = bank
+                    .get_current_leader()
+                    .expect("Scheduled leader should be calculated by this point");
+
+                // TODO: Remove this soon once we boot the leader from ClusterInfo
+                if scheduled_leader != current_leader {
+                    cluster_info.write().unwrap().set_leader(scheduled_leader);
+                    current_leader = scheduled_leader
+                }
+
+                // Check in case db_ledger contains extra ticks for a slot. This can
+                // happen for instance, if ticks are written backwards into db_ledger so
+                // that the db_ledger can't check for total ticks until they have all
+                // been received.
+                if my_id == scheduled_leader {
+                    num_entries_to_write = i + 1;
+                    break;
+                }
+
                 start_entry_index = i + 1;
                 num_ticks_to_next_vote = TICKS_PER_BLOCK;
             }
         }
 
+        // If this node became the leader, then only write the entries up to leader rotation.
+        entries.truncate(num_entries_to_write);
         *last_entry_id = entries
             .last()
             .expect("Entries cannot be empty at this point")
@@ -148,9 +176,11 @@ impl ReplayStage {
         // an error occurred processing one of the entries (causing the rest of the entries to
         // not be processed).
         if entries_len != 0 {
+            println!("Sending {} entries", entries.len());
             ledger_entry_sender.send(entries)?;
         }
 
+        *current_blob_index += entries_len;
         res?;
         inc_new_counter_info!(
             "replicate_stage-duration",
@@ -187,16 +217,24 @@ impl ReplayStage {
             .unwrap()
             .max_tick_height_for_slot(current_slot);
 
+        println!(
+            "mthfs: {}, current_slot: {}",
+            max_tick_height_for_slot, current_slot
+        );
+
         let mut current_slot = Some(current_slot);
         let mut prev_slot = None;
         let t_replay = Builder::new()
             .name("solana-replay-stage".to_string())
             .spawn(move || {
-                let _exit = Finalizer::new(exit);
+                let _exit = Finalizer::new(exit.clone());
                 let mut last_entry_id = last_entry_id;
                 'outer: loop {
                     // Check db_ledger to see if there are any available updates
                     loop {
+                        if exit.load(Ordering::Relaxed) {
+                            break 'outer;
+                        }
                         // Find the next slot that chains to the old slot
                         if current_slot.is_none() {
                             let new_slot = Self::get_next_slot(
@@ -217,6 +255,7 @@ impl ReplayStage {
                             }
                         }
 
+                        println!("Fetching entries from db for slot: {:?}", current_slot);
                         // Fetch the next entries from the database
                         if let Ok(entries) = db_ledger.get_slot_entries(
                             current_slot.unwrap(),
@@ -224,37 +263,27 @@ impl ReplayStage {
                             Some(MAX_ENTRY_RECV_PER_ITER as u64),
                         ) {
                             if entries.is_empty() {
-                                println!("empty entries");
                                 break;
                             }
-                            let entries_len = entries.len();
-                            match Self::process_entries(
+                            if let Err(e) = Self::process_entries(
                                 entries,
                                 &bank,
                                 &cluster_info,
+                                &keypair,
                                 vote_signer.as_ref(),
                                 Some(&vote_blob_sender),
                                 &ledger_entry_sender,
+                                &mut current_blob_index,
                                 &mut last_entry_id,
                             ) {
-                                Err(Error::RecvTimeoutError(RecvTimeoutError::Disconnected)) => {
-                                    break 'outer;
-                                }
-                                Err(Error::RecvTimeoutError(RecvTimeoutError::Timeout)) => (),
-                                Err(e) => error!("{:?}", e),
-                                Ok(()) => {
-                                    current_blob_index += entries_len as u64;
-                                }
+                                error!("{:?}", e);
                             }
                         } else {
                             break;
                         }
 
                         let current_tick_height = bank.tick_height();
-                        println!(
-                            "mthfs: {}, current_tick_height: {}",
-                            max_tick_height_for_slot, current_tick_height
-                        );
+
                         // We've reached the end of a slot, reset our state and check
                         // for leader rotation
                         if max_tick_height_for_slot == current_tick_height {
@@ -293,6 +322,9 @@ impl ReplayStage {
                         // Check boolean predicate to protect against spurious wakeups
                         while !*has_updates {
                             has_updates = cvar.wait(has_updates).unwrap();
+                            if exit.load(Ordering::Relaxed) {
+                                break 'outer;
+                            }
                         }
 
                         *has_updates = false;
@@ -307,9 +339,14 @@ impl ReplayStage {
             Self {
                 t_responder,
                 t_replay,
+                exit_signal,
             },
             ledger_entry_receiver,
         )
+    }
+
+    pub fn close(self) -> thread::Result<Option<ReplayStageReturnType>> {
+        self.join();
     }
 
     fn get_next_slot(db_ledger: &DbLedger, slot_index: u64) -> Option<u64> {
@@ -349,14 +386,15 @@ impl Service for ReplayStage {
 mod test {
     use crate::bank::Bank;
     use crate::cluster_info::{ClusterInfo, Node};
-    use crate::db_ledger::create_tmp_sample_ledger;
-    use crate::db_ledger::{DbLedger, DEFAULT_SLOT_HEIGHT};
+    use crate::db_ledger::{
+        create_tmp_sample_ledger, DbLedger, DbLedgerConfig, DEFAULT_SLOT_HEIGHT,
+    };
     use crate::entry::create_ticks;
     use crate::entry::Entry;
     use crate::fullnode::Fullnode;
     use crate::leader_scheduler::{
-        make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig, DEFAULT_BOOTSTRAP_HEIGHT,
-        DEFAULT_LEADER_ROTATION_INTERVAL,
+        make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig, DEFAULT_BLOCKS_PER_SLOT,
+        DEFAULT_BOOTSTRAP_HEIGHT, DEFAULT_LEADER_ROTATION_INTERVAL, TICKS_PER_BLOCK,
     };
 
     use crate::packet::BlobError;
@@ -412,7 +450,26 @@ mod test {
             .fold(0, |tick_count, entry| tick_count + entry.is_tick() as u64);
 
         {
-            let db_ledger = DbLedger::open(&my_ledger_path).unwrap();
+            // Set up the LeaderScheduler so that this this node becomes the leader at
+            // bootstrap_height = num_bootstrap_slots * leader_rotation_interval
+            /*let leader_rotation_interval = 16;
+            let num_bootstrap_slots = 2;*/
+            let leader_rotation_interval = DEFAULT_LEADER_ROTATION_INTERVAL;
+            let bootstrap_height = DEFAULT_BOOTSTRAP_HEIGHT;
+            let leader_scheduler_config = LeaderSchedulerConfig::new(
+                Some(bootstrap_height),
+                Some(leader_rotation_interval),
+                Some(leader_rotation_interval * 2),
+                Some(bootstrap_height),
+            );
+            let leader_scheduler =
+                Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config)));
+
+            let db_ledger_config =
+                DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, DEFAULT_BLOCKS_PER_SLOT);
+
+            let db_ledger =
+                Arc::new(DbLedger::open_config(&my_ledger_path, &db_ledger_config).unwrap());
             db_ledger
                 .write_entries(
                     DEFAULT_SLOT_HEIGHT,
@@ -420,31 +477,12 @@ mod test {
                     &active_set_entries,
                 )
                 .unwrap();
-        }
 
-        // Set up the LeaderScheduler so that this this node becomes the leader at
-        // bootstrap_height = num_bootstrap_slots * leader_rotation_interval
-        /*let leader_rotation_interval = 16;
-        let num_bootstrap_slots = 2;*/
-        let leader_rotation_interval = DEFAULT_LEADER_ROTATION_INTERVAL;
-        let bootstrap_height = DEFAULT_BOOTSTRAP_HEIGHT;
-        let leader_scheduler_config = LeaderSchedulerConfig::new(
-            Some(bootstrap_height),
-            Some(leader_rotation_interval),
-            Some(leader_rotation_interval * 2),
-            Some(bootstrap_height),
-        );
+            // Set up the bank
+            let (bank, _, last_entry_id) =
+                Fullnode::new_bank_from_db_ledger(&db_ledger, leader_scheduler);
 
-        let leader_scheduler =
-            Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config)));
-
-        // Set up the bank
-        let (bank, _, last_entry_id) =
-            Fullnode::new_bank_from_ledger(&my_ledger_path, leader_scheduler);
-
-        // Set up the replay stage
-        {
-            let db_ledger = Arc::new(DbLedger::open(&my_ledger_path).unwrap());
+            // Set up the replay stage
             let meta = db_ledger.meta(DEFAULT_SLOT_HEIGHT).unwrap().unwrap();
             let exit = Arc::new(AtomicBool::new(false));
             let (replay_stage, ledger_writer_recv) = ReplayStage::new(
@@ -492,9 +530,14 @@ mod test {
             );
 
             // Check that the entries on the ledger writer channel are correct
-            let received_ticks = ledger_writer_recv
+
+            let mut received_ticks = ledger_writer_recv
                 .recv()
                 .expect("Expected to recieve an entry on the ledger writer receiver");
+
+            while let Ok(entries) = ledger_writer_recv.try_recv() {
+                received_ticks.extend(entries);
+            }
 
             assert_eq!(
                 &received_ticks[..],
@@ -526,15 +569,10 @@ mod test {
             500,
         );
 
-        // Set up the bank
-        let (bank, _, last_entry_id) =
-            Fullnode::new_bank_from_ledger(&my_ledger_path, leader_scheduler);
-
         // Set up the cluster info
         let cluster_info_me = Arc::new(RwLock::new(ClusterInfo::new(my_node.info.clone())));
 
         // Set up the replay stage
-        let bank = Arc::new(bank);
         let exit = Arc::new(AtomicBool::new(false));
         let my_keypair = Arc::new(my_keypair);
         let vote_signer = Arc::new(VoteSignerProxy::new(
@@ -542,15 +580,23 @@ mod test {
             Box::new(LocalVoteSigner::default()),
         ));
         {
-            let db_ledger = DbLedger::open(&my_ledger_path).unwrap();
+            let db_ledger = Arc::new(DbLedger::open(&my_ledger_path).unwrap());
+            // Set up the bank
+            let (bank, _, last_entry_id) =
+                Fullnode::new_bank_from_db_ledger(&db_ledger, leader_scheduler);
+            let bank = Arc::new(bank);
+            let meta = db_ledger
+                .meta(DEFAULT_SLOT_HEIGHT)
+                .unwrap()
+                .expect("First slot metadata must exist");
             let (replay_stage, ledger_writer_recv) = ReplayStage::new(
                 my_keypair.clone(),
                 Some(vote_signer.clone()),
-                Arc::new(db_ledger),
+                db_ledger.clone(),
                 bank.clone(),
                 cluster_info_me.clone(),
                 exit.clone(),
-                0,
+                meta.consumed,
                 last_entry_id,
             );
 
@@ -567,20 +613,19 @@ mod test {
                     .expect("Expected nonzero number of entries in genesis")
                     .id,
             );
-            {
-                let db_ledger = DbLedger::open(&my_ledger_path).unwrap();
-                db_ledger
-                    .write_entries(DEFAULT_SLOT_HEIGHT, 0, next_tick.clone())
-                    .unwrap();
-            }
+
+            db_ledger
+                .write_entries(DEFAULT_SLOT_HEIGHT, meta.consumed, next_tick.clone())
+                .unwrap();
 
             let received_tick = ledger_writer_recv
                 .recv()
                 .expect("Expected to recieve an entry on the ledger writer receiver");
 
             assert_eq!(next_tick, received_tick);
+
             replay_stage
-                .join()
+                .close()
                 .expect("Expect successful ReplayStage exit");
         }
         let _ignored = remove_dir_all(&my_ledger_path);
@@ -622,20 +667,10 @@ mod test {
             .skip(2)
             .fold(0, |tick_count, entry| tick_count + entry.is_tick() as u64);
 
-        {
-            let db_ledger = DbLedger::open(&my_ledger_path).unwrap();
-            db_ledger
-                .write_entries(
-                    DEFAULT_SLOT_HEIGHT,
-                    genesis_entries.len() as u64,
-                    &active_set_entries,
-                )
-                .unwrap();
-        }
-
         // Set up the LeaderScheduler so that this this node becomes the leader at
         // bootstrap_height = num_bootstrap_slots * leader_rotation_interval
-        let leader_rotation_interval = 10;
+        let blocks_per_slot = 5;
+        let leader_rotation_interval = TICKS_PER_BLOCK * blocks_per_slot;
         let num_bootstrap_slots = 2;
         let bootstrap_height = num_bootstrap_slots * leader_rotation_interval;
         let leader_scheduler_config = LeaderSchedulerConfig::new(
@@ -648,28 +683,42 @@ mod test {
         let leader_scheduler =
             Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config)));
 
-        // Set up the bank
-        let (bank, _, last_entry_id) =
-            Fullnode::new_bank_from_ledger(&my_ledger_path, leader_scheduler);
-
         // Set up the cluster info
         let cluster_info_me = Arc::new(RwLock::new(ClusterInfo::new(my_node.info.clone())));
 
         // Set up the replay stage
         let signer_proxy = Arc::new(vote_account_id);
-        let bank = Arc::new(bank);
-        let (entry_sender, entry_receiver) = channel();
         let exit = Arc::new(AtomicBool::new(false));
         {
-            let db_ledger = DbLedger::open(&my_ledger_path).unwrap();
+            let db_ledger_config =
+                DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, blocks_per_slot);
+            let db_ledger =
+                Arc::new(DbLedger::open_config(&my_ledger_path, &db_ledger_config).unwrap());
+            db_ledger
+                .write_entries(
+                    DEFAULT_SLOT_HEIGHT,
+                    genesis_entries.len() as u64,
+                    &active_set_entries,
+                )
+                .unwrap();
+            let meta = db_ledger
+                .meta(DEFAULT_SLOT_HEIGHT)
+                .unwrap()
+                .expect("First slot metadata must exist");
+
+            // Set up the bank
+            let (bank, _, last_entry_id) =
+                Fullnode::new_bank_from_db_ledger(&db_ledger, leader_scheduler);
+
+            let bank = Arc::new(bank);
             let (replay_stage, ledger_writer_recv) = ReplayStage::new(
                 my_keypair.clone(),
                 Some(signer_proxy.clone()),
-                Arc::new(db_ledger),
+                db_ledger.clone(),
                 bank.clone(),
                 cluster_info_me.clone(),
                 exit.clone(),
-                0,
+                meta.consumed,
                 last_entry_id,
             );
 
@@ -685,11 +734,14 @@ mod test {
             let leader_rotation_index = (bootstrap_height - initial_tick_height - 1) as usize;
             let mut expected_last_id = Hash::default();
             for i in 0..total_entries_to_send {
+                println!("i: {}", i);
                 let entry = Entry::new(&mut last_id, 0, num_hashes, vec![]);
                 last_id = entry.id;
-                entry_sender
-                    .send(vec![entry.clone()])
-                    .expect("Expected to be able to send entry to ReplayStage");
+                db_ledger.write_entries(
+                    DEFAULT_SLOT_HEIGHT,
+                    meta.consumed + i,
+                    vec![entry.clone()],
+                );
                 // Check that the entries on the ledger writer channel are correct
                 let received_entry = ledger_writer_recv
                     .recv()
@@ -726,6 +778,7 @@ mod test {
         let cluster_info_me = Arc::new(RwLock::new(ClusterInfo::new(my_node.info.clone())));
         let (ledger_entry_sender, _ledger_entry_receiver) = channel();
         let mut last_entry_id = Hash::default();
+        let mut current_blob_index = 0;
         let mut last_id = Hash::default();
         let mut entries = Vec::new();
         for _ in 0..5 {
@@ -744,9 +797,11 @@ mod test {
             entries.clone(),
             &Arc::new(Bank::default()),
             &cluster_info_me,
+            &my_keypair,
             Some(&vote_signer),
             None,
             &ledger_entry_sender,
+            &mut current_blob_index,
             &mut last_entry_id,
         );
 
@@ -765,9 +820,11 @@ mod test {
             entries.clone(),
             &Arc::new(Bank::default()),
             &cluster_info_me,
+            &Arc::new(Keypair::new()),
             Some(&vote_signer),
             None,
             &ledger_entry_sender,
+            &mut current_blob_index,
             &mut last_entry_id,
         );
 
