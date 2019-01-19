@@ -52,6 +52,8 @@ impl Drop for Finalizer {
 pub struct ReplayStage {
     t_responder: JoinHandle<()>,
     t_replay: JoinHandle<Option<ReplayStageReturnType>>,
+    exit: Arc<AtomicBool>,
+    db_ledger: Arc<DbLedger>,
 }
 
 impl ReplayStage {
@@ -222,15 +224,19 @@ impl ReplayStage {
 
         let mut current_slot = Some(current_slot);
         let mut prev_slot = None;
+        let db_ledger_ = db_ledger.clone();
+        let exit_ = exit.clone();
         let t_replay = Builder::new()
             .name("solana-replay-stage".to_string())
             .spawn(move || {
-                let _exit = Finalizer::new(exit.clone());
+                let _exit = Finalizer::new(exit_.clone());
                 let mut last_entry_id = last_entry_id;
                 'outer: loop {
-                    // Check db_ledger to see if there are any available updates
+                    // Loop through db_ledger MAX_ENTRY_RECV_PER_ITER entries at a time for each
+                    // relevant slot to see if there are any available updates
                     loop {
-                        if exit.load(Ordering::Relaxed) {
+                        // Stop getting entries if we get exit signal
+                        if exit_.load(Ordering::Relaxed) {
                             break 'outer;
                         }
                         // Find the next slot that chains to the old slot
@@ -317,11 +323,17 @@ impl ReplayStage {
                     {
                         let (cvar, lock) = &db_ledger.new_blobs_signal;
                         let mut has_updates = lock.lock().unwrap();
-                        // Check boolean predicate to protect against spurious wakeups
-                        while !*has_updates {
-                            has_updates = cvar.wait(has_updates).unwrap();
-                            if exit.load(Ordering::Relaxed) {
+                        loop {
+                            // Check for exit signal
+                            if exit_.load(Ordering::Relaxed) {
                                 break 'outer;
+                            }
+
+                            // Check boolean predicate to protect against spurious wakeups
+                            if !*has_updates {
+                                has_updates = cvar.wait(has_updates).unwrap();
+                            } else {
+                                break;
                             }
                         }
 
@@ -337,14 +349,23 @@ impl ReplayStage {
             Self {
                 t_responder,
                 t_replay,
-                exit_signal,
+                exit,
+                db_ledger: db_ledger_,
             },
             ledger_entry_receiver,
         )
     }
 
     pub fn close(self) -> thread::Result<Option<ReplayStageReturnType>> {
-        self.join();
+        self.exit();
+        self.join()
+    }
+
+    pub fn exit(&self) {
+        let (cvar, lock) = &self.db_ledger.new_blobs_signal;
+        self.exit.store(true, Ordering::Relaxed);
+        let _ = lock.lock().unwrap();
+        cvar.notify_all();
     }
 
     fn get_next_slot(db_ledger: &DbLedger, slot_index: u64) -> Option<u64> {
@@ -735,11 +756,13 @@ mod test {
                 println!("i: {}", i);
                 let entry = Entry::new(&mut last_id, 0, num_hashes, vec![]);
                 last_id = entry.id;
-                db_ledger.write_entries(
-                    DEFAULT_SLOT_HEIGHT,
-                    meta.consumed + i,
-                    vec![entry.clone()],
-                );
+                db_ledger
+                    .write_entries(
+                        DEFAULT_SLOT_HEIGHT,
+                        meta.consumed + i as u64,
+                        vec![entry.clone()],
+                    )
+                    .expect("Expected successful database write");
                 // Check that the entries on the ledger writer channel are correct
                 let received_entry = ledger_writer_recv
                     .recv()

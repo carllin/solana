@@ -141,11 +141,11 @@ impl Tvu {
     }
 
     pub fn exit(&self) {
-        self.exit.store(true, Ordering::Relaxed);
+        self.replay_stage.exit();
     }
 
     pub fn close(self) -> thread::Result<Option<TvuReturnType>> {
-        self.fetch_stage.close();
+        self.exit();
         self.join()
     }
 }
@@ -202,6 +202,56 @@ pub mod tests {
         exit: Arc<AtomicBool>,
     ) -> GossipService {
         GossipService::new(&cluster_info, None, gossip, exit)
+    }
+
+    #[test]
+    fn test_tvu_exit() {
+        solana_logger::setup();
+        let leader = Node::new_localhost();
+        let target1_keypair = Keypair::new();
+        let target1 = Node::new_localhost_with_pubkey(target1_keypair.pubkey());
+
+        let starting_balance = 10_000;
+        let mint = Mint::new(starting_balance);
+        let leader_id = leader.info.id;
+        let leader_scheduler = Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_id,
+        )));
+        let mut bank = Bank::new(&mint);
+        bank.leader_scheduler = leader_scheduler;
+        let bank = Arc::new(bank);
+
+        //start cluster_info1
+        let mut cluster_info1 = ClusterInfo::new(target1.info.clone());
+        cluster_info1.insert_info(leader.info.clone());
+        cluster_info1.set_leader(leader.info.id);
+        let cref1 = Arc::new(RwLock::new(cluster_info1));
+
+        let cur_hash = Hash::default();
+        let db_ledger_path = get_tmp_ledger_path("test_replay");
+        let db_ledger =
+            DbLedger::open(&db_ledger_path).expect("Expected to successfully open ledger");
+        let vote_account_keypair = Arc::new(Keypair::new());
+        let vote_signer =
+            VoteSignerProxy::new(&vote_account_keypair, Box::new(LocalVoteSigner::default()));
+        let tvu = Tvu::new(
+            &Arc::new(vote_signer),
+            &bank,
+            0,
+            0,
+            cur_hash,
+            &cref1,
+            {
+                Sockets {
+                    repair: target1.sockets.repair,
+                    retransmit: target1.sockets.retransmit,
+                    fetch: target1.sockets.tvu,
+                }
+            },
+            Arc::new(db_ledger),
+            STORAGE_ROTATE_TEST_COUNT,
+        );
+        tvu.close().expect("close");
     }
 
     /// Test that message sent from leader to target1 and replayed to target2
