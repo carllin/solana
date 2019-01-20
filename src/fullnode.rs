@@ -4,9 +4,10 @@ use crate::bank::Bank;
 use crate::broadcast_service::BroadcastService;
 use crate::cluster_info::{ClusterInfo, Node, NodeInfo};
 use crate::counter::Counter;
-use crate::db_ledger::DbLedger;
+use crate::db_ledger::{DbLedger, DbLedgerConfig};
 use crate::gossip_service::GossipService;
 use crate::leader_scheduler::LeaderScheduler;
+use crate::leader_scheduler::{DEFAULT_BLOCKS_PER_SLOT, TICKS_PER_BLOCK};
 use crate::rpc::JsonRpcService;
 use crate::rpc_pubsub::PubSubService;
 use crate::service::Service;
@@ -111,6 +112,7 @@ pub struct Fullnode {
 impl Fullnode {
     pub fn new(
         node: Node,
+        ledger_config: Option<DbLedgerConfig>,
         ledger_path: &str,
         keypair: Arc<Keypair>,
         vote_signer: Option<Arc<VoteSignerProxy>>,
@@ -125,6 +127,7 @@ impl Fullnode {
         const NUM_HASHES_FOR_STORAGE_ROTATE: u64 = 1024;
         Self::new_with_storage_rotate(
             node,
+            ledger_config,
             ledger_path,
             keypair,
             vote_signer,
@@ -138,6 +141,7 @@ impl Fullnode {
 
     pub fn new_with_storage_rotate(
         node: Node,
+        ledger_config: Option<DbLedgerConfig>,
         ledger_path: &str,
         keypair: Arc<Keypair>,
         vote_signer: Option<Arc<VoteSignerProxy>>,
@@ -147,10 +151,22 @@ impl Fullnode {
         rpc_port: Option<u16>,
         storage_rotate_count: u64,
     ) -> Self {
+        let ledger_config = if leader_scheduler.use_only_bootstrap_leader {
+            Some(DbLedgerConfig::new(
+                std::u64::MAX,
+                TICKS_PER_BLOCK,
+                DEFAULT_BLOCKS_PER_SLOT,
+            ))
+        } else {
+            ledger_config
+        };
+
         let leader_scheduler = Arc::new(RwLock::new(leader_scheduler));
 
         info!("creating bank...");
-        let db_ledger = Self::make_db_ledger(ledger_path);
+
+        let db_ledger = Self::make_db_ledger(ledger_path, &ledger_config);
+
         let (bank, entry_height, last_entry_id) =
             Self::new_bank_from_db_ledger(&db_ledger, leader_scheduler);
 
@@ -216,7 +232,7 @@ impl Fullnode {
         let exit = Arc::new(AtomicBool::new(false));
         let bank = Arc::new(bank);
 
-        let db_ledger = db_ledger.unwrap_or_else(|| Self::make_db_ledger(ledger_path));
+        let db_ledger = db_ledger.unwrap_or_else(|| Self::make_db_ledger(ledger_path, &None));
 
         node.info.wallclock = timestamp();
         let cluster_info = Arc::new(RwLock::new(ClusterInfo::new_with_keypair(
@@ -598,10 +614,11 @@ impl Fullnode {
     }
 
     pub fn new_bank_from_ledger(
+        ledger_config: &Option<DbLedgerConfig>,
         ledger_path: &str,
         leader_scheduler: Arc<RwLock<LeaderScheduler>>,
     ) -> (Bank, u64, Hash) {
-        let db_ledger = Self::make_db_ledger(ledger_path);
+        let db_ledger = Self::make_db_ledger(ledger_path, ledger_config);
         Self::new_bank_from_db_ledger(&db_ledger, leader_scheduler)
     }
 
@@ -609,10 +626,17 @@ impl Fullnode {
         &self.bank.leader_scheduler
     }
 
-    fn make_db_ledger(ledger_path: &str) -> Arc<DbLedger> {
-        Arc::new(
-            DbLedger::open(ledger_path).expect("Expected to successfully open database ledger"),
-        )
+    fn make_db_ledger(ledger_path: &str, config: &Option<DbLedgerConfig>) -> Arc<DbLedger> {
+        let db_ledger = {
+            if let Some(config) = config {
+                DbLedger::open_config(ledger_path, &config)
+                    .expect("Expected to successfully open database ledger")
+            } else {
+                DbLedger::open(ledger_path).expect("Expected to successfully open database ledger")
+            }
+        };
+
+        Arc::new(db_ledger)
     }
 
     fn get_consumed_for_slot(db_ledger: &DbLedger, slot_index: u64) -> u64 {
@@ -664,7 +688,7 @@ mod tests {
     use crate::entry::make_consecutive_blobs;
     use crate::fullnode::{Fullnode, FullnodeReturnType, NodeRole, TvuReturnType};
     use crate::leader_scheduler::{
-        make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig,
+        make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig, TICKS_PER_BLOCK,
     };
     use crate::service::Service;
     use crate::storage_stage::STORAGE_ROTATE_TEST_COUNT;
@@ -796,16 +820,18 @@ mod tests {
 
         // Create the common leader scheduling configuration
         let num_slots_per_epoch = 3;
-        let leader_rotation_interval = 5;
+        let num_blocks_per_slot = 2;
+        let leader_rotation_interval = TICKS_PER_BLOCK * num_blocks_per_slot;
         let seed_rotation_interval = num_slots_per_epoch * leader_rotation_interval;
         let active_window_length = 5;
 
-        // Set the bootstrap height to be bigger than the initial tick height.
-        // Once the leader hits the bootstrap height ticks, because there are no other
-        // choices in the active set, this leader will remain the leader in the next
-        // epoch. In the next epoch, check that the same leader knows to shut down and
-        // restart as a leader again.
-        let bootstrap_height = initial_tick_height + 1;
+        // Set the bootstrap height to be a multiple of TICKS_PER_BLOCK bigger than the
+        // initial tick height. Once the leader hits the bootstrap height ticks, because
+        // there are no other choices in the active set, this leader will remain the leader
+        // in the next epoch. In the next epoch, check that the same leader knows to shut
+        // down and restart as a leader again.
+        let bootstrap_height =
+            initial_tick_height + (TICKS_PER_BLOCK - (initial_tick_height % TICKS_PER_BLOCK));
         let leader_scheduler_config = LeaderSchedulerConfig::new(
             Some(bootstrap_height as u64),
             Some(leader_rotation_interval),
@@ -819,8 +845,11 @@ mod tests {
             Box::new(LocalVoteSigner::default()),
         );
         // Start up the leader
+        let db_ledger_config =
+            DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, num_blocks_per_slot);
         let mut bootstrap_leader = Fullnode::new(
             bootstrap_leader_node,
+            Some(db_ledger_config),
             &bootstrap_leader_ledger_path,
             bootstrap_leader_keypair,
             Some(Arc::new(signer)),
@@ -860,11 +889,10 @@ mod tests {
         let validator_node = Node::new_localhost_with_pubkey(validator_keypair.pubkey());
 
         // Make a common mint and a genesis entry for both leader + validator's ledgers
-        let num_ending_ticks = 1;
         let (mint, bootstrap_leader_ledger_path, genesis_entries) = create_tmp_sample_ledger(
             "test_wrong_role_transition",
             10_000,
-            num_ending_ticks,
+            0,
             &bootstrap_leader_keypair,
             500,
         );
@@ -877,19 +905,27 @@ mod tests {
         // Write the entries to the ledger that will cause leader rotation
         // after the bootstrap height
         let validator_keypair = Arc::new(validator_keypair);
+
+        let genesis_tick_height = genesis_entries
+            .iter()
+            .skip(2)
+            .fold(0, |tick_count, entry| tick_count + entry.is_tick() as u64);
+
+        // Set the bootstrap height to be a multiple of TICKS_PER_BLOCK bigger than the
+        // number of ticks in the genesis entries
+        let bootstrap_height =
+            genesis_tick_height + (TICKS_PER_BLOCK - (genesis_tick_height % TICKS_PER_BLOCK));
+
+        // Make the bootstrap height exactly the current tick height, so that we can
+        // test if the bootstrap leader knows to immediately transition to a validator
+        // after parsing the ledger during startup
         let (active_set_entries, validator_vote_account_id) = make_active_set_entries(
             &validator_keypair,
             &mint.keypair(),
             &last_id,
             &last_id,
-            num_ending_ticks,
+            (bootstrap_height - genesis_tick_height) as usize,
         );
-
-        let genesis_tick_height = genesis_entries
-            .iter()
-            .skip(2)
-            .fold(0, |tick_count, entry| tick_count + entry.is_tick() as u64)
-            + num_ending_ticks as u64;
 
         {
             let db_ledger = DbLedger::open(&bootstrap_leader_ledger_path).unwrap();
@@ -911,19 +947,19 @@ mod tests {
 
         // Create the common leader scheduling configuration
         let num_slots_per_epoch = 3;
-        let leader_rotation_interval = 5;
+        let num_blocks_per_slot = 2;
+        let leader_rotation_interval = num_blocks_per_slot * TICKS_PER_BLOCK;
         let seed_rotation_interval = num_slots_per_epoch * leader_rotation_interval;
 
-        // Set the bootstrap height exactly the current tick height, so that we can
-        // test if the bootstrap leader knows to immediately transition to a validator
-        // after parsing the ledger during startup
-        let bootstrap_height = genesis_tick_height;
         let leader_scheduler_config = LeaderSchedulerConfig::new(
             Some(bootstrap_height),
             Some(leader_rotation_interval),
             Some(seed_rotation_interval),
-            Some(genesis_tick_height),
+            Some(bootstrap_height),
         );
+
+        let db_ledger_config =
+            DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, num_blocks_per_slot);
 
         {
             // Test that a node knows to transition to a validator based on parsing the ledger
@@ -933,6 +969,7 @@ mod tests {
             );
             let bootstrap_leader = Fullnode::new(
                 bootstrap_leader_node,
+                Some(db_ledger_config),
                 &bootstrap_leader_ledger_path,
                 bootstrap_leader_keypair,
                 Some(Arc::new(vote_signer)),
@@ -952,6 +989,7 @@ mod tests {
             // Test that a node knows to transition to a leader based on parsing the ledger
             let validator = Fullnode::new(
                 validator_node,
+                Some(db_ledger_config),
                 &validator_ledger_path,
                 validator_keypair,
                 Some(Arc::new(validator_vote_account_id)),
@@ -1038,7 +1076,8 @@ mod tests {
         let ledger_initial_len = genesis_entries.len() as u64 + active_set_entries_len;
 
         // Set the leader scheduler for the validator
-        let leader_rotation_interval = 16;
+        let num_blocks_per_slot = 4;
+        let leader_rotation_interval = TICKS_PER_BLOCK * num_blocks_per_slot;
         let num_bootstrap_slots = 2;
         let bootstrap_height = num_bootstrap_slots * leader_rotation_interval;
 
@@ -1051,9 +1090,14 @@ mod tests {
 
         let vote_signer =
             VoteSignerProxy::new(&validator_keypair, Box::new(LocalVoteSigner::default()));
+
+        let db_ledger_config =
+            DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, num_blocks_per_slot);
+
         // Start the validator
         let mut validator = Fullnode::new(
             validator_node,
+            Some(db_ledger_config),
             &validator_ledger_path,
             validator_keypair,
             Some(Arc::new(vote_signer)),

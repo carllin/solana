@@ -53,6 +53,7 @@ fn test_replicator_startup() {
 
         let leader = Fullnode::new_with_storage_rotate(
             leader_node,
+            None,
             &leader_ledger_path,
             leader_keypair,
             Some(Arc::new(signer_proxy)),
@@ -82,6 +83,7 @@ fn test_replicator_startup() {
 
         let validator = Fullnode::new_with_storage_rotate(
             validator_node,
+            None,
             &validator_ledger_path,
             validator_keypair,
             Some(Arc::new(signer_proxy)),

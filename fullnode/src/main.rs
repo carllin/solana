@@ -253,6 +253,7 @@ fn main() {
 
     let mut fullnode = Fullnode::new(
         node,
+        None,
         ledger_path,
         keypair.clone(),
         signer_option,
