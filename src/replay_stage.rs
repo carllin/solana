@@ -3,7 +3,8 @@
 use crate::bank::Bank;
 use crate::cluster_info::ClusterInfo;
 use crate::counter::Counter;
-use crate::entry::{EntryReceiver, EntrySender, EntrySlice};
+use crate::db_ledger::DbLedger;
+use crate::entry::{Entry, EntryReceiver, EntrySender, EntrySlice};
 #[cfg(not(test))]
 use crate::entry_stream::EntryStream;
 use crate::entry_stream::EntryStreamHandler;
@@ -357,7 +358,7 @@ impl ReplayStage {
         )
     }
 
-    pub fn close(self) -> thread::Result<Option<ReplayStageReturnType>> {
+    pub fn close(self) -> thread::Result<()> {
         self.exit();
         self.join()
     }

@@ -137,6 +137,7 @@ impl LeaderScheduler {
         let active_window_length = config.active_window_length;
 
         // Enforced invariants
+        assert_eq!(bootstrap_height % TICKS_PER_BLOCK, 0);
         assert!(seed_rotation_interval >= leader_rotation_interval);
         assert!(bootstrap_height > 0);
         assert!(seed_rotation_interval % leader_rotation_interval == 0);
@@ -536,7 +537,7 @@ mod tests {
     use crate::genesis_block::GenesisBlock;
     use crate::leader_scheduler::{
         LeaderScheduler, LeaderSchedulerConfig, DEFAULT_BOOTSTRAP_HEIGHT,
-        DEFAULT_LEADER_ROTATION_INTERVAL, DEFAULT_SEED_ROTATION_INTERVAL,
+        DEFAULT_LEADER_ROTATION_INTERVAL, DEFAULT_SEED_ROTATION_INTERVAL, TICKS_PER_BLOCK,
     };
     use crate::vote_signer_proxy::VoteSignerProxy;
     use hashbrown::HashSet;
@@ -957,9 +958,9 @@ mod tests {
         // Test when seed_rotation_interval == leader_rotation_interval,
         // only one validator should be selected
         num_validators = 10;
-        bootstrap_height = 1;
-        leader_rotation_interval = 1;
-        seed_rotation_interval = 1;
+        bootstrap_height = TICKS_PER_BLOCK;
+        leader_rotation_interval = TICKS_PER_BLOCK as usize;
+        seed_rotation_interval = TICKS_PER_BLOCK as usize;
         run_scheduler_test(
             num_validators,
             bootstrap_height,
