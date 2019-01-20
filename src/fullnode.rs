@@ -3,10 +3,11 @@
 use crate::bank::Bank;
 use crate::cluster_info::{ClusterInfo, Node, NodeInfo};
 use crate::counter::Counter;
-use crate::db_ledger::DbLedger;
+use crate::db_ledger::{DbLedger, DbLedgerConfig};
 use crate::genesis_block::GenesisBlock;
 use crate::gossip_service::GossipService;
 use crate::leader_scheduler::LeaderScheduler;
+use crate::leader_scheduler::DEFAULT_TICKS_PER_SLOT;
 use crate::rpc::JsonRpcService;
 use crate::rpc_pubsub::PubSubService;
 use crate::service::Service;
@@ -110,15 +111,25 @@ impl Fullnode {
     pub fn new(
         mut node: Node,
         keypair: &Arc<Keypair>,
+        ledger_config: Option<DbLedgerConfig>,
         ledger_path: &str,
         leader_scheduler: Arc<RwLock<LeaderScheduler>>,
         voting_keypair: VotingKeypair,
         entrypoint_info_option: Option<&NodeInfo>,
         config: &FullnodeConfig,
     ) -> Self {
+        let ledger_config = if leader_scheduler.read().unwrap().use_only_bootstrap_leader {
+            Some(DbLedgerConfig::new(std::u64::MAX, DEFAULT_TICKS_PER_SLOT))
+        } else {
+            ledger_config
+        };
+
+        info!("creating bank...");
+
         let id = keypair.pubkey();
         let (genesis_block, db_ledger, ledger_signal_sender, ledger_signal_receiver) =
-            Self::make_db_ledger(ledger_path);
+            Self::make_db_ledger(ledger_path, &ledger_config);
+
         let (bank, entry_height, last_entry_id) =
             Self::new_bank_from_db_ledger(&genesis_block, &db_ledger, leader_scheduler);
 
@@ -432,10 +443,11 @@ impl Fullnode {
     }
 
     pub fn new_bank_from_ledger(
+        ledger_config: &Option<DbLedgerConfig>,
         ledger_path: &str,
         leader_scheduler: Arc<RwLock<LeaderScheduler>>,
     ) -> (Bank, u64, Hash) {
-        let (genesis_block, db_ledger, _, _) = Self::make_db_ledger(ledger_path);
+        let (genesis_block, db_ledger, _, _) = Self::make_db_ledger(ledger_path, ledger_config);
         Self::new_bank_from_db_ledger(&genesis_block, &db_ledger, leader_scheduler)
     }
 
@@ -445,14 +457,23 @@ impl Fullnode {
 
     fn make_db_ledger(
         ledger_path: &str,
+        config: &Option<DbLedgerConfig>,
     ) -> (
         GenesisBlock,
         Arc<DbLedger>,
         SyncSender<bool>,
         Receiver<bool>,
     ) {
-        let (db_ledger, l_sender, l_receiver) = DbLedger::open_with_signal(ledger_path)
-            .expect("Expected to successfully open database ledger");
+        let (db_ledger, l_sender, l_receiver) = {
+            if let Some(config) = config {
+                DbLedger::open_with_config_signal(ledger_path, &config)
+                    .expect("Expected to successfully open database ledger")
+            } else {
+                DbLedger::open_with_signal(ledger_path)
+                    .expect("Expected to successfully open database ledger")
+            }
+        };
+
         let genesis_block =
             GenesisBlock::load(ledger_path).expect("Expected to successfully open genesis block");
         (genesis_block, Arc::new(db_ledger), l_sender, l_receiver)
@@ -492,7 +513,7 @@ mod tests {
     use crate::db_ledger::*;
     use crate::entry::make_consecutive_blobs;
     use crate::leader_scheduler::{
-        make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig,
+        make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig, DEFAULT_TICKS_PER_SLOT,
     };
     use crate::poh_service::NUM_TICKS_PER_SECOND;
     use crate::service::Service;
@@ -521,6 +542,7 @@ mod tests {
         let validator = Fullnode::new(
             validator_node,
             &Arc::new(validator_keypair),
+            None,
             &validator_ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::new(&Default::default()))),
             VotingKeypair::new(),
@@ -553,6 +575,7 @@ mod tests {
                 Fullnode::new(
                     validator_node,
                     &Arc::new(validator_keypair),
+                    None,
                     &validator_ledger_path,
                     Arc::new(RwLock::new(LeaderScheduler::new(&Default::default()))),
                     VotingKeypair::new(),
@@ -604,8 +627,9 @@ mod tests {
         // choices in the active set, this leader will remain the leader in the next
         // epoch. In the next epoch, check that the same leader knows to shut down and
         // restart as a leader again.
+        let bootstrap_height = 2;
         let leader_scheduler_config = LeaderSchedulerConfig::new(
-            2,
+            bootstrap_height,
             leader_rotation_interval,
             seed_rotation_interval,
             active_window_length,
@@ -614,9 +638,11 @@ mod tests {
         let bootstrap_leader_keypair = Arc::new(bootstrap_leader_keypair);
         let voting_keypair = VotingKeypair::new_local(&bootstrap_leader_keypair);
         // Start up the leader
+        let db_ledger_config = DbLedgerConfig::new(bootstrap_height, leader_rotation_interval);
         let mut bootstrap_leader = Fullnode::new(
             bootstrap_leader_node,
             &bootstrap_leader_keypair,
+            Some(db_ledger_config),
             &bootstrap_leader_ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
             voting_keypair,
@@ -667,18 +693,22 @@ mod tests {
         // Set the bootstrap height exactly the current tick height, so that we can
         // test if the bootstrap leader knows to immediately transition to a validator
         // after parsing the ledger during startup
+        let bootstrap_height = 1;
         let leader_scheduler_config = LeaderSchedulerConfig::new(
-            1,
+            bootstrap_height,
             leader_rotation_interval,
             leader_rotation_interval,
             leader_rotation_interval * 10,
         );
+
+        let db_ledger_config = DbLedgerConfig::new(bootstrap_height, leader_rotation_interval);
 
         {
             // Test that a node knows to transition to a validator based on parsing the ledger
             let bootstrap_leader = Fullnode::new(
                 bootstrap_leader_node,
                 &bootstrap_leader_keypair,
+                Some(db_ledger_config),
                 &bootstrap_leader_ledger_path,
                 Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
                 VotingKeypair::new(),
@@ -692,6 +722,7 @@ mod tests {
             let validator = Fullnode::new(
                 validator_node,
                 &validator_keypair,
+                Some(db_ledger_config),
                 &validator_ledger_path,
                 Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
                 VotingKeypair::new(),
@@ -730,7 +761,7 @@ mod tests {
         let validator_info = validator_node.info.clone();
 
         // Set the leader scheduler for the validator
-        let leader_rotation_interval = 16;
+        let leader_rotation_interval = DEFAULT_TICKS_PER_SLOT;
         let num_bootstrap_slots = 2;
         let bootstrap_height = num_bootstrap_slots * leader_rotation_interval;
 
@@ -742,10 +773,14 @@ mod tests {
         );
 
         let voting_keypair = VotingKeypair::new_local(&validator_keypair);
+
+        let db_ledger_config = DbLedgerConfig::new(bootstrap_height, DEFAULT_TICKS_PER_SLOT);
+
         // Start the validator
         let validator = Fullnode::new(
             validator_node,
             &validator_keypair,
+            Some(db_ledger_config),
             &validator_ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
             voting_keypair,
@@ -845,10 +880,14 @@ mod tests {
         );
 
         let voting_keypair = VotingKeypair::new_local(&leader_keypair);
+
+        let db_ledger_config = DbLedgerConfig::new(bootstrap_height, leader_rotation_interval);
+
         // Start the bootstrap leader
         let mut leader = Fullnode::new(
             leader_node,
             &leader_keypair,
+            Some(db_ledger_config),
             &leader_ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
             voting_keypair,

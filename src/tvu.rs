@@ -262,6 +262,7 @@ pub mod tests {
             Some(Arc::new(voting_keypair)),
             &bank,
             0,
+            0,
             cur_hash,
             &cref1,
             {

@@ -92,7 +92,7 @@ impl ReplayStage {
             duration_as_ms(&now.elapsed()) as usize
         );
 
-        let (mut current_leader, _) = bank
+        let (current_leader, _) = bank
             .get_current_leader()
             .expect("Scheduled leader should be calculated by this point");
 
@@ -337,6 +337,16 @@ impl ReplayStage {
         let _ = self.ledger_signal_sender.send(true);
     }
 
+    fn get_next_slot(db_ledger: &DbLedger, slot_index: u64) -> Option<u64> {
+        // Find the next slot that chains to the old slot
+        let next_slots = db_ledger.get_slots_since(&[slot_index]).expect("Db error");
+        if next_slots.is_empty() {
+            None
+        } else {
+            Some(next_slots[0])
+        }
+    }
+
     fn get_leader(bank: &Bank, cluster_info: &Arc<RwLock<ClusterInfo>>) -> Pubkey {
         let (scheduled_leader, _) = bank
             .get_current_leader()
@@ -362,9 +372,7 @@ mod test {
     use super::*;
     use crate::bank::Bank;
     use crate::cluster_info::{ClusterInfo, Node};
-    use crate::db_ledger::{
-        create_tmp_sample_ledger, DbLedger, DbLedgerConfig, DEFAULT_SLOT_HEIGHT,
-    };
+    use crate::db_ledger::{create_tmp_sample_ledger, DbLedger, DEFAULT_SLOT_HEIGHT};
     use crate::entry::create_ticks;
     use crate::entry::Entry;
     use crate::fullnode::Fullnode;
@@ -416,8 +424,6 @@ mod test {
             make_active_set_entries(&my_keypair, &mint_keypair, &last_id, &last_id, 0);
         last_id = active_set_entries.last().unwrap().id;
         let initial_tick_height = genesis_entry_height;
-        let active_set_entries_len = active_set_entries.len() as u64;
-        let initial_non_tick_height = genesis_entry_height - initial_tick_height;
 
         {
             // Set up the LeaderScheduler so that this this node becomes the leader at
@@ -489,8 +495,6 @@ mod test {
             // Add on the only entries that weren't ticks to the bootstrap height to get the
             // total expected entry length
             let leader_rotation_index = (bootstrap_height - initial_tick_height) as usize;
-            let expected_entry_height =
-                bootstrap_height + initial_non_tick_height + active_set_entries_len;
             let expected_last_id = entries_to_send[leader_rotation_index - 1].id;
 
             // Write the entries to the ledger, replay_stage should get notified of changes
@@ -646,8 +650,6 @@ mod test {
             make_active_set_entries(&my_keypair, &mint_keypair, &last_id, &last_id, 0);
         let mut last_id = active_set_entries.last().unwrap().id;
         let initial_tick_height = genesis_entry_height;
-        let active_set_entries_len = active_set_entries.len() as u64;
-        let initial_non_tick_height = genesis_entry_height - initial_tick_height;
 
         // Set up the LeaderScheduler so that this this node becomes the leader at
         // bootstrap_height = num_bootstrap_slots * leader_rotation_interval
@@ -719,10 +721,6 @@ mod test {
             let total_entries_to_send = (bootstrap_height - initial_tick_height) as usize;
             let num_hashes = 1;
 
-            // Add on the only entries that weren't ticks to the bootstrap height to get the
-            // total expected entry length
-            let expected_entry_height =
-                bootstrap_height + initial_non_tick_height + active_set_entries_len;
             let leader_rotation_index = (bootstrap_height - initial_tick_height - 1) as usize;
             let mut expected_last_id = Hash::default();
             for i in 0..total_entries_to_send {

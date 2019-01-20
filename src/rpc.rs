@@ -488,6 +488,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_rpc_new() {
         let (genesis_block, alice) = GenesisBlock::new(10_000);
         let bank = Bank::new(&genesis_block);

@@ -195,6 +195,12 @@ impl MetaCf {
         let key = Self::key(slot_height);
         self.put(&key, slot_meta)
     }
+
+    pub fn index_from_key(key: &[u8]) -> Result<u64> {
+        let mut rdr = io::Cursor::new(&key[..]);
+        let index = rdr.read_u64::<BigEndian>()?;
+        Ok(index)
+    }
 }
 
 impl LedgerColumnFamily for MetaCf {
@@ -316,6 +322,21 @@ impl LedgerColumnFamilyRaw for ErasureCf {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub struct DbLedgerConfig {
+    pub ticks_per_block: u64,
+    pub num_bootstrap_ticks: u64,
+}
+
+impl DbLedgerConfig {
+    pub fn new(num_bootstrap_ticks: u64, ticks_per_block: u64) -> Self {
+        DbLedgerConfig {
+            num_bootstrap_ticks,
+            ticks_per_block,
+        }
+    }
+}
+
 // ledger window
 pub struct DbLedger {
     // Underlying database is automatically closed in the Drop implementation of DB
@@ -393,6 +414,26 @@ impl DbLedger {
         Ok((db_ledger, signal_sender, signal_receiver))
     }
 
+    pub fn open_config(ledger_path: &str, config: &DbLedgerConfig) -> Result<Self> {
+        let mut db_ledger = Self::open(ledger_path)?;
+        db_ledger.ticks_per_block = config.ticks_per_block;
+        db_ledger.num_bootstrap_ticks = config.num_bootstrap_ticks;
+        Ok(db_ledger)
+    }
+
+    pub fn open_with_config_signal(
+        ledger_path: &str,
+        config: &DbLedgerConfig,
+    ) -> Result<(Self, SyncSender<bool>, Receiver<bool>)> {
+        let mut db_ledger = Self::open(ledger_path)?;
+        let (signal_sender, signal_receiver) = sync_channel(1);
+        db_ledger.new_blobs_signals = vec![signal_sender.clone()];
+        db_ledger.ticks_per_block = config.ticks_per_block;
+        db_ledger.num_bootstrap_ticks = config.num_bootstrap_ticks;
+
+        Ok((db_ledger, signal_sender, signal_receiver))
+    }
+
     pub fn meta(&self, slot_index: u64) -> Result<Option<SlotMeta>> {
         self.meta_cf.get(&MetaCf::key(slot_index))
     }
@@ -403,6 +444,17 @@ impl DbLedger {
         let ledger_path = Path::new(ledger_path).join(DB_LEDGER_DIRECTORY);
         DB::destroy(&Options::default(), &ledger_path)?;
         Ok(())
+    }
+
+    pub fn get_next_slot(&self, slot_height: u64) -> Result<Option<u64>> {
+        let mut db_iterator = self.db.raw_iterator_cf(self.meta_cf.handle())?;
+        db_iterator.seek(&MetaCf::key(slot_height + 1));
+        if !db_iterator.valid() {
+            Ok(None)
+        } else {
+            let key = &db_iterator.key().expect("Expected valid key");
+            Ok(Some(MetaCf::index_from_key(&key)?))
+        }
     }
 
     pub fn write_shared_blobs<I>(&self, shared_blobs: I) -> Result<Vec<Entry>>
@@ -490,8 +542,8 @@ impl DbLedger {
                         (Rc::new(RefCell::new(meta.clone())), None)
                     } else {
                         println!(
-                            "blob_slot index: {}, ct: {}",
-                            blob_slot, meta.consumed_ticks
+                            "blob_slot index: {}, ct: {}, consumed: {}",
+                            blob_slot, meta.consumed_ticks, meta.consumed
                         );
                         (Rc::new(RefCell::new(meta.clone())), Some(meta))
                     }
@@ -1799,11 +1851,11 @@ mod tests {
     pub fn test_new_blobs_signal() {
         // Initialize ledger
         let ledger_path = get_tmp_ledger_path("test_new_blobs_signal");
-        let (mut ledger, _, recvr) = DbLedger::open_with_signal(&ledger_path).unwrap();
         let ticks_per_block = 10;
         let num_bootstrap_ticks = 10;
         let config = DbLedgerConfig::new(num_bootstrap_ticks, ticks_per_block);
-        let ledger = Arc::new(DbLedger::open_config(&ledger_path, &config).unwrap());
+        let (ledger, _, recvr) = DbLedger::open_with_config_signal(&ledger_path, &config).unwrap();
+        let ledger = Arc::new(ledger);
 
         // Create ticks for slot 0
         let entries = create_ticks(ticks_per_block, Hash::default());
@@ -1889,6 +1941,7 @@ mod tests {
         // Fill in the holes for each of the remaining slots, we should get a single update
         // for each
         for slot_index in num_slots / 2..num_slots {
+            println!("slot_index: {}", slot_index);
             let entries = make_tiny_test_entries(1);
             let mut blob = entries[0].to_blob();
             blob.set_index(slot_index as u64 - 1);
@@ -1907,9 +1960,8 @@ mod tests {
     pub fn test_handle_chaining_basic() {
         let db_ledger_path = get_tmp_ledger_path("test_handle_chaining_basic");
         {
-            let mut db_ledger = DbLedger::open(&db_ledger_path).unwrap();
-            db_ledger.ticks_per_block = 1;
-            db_ledger.num_bootstrap_ticks = 1;
+            let config = DbLedgerConfig::new(1, 1);
+            let db_ledger = DbLedger::open_config(&db_ledger_path, &config).unwrap();
 
             let entries = create_ticks(3, Hash::default());
             let mut blobs = entries.to_blobs();

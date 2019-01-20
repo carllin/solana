@@ -264,7 +264,8 @@ fn main() {
     let gossip_addr = node.info.gossip;
     let mut fullnode = Fullnode::new(
         node,
-        &keypair,
+        keypair.clone(),
+        None,
         ledger_path,
         Arc::new(RwLock::new(leader_scheduler)),
         vote_signer,
