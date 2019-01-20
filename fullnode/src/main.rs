@@ -266,6 +266,7 @@ fn main() {
     let mut fullnode = Fullnode::new(
         node,
         keypair.clone(),
+        None,
         ledger_path,
         Arc::new(RwLock::new(leader_scheduler)),
         vote_signer_option,

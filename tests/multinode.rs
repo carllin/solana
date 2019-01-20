@@ -5,11 +5,13 @@ use solana::blob_fetch_stage::BlobFetchStage;
 use solana::cluster_info::{ClusterInfo, Node, NodeInfo};
 use solana::contact_info::ContactInfo;
 use solana::db_ledger::{create_tmp_genesis, create_tmp_sample_ledger, tmp_copy_ledger};
-use solana::db_ledger::{DbLedger, DEFAULT_SLOT_HEIGHT};
+use solana::db_ledger::{DbLedger, DbLedgerConfig, DEFAULT_SLOT_HEIGHT};
 use solana::entry::{reconstruct_entries_from_blobs, Entry};
 use solana::fullnode::{Fullnode, FullnodeReturnType};
 use solana::gossip_service::GossipService;
-use solana::leader_scheduler::{make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig};
+use solana::leader_scheduler::{
+    make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig, TICKS_PER_BLOCK,
+};
 use solana::packet::SharedBlob;
 use solana::poh_service::NUM_TICKS_PER_SECOND;
 use solana::result;
@@ -157,6 +159,7 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
     let leader = Fullnode::new(
         leader,
         leader_keypair,
+        None,
         &leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_pubkey,
@@ -176,6 +179,7 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
     let validator = Fullnode::new(
         validator,
         keypair,
+        None,
         &zero_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_pubkey,
@@ -259,6 +263,7 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
     let server = Fullnode::new(
         leader,
         leader_keypair,
+        None,
         &leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_pubkey,
@@ -292,6 +297,7 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
         let val = Fullnode::new(
             validator,
             keypair,
+            None,
             &ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
                 leader_pubkey,
@@ -354,6 +360,7 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
     let val = Fullnode::new(
         validator,
         keypair,
+        None,
         &zero_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_pubkey,
@@ -443,6 +450,7 @@ fn test_multi_node_basic() {
     let server = Fullnode::new(
         leader,
         leader_keypair,
+        None,
         &leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_pubkey,
@@ -472,6 +480,7 @@ fn test_multi_node_basic() {
         let val = Fullnode::new(
             validator,
             keypair,
+            None,
             &ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
                 leader_pubkey,
@@ -551,6 +560,7 @@ fn test_boot_validator_from_file() -> result::Result<()> {
     let leader_fullnode = Fullnode::new(
         leader,
         leader_keypair,
+        None,
         &leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_pubkey,
@@ -575,6 +585,7 @@ fn test_boot_validator_from_file() -> result::Result<()> {
     let val_fullnode = Fullnode::new(
         validator,
         keypair,
+        None,
         &ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_pubkey,
@@ -607,6 +618,7 @@ fn create_leader(
     let leader_fullnode = Fullnode::new(
         leader,
         leader_keypair,
+        None,
         &ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_data.id,
@@ -683,6 +695,7 @@ fn test_leader_restart_validator_start_from_old_ledger() -> result::Result<()> {
     let val_fullnode = Fullnode::new(
         validator,
         keypair,
+        None,
         &stale_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_data.id,
@@ -742,15 +755,17 @@ fn test_multi_node_dynamic_network() {
     let mut ledger_paths = Vec::new();
     ledger_paths.push(genesis_ledger_path.clone());
 
+    let leader_ledger_path = tmp_copy_ledger(&genesis_ledger_path, "multi_node_dynamic_network");
+
     let alice_arc = Arc::new(RwLock::new(alice));
     let leader_data = leader.info.clone();
 
-    let leader_ledger_path = tmp_copy_ledger(&genesis_ledger_path, "multi_node_dynamic_network");
     ledger_paths.push(leader_ledger_path.clone());
     let signer_proxy = VoteSignerProxy::new_local(&leader_keypair);
     let server = Fullnode::new(
         leader,
         leader_keypair,
+        None,
         &leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
             leader_pubkey,
@@ -825,6 +840,7 @@ fn test_multi_node_dynamic_network() {
                     let val = Fullnode::new(
                         validator,
                         keypair,
+                        None,
                         &ledger_path,
                         Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
                             leader_pubkey,
@@ -952,7 +968,8 @@ fn test_multi_node_dynamic_network() {
 #[test]
 fn test_leader_to_validator_transition() {
     solana_logger::setup();
-    let leader_rotation_interval = 20;
+    let num_blocks_per_slot = 5;
+    let leader_rotation_interval = TICKS_PER_BLOCK * num_blocks_per_slot;
 
     // Make a dummy validator id to be the next leader
     let validator_keypair = Arc::new(Keypair::new());
@@ -1004,9 +1021,13 @@ fn test_leader_to_validator_transition() {
     );
 
     let signer_proxy = VoteSignerProxy::new_local(&leader_keypair);
+    let db_ledger_config =
+        DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, num_blocks_per_slot);
+
     let mut leader = Fullnode::new(
         leader_node,
         leader_keypair,
+        Some(db_ledger_config),
         &leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         Some(Arc::new(signer_proxy)),
@@ -1083,6 +1104,7 @@ fn test_leader_to_validator_transition() {
     // Check the ledger to make sure it's the right height, we should've
     // transitioned after tick_height == bootstrap_height
     let (bank, _, _) = Fullnode::new_bank_from_ledger(
+        &Some(db_ledger_config),
         &leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::default())),
     );
@@ -1094,7 +1116,8 @@ fn test_leader_to_validator_transition() {
 #[test]
 fn test_leader_validator_basic() {
     solana_logger::setup();
-    let leader_rotation_interval = 10;
+    let num_blocks_per_slot = 3;
+    let leader_rotation_interval = TICKS_PER_BLOCK * num_blocks_per_slot;
 
     // Account that will be the sink for all the test's transactions
     let bob_pubkey = Keypair::new().pubkey();
@@ -1156,11 +1179,14 @@ fn test_leader_validator_basic() {
         bootstrap_height,
     );
 
+    let db_ledger_config =
+        DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, num_blocks_per_slot);
     // Start the validator node
     let signer_proxy = VoteSignerProxy::new_local(&validator_keypair);
     let mut validator = Fullnode::new(
         validator_node,
         validator_keypair,
+        Some(db_ledger_config),
         &validator_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         Some(Arc::new(signer_proxy)),
@@ -1173,6 +1199,7 @@ fn test_leader_validator_basic() {
     let mut leader = Fullnode::new(
         leader_node,
         leader_keypair,
+        Some(db_ledger_config),
         &leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         Some(Arc::new(signer_proxy)),
@@ -1347,9 +1374,13 @@ fn test_dropped_handoff_recovery() {
         .iter()
         .fold(0, |tick_count, entry| tick_count + entry.is_tick() as u64);
     let num_slots_per_epoch = (N + 1) as u64;
-    let leader_rotation_interval = 5;
+    let num_blocks_per_slot = 2;
+    let leader_rotation_interval = TICKS_PER_BLOCK * num_blocks_per_slot;
     let seed_rotation_interval = num_slots_per_epoch * leader_rotation_interval;
-    let bootstrap_height = initial_tick_height + 1;
+    //Set the bootstrap height to be a multiple of TICKS_PER_BLOCK bigger than the
+    // initial tick height
+    let bootstrap_height =
+        initial_tick_height + (TICKS_PER_BLOCK - (initial_tick_height % TICKS_PER_BLOCK));
     let leader_scheduler_config = LeaderSchedulerConfig::new(
         bootstrap_height,
         leader_rotation_interval,
@@ -1360,6 +1391,8 @@ fn test_dropped_handoff_recovery() {
     info!("'next leader': {}", next_leader_keypair.pubkey());
 
     let signer_proxy = VoteSignerProxy::new_local(&bootstrap_leader_keypair);
+    let db_ledger_config =
+        DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, num_blocks_per_slot);
     // Start up the bootstrap leader fullnode
     let bootstrap_leader_ledger_path =
         tmp_copy_ledger(&genesis_ledger_path, "test_dropped_handoff_recovery");
@@ -1367,6 +1400,7 @@ fn test_dropped_handoff_recovery() {
     let bootstrap_leader = Fullnode::new(
         bootstrap_leader_node,
         bootstrap_leader_keypair,
+        Some(db_ledger_config),
         &bootstrap_leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         Some(Arc::new(signer_proxy)),
@@ -1389,6 +1423,7 @@ fn test_dropped_handoff_recovery() {
         let validator = Fullnode::new(
             validator_node,
             keypair,
+            Some(db_ledger_config),
             &validator_ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
             Some(Arc::new(signer_proxy)),
@@ -1415,6 +1450,7 @@ fn test_dropped_handoff_recovery() {
     let next_leader = Fullnode::new(
         next_leader_node,
         next_leader_keypair,
+        Some(db_ledger_config),
         &next_leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         Some(Arc::new(signer_proxy)),
@@ -1525,7 +1561,8 @@ fn test_full_leader_validator_network() {
     // Create the common leader scheduling configuration
     let num_slots_per_epoch = (N + 1) as u64;
     let num_bootstrap_slots = 2;
-    let leader_rotation_interval = 5;
+    let num_blocks_per_slot = 2;
+    let leader_rotation_interval = num_blocks_per_slot * TICKS_PER_BLOCK;
     let seed_rotation_interval = num_slots_per_epoch * leader_rotation_interval;
     let bootstrap_height = num_bootstrap_slots * leader_rotation_interval;
     let leader_scheduler_config = LeaderSchedulerConfig::new(
@@ -1548,6 +1585,10 @@ fn test_full_leader_validator_network() {
     let mut t_nodes = vec![];
 
     info!("Start up the validators");
+    let db_ledger_config =
+        DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, num_blocks_per_slot);
+
+    // Start up the validators
     for kp in node_keypairs.into_iter() {
         let validator_ledger_path = tmp_copy_ledger(
             &bootstrap_leader_ledger_path,
@@ -1564,6 +1605,7 @@ fn test_full_leader_validator_network() {
         let validator = Fullnode::new(
             validator_node,
             kp.clone(),
+            Some(db_ledger_config),
             &validator_ledger_path,
             leader_scheduler.clone(),
             Some(Arc::new(signer_proxy)),
@@ -1581,6 +1623,7 @@ fn test_full_leader_validator_network() {
     let bootstrap_leader = Fullnode::new(
         bootstrap_leader_node,
         leader_keypair.clone(),
+        Some(db_ledger_config),
         &bootstrap_leader_ledger_path,
         leader_scheduler.clone(),
         Some(Arc::new(signer_proxy)),
@@ -1742,8 +1785,10 @@ fn test_broadcast_last_tick() {
         .collect();
 
     // Create fullnode, should take 10 seconds to reach end of bootstrap period
-    let bootstrap_height = (NUM_TICKS_PER_SECOND * 10) as u64;
-    let leader_rotation_interval = 100;
+    let bootstrap_blocks = ((NUM_TICKS_PER_SECOND * 10) as u64) / TICKS_PER_BLOCK;
+    let bootstrap_height = bootstrap_blocks * TICKS_PER_BLOCK;
+    let num_blocks_per_slot = 25;
+    let leader_rotation_interval = TICKS_PER_BLOCK * num_blocks_per_slot;
     let seed_rotation_interval = 200;
     let leader_scheduler_config = LeaderSchedulerConfig::new(
         bootstrap_height,
@@ -1755,9 +1800,13 @@ fn test_broadcast_last_tick() {
     // Start up the bootstrap leader fullnode
     let bootstrap_leader_keypair = Arc::new(bootstrap_leader_keypair);
     let signer_proxy = VoteSignerProxy::new_local(&bootstrap_leader_keypair);
+    let db_ledger_config =
+        DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, num_blocks_per_slot);
+
     let mut bootstrap_leader = Fullnode::new(
         bootstrap_leader_node,
         bootstrap_leader_keypair,
+        Some(db_ledger_config),
         &bootstrap_leader_ledger_path,
         Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         Some(Arc::new(signer_proxy)),

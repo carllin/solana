@@ -54,6 +54,7 @@ fn test_replicator_startup() {
         let leader = Fullnode::new(
             leader_node,
             leader_keypair,
+            None,
             &leader_ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
                 leader_info.id.clone(),
@@ -84,6 +85,7 @@ fn test_replicator_startup() {
         let validator = Fullnode::new(
             validator_node,
             validator_keypair,
+            None,
             &validator_ledger_path,
             Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
                 leader_info.id,

@@ -315,6 +315,23 @@ impl LedgerColumnFamilyRaw for ErasureCf {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub struct DbLedgerConfig {
+    pub ticks_per_block: u64,
+    pub num_bootstrap_ticks: u64,
+    pub num_blocks_per_slot: u64,
+}
+
+impl DbLedgerConfig {
+    pub fn new(num_bootstrap_ticks: u64, ticks_per_block: u64, num_blocks_per_slot: u64) -> Self {
+        DbLedgerConfig {
+            num_bootstrap_ticks,
+            ticks_per_block,
+            num_blocks_per_slot,
+        }
+    }
+}
+
 // ledger window
 pub struct DbLedger {
     // Underlying database is automatically closed in the Drop implementation of DB
@@ -387,6 +404,14 @@ impl DbLedger {
             num_bootstrap_ticks,
             num_blocks_per_slot,
         })
+    }
+
+    pub fn open_config(ledger_path: &str, config: &DbLedgerConfig) -> Result<Self> {
+        let mut db_ledger = Self::open(ledger_path)?;
+        db_ledger.ticks_per_block = config.ticks_per_block;
+        db_ledger.num_bootstrap_ticks = config.num_bootstrap_ticks;
+        db_ledger.num_blocks_per_slot = config.num_blocks_per_slot;
+        Ok(db_ledger)
     }
 
     pub fn meta(&self, slot_index: u64) -> Result<Option<SlotMeta>> {
@@ -464,7 +489,6 @@ impl DbLedger {
         for blob in new_blobs.iter() {
             let blob = blob.borrow();
             let blob_slot = blob.slot()?;
-
             // Check if we've already inserted the slot metadata for this blob's slot
             let entry = slot_meta_working_set.entry(blob_slot).or_insert_with(|| {
                 // Store a 2-tuple of the metadata (working copy, backup copy)
@@ -486,8 +510,8 @@ impl DbLedger {
                         (Rc::new(RefCell::new(meta.clone())), None)
                     } else {
                         println!(
-                            "blob_slot index: {}, ct: {}",
-                            blob_slot, meta.consumed_ticks
+                            "blob_slot index: {}, ct: {}, consumed: {}",
+                            blob_slot, meta.consumed_ticks, meta.consumed
                         );
                         (Rc::new(RefCell::new(meta.clone())), Some(meta))
                     }
@@ -1857,6 +1881,7 @@ mod tests {
         // Fill in the holes for each of the remaining slots, we should get a single update
         // for each
         for slot_index in num_slots / 2..num_slots {
+            println!("slot_index: {}", slot_index);
             let entries = make_tiny_test_entries(1);
             let mut blob = entries[0].to_blob();
             blob.set_index(slot_index as u64 - 1).unwrap();
@@ -1897,10 +1922,8 @@ mod tests {
     pub fn test_handle_chaining_basic() {
         let db_ledger_path = get_tmp_ledger_path("test_handle_chaining_basic");
         {
-            let mut db_ledger = DbLedger::open(&db_ledger_path).unwrap();
-            db_ledger.ticks_per_block = 1;
-            db_ledger.num_bootstrap_ticks = 1;
-            db_ledger.num_blocks_per_slot = 1;
+            let config = DbLedgerConfig::new(1, 1, 1);
+            let db_ledger = DbLedger::open_config(&db_ledger_path, &config).unwrap();
 
             let entries = create_ticks(3, Hash::default());
             let mut blobs = entries.to_blobs();
