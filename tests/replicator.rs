@@ -44,8 +44,12 @@ fn test_replicator_startup() {
     let (mint, leader_ledger_path) =
         create_tmp_genesis(leader_ledger_path, 1_000_000_000, leader_info.id, 1);
 
-    let validator_ledger_path =
-        tmp_copy_ledger(&leader_ledger_path, "replicator_test_validator_ledger");
+    let validator_ledger_path = tmp_copy_ledger(
+        &leader_ledger_path,
+        "replicator_test_validator_ledger",
+        &mint,
+        &leader_keypair,
+    );
 
     {
         let signer_proxy =

@@ -142,7 +142,12 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
     ledger_paths.push(leader_ledger_path.clone());
 
     // make a copy at zero
-    let zero_ledger_path = tmp_copy_ledger(&leader_ledger_path, "multi_node_ledger_window");
+    let zero_ledger_path = tmp_copy_ledger(
+        &leader_ledger_path,
+        "multi_node_ledger_window",
+        &alice,
+        &leader_keypair,
+    );
     ledger_paths.push(zero_ledger_path.clone());
 
     // write a bunch more ledger into leader's ledger, this should populate the leader's window
@@ -253,12 +258,16 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
     let zero_ledger_path = tmp_copy_ledger(
         &genesis_ledger_path,
         "multi_node_validator_catchup_from_zero",
+        &alice,
+        &leader_keypair,
     );
     ledger_paths.push(zero_ledger_path.clone());
 
     let leader_ledger_path = tmp_copy_ledger(
         &genesis_ledger_path,
         "multi_node_validator_catchup_from_zero",
+        &alice,
+        &leader_keypair,
     );
     ledger_paths.push(leader_ledger_path.clone());
     let signer_proxy = VoteSignerProxy::new(&leader_keypair, Box::new(LocalVoteSigner::default()));
@@ -266,7 +275,7 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
         leader,
         None,
         &leader_ledger_path,
-        leader_keypair,
+        leader_keypair.clone(),
         Arc::new(signer_proxy),
         None,
         false,
@@ -282,6 +291,8 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
         let ledger_path = tmp_copy_ledger(
             &genesis_ledger_path,
             "multi_node_validator_catchup_from_zero_validator",
+            &alice,
+            &leader_keypair,
         );
         ledger_paths.push(ledger_path.clone());
 
@@ -442,7 +453,12 @@ fn test_multi_node_basic() {
         create_tmp_genesis("multi_node_basic", 10_000, leader_data.id, 500);
     ledger_paths.push(genesis_ledger_path.clone());
 
-    let leader_ledger_path = tmp_copy_ledger(&genesis_ledger_path, "multi_node_basic");
+    let leader_ledger_path = tmp_copy_ledger(
+        &genesis_ledger_path,
+        "multi_node_basic",
+        &alice,
+        &leader_keypair,
+    );
     ledger_paths.push(leader_ledger_path.clone());
 
     let signer_proxy = VoteSignerProxy::new(&leader_keypair, Box::new(LocalVoteSigner::default()));
@@ -450,7 +466,7 @@ fn test_multi_node_basic() {
         leader,
         None,
         &leader_ledger_path,
-        leader_keypair,
+        leader_keypair.clone(),
         Arc::new(signer_proxy),
         None,
         false,
@@ -463,7 +479,12 @@ fn test_multi_node_basic() {
         let keypair = Arc::new(Keypair::new());
         let validator_pubkey = keypair.pubkey().clone();
         let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
-        let ledger_path = tmp_copy_ledger(&genesis_ledger_path, "multi_node_basic");
+        let ledger_path = tmp_copy_ledger(
+            &genesis_ledger_path,
+            "multi_node_basic",
+            &alice,
+            &leader_keypair,
+        );
         ledger_paths.push(ledger_path.clone());
 
         // Send each validator some tokens to vote
@@ -549,7 +570,12 @@ fn test_boot_validator_from_file() -> result::Result<()> {
         create_tmp_genesis("boot_validator_from_file", 100_000, leader_pubkey, 1000);
     ledger_paths.push(genesis_ledger_path.clone());
 
-    let leader_ledger_path = tmp_copy_ledger(&genesis_ledger_path, "multi_node_basic");
+    let leader_ledger_path = tmp_copy_ledger(
+        &genesis_ledger_path,
+        "multi_node_basic",
+        &alice,
+        &leader_keypair,
+    );
     ledger_paths.push(leader_ledger_path.clone());
 
     let leader_data = leader.info.clone();
@@ -558,7 +584,7 @@ fn test_boot_validator_from_file() -> result::Result<()> {
         leader,
         None,
         &leader_ledger_path,
-        leader_keypair,
+        leader_keypair.clone(),
         Arc::new(signer_proxy),
         None,
         false,
@@ -575,7 +601,12 @@ fn test_boot_validator_from_file() -> result::Result<()> {
     let keypair = Arc::new(Keypair::new());
     let validator = Node::new_localhost_with_pubkey(keypair.pubkey());
     let validator_data = validator.info.clone();
-    let ledger_path = tmp_copy_ledger(&genesis_ledger_path, "boot_validator_from_file");
+    let ledger_path = tmp_copy_ledger(
+        &genesis_ledger_path,
+        "boot_validator_from_file",
+        &alice,
+        &leader_keypair,
+    );
     ledger_paths.push(ledger_path.clone());
     let signer_proxy = VoteSignerProxy::new(&keypair, Box::new(LocalVoteSigner::default()));
     let val_fullnode = Fullnode::new(
@@ -664,6 +695,8 @@ fn test_leader_restart_validator_start_from_old_ledger() -> result::Result<()> {
     let stale_ledger_path = tmp_copy_ledger(
         &ledger_path,
         "leader_restart_validator_start_from_old_ledger",
+        &alice,
+        &leader_keypair,
     );
 
     {
@@ -751,17 +784,23 @@ fn test_multi_node_dynamic_network() {
     let mut ledger_paths = Vec::new();
     ledger_paths.push(genesis_ledger_path.clone());
 
+    let leader_ledger_path = tmp_copy_ledger(
+        &genesis_ledger_path,
+        "multi_node_dynamic_network",
+        &alice,
+        &leader_keypair,
+    );
+
     let alice_arc = Arc::new(RwLock::new(alice));
     let leader_data = leader.info.clone();
 
-    let leader_ledger_path = tmp_copy_ledger(&genesis_ledger_path, "multi_node_dynamic_network");
     ledger_paths.push(leader_ledger_path.clone());
     let signer_proxy = VoteSignerProxy::new(&leader_keypair, Box::new(LocalVoteSigner::default()));
     let server = Fullnode::new(
         leader,
         None,
         &leader_ledger_path,
-        leader_keypair,
+        leader_keypair.clone(),
         Arc::new(signer_proxy),
         None,
         true,
@@ -818,7 +857,12 @@ fn test_multi_node_dynamic_network() {
         .into_iter()
         .map(|keypair| {
             let leader_data = leader_data.clone();
-            let ledger_path = tmp_copy_ledger(&genesis_ledger_path, "multi_node_dynamic_network");
+            let ledger_path = tmp_copy_ledger(
+                &genesis_ledger_path,
+                "multi_node_dynamic_network",
+                &alice_arc.read().unwrap(),
+                &leader_keypair,
+            );
             ledger_paths.push(ledger_path.clone());
             Builder::new()
                 .name("validator-launch-thread".to_string())
@@ -982,7 +1026,7 @@ fn test_leader_to_validator_transition() {
         "test_leader_to_validator_transition",
         10_000,
         num_ending_ticks,
-        &validator_keypair,
+        &leader_keypair,
         500,
     );
 
@@ -1132,7 +1176,12 @@ fn test_leader_validator_basic() {
         500,
     );
 
-    let validator_ledger_path = tmp_copy_ledger(&leader_ledger_path, "test_leader_validator_basic");
+    let validator_ledger_path = tmp_copy_ledger(
+        &leader_ledger_path,
+        "test_leader_validator_basic",
+        &mint,
+        &leader_keypair,
+    );
 
     let last_id = genesis_entries
         .last()
@@ -1349,8 +1398,12 @@ fn test_dropped_handoff_recovery() {
             .unwrap();
     }
 
-    let next_leader_ledger_path =
-        tmp_copy_ledger(&genesis_ledger_path, "test_dropped_handoff_recovery");
+    let next_leader_ledger_path = tmp_copy_ledger(
+        &genesis_ledger_path,
+        "test_dropped_handoff_recovery",
+        &mint,
+        &bootstrap_leader_keypair,
+    );
     ledger_paths.push(next_leader_ledger_path.clone());
 
     // Create the common leader scheduling configuration
@@ -1381,14 +1434,18 @@ fn test_dropped_handoff_recovery() {
     let db_ledger_config =
         DbLedgerConfig::new(bootstrap_height, TICKS_PER_BLOCK, num_blocks_per_slot);
     // Start up the bootstrap leader fullnode
-    let bootstrap_leader_ledger_path =
-        tmp_copy_ledger(&genesis_ledger_path, "test_dropped_handoff_recovery");
+    let bootstrap_leader_ledger_path = tmp_copy_ledger(
+        &genesis_ledger_path,
+        "test_dropped_handoff_recovery",
+        &mint,
+        &bootstrap_leader_keypair,
+    );
     ledger_paths.push(bootstrap_leader_ledger_path.clone());
     let bootstrap_leader = Fullnode::new(
         bootstrap_leader_node,
         Some(db_ledger_config),
         &bootstrap_leader_ledger_path,
-        bootstrap_leader_keypair,
+        bootstrap_leader_keypair.clone(),
         Arc::new(signer_proxy),
         Some(bootstrap_leader_info.gossip),
         false,
@@ -1401,8 +1458,12 @@ fn test_dropped_handoff_recovery() {
     // Start up the validators other than the "next_leader" validator
     for i in 0..(N - 1) {
         let kp = Arc::new(Keypair::new());
-        let validator_ledger_path =
-            tmp_copy_ledger(&genesis_ledger_path, "test_dropped_handoff_recovery");
+        let validator_ledger_path = tmp_copy_ledger(
+            &genesis_ledger_path,
+            "test_dropped_handoff_recovery",
+            &mint,
+            &bootstrap_leader_keypair,
+        );
         ledger_paths.push(validator_ledger_path.clone());
         let validator_id = kp.pubkey();
         info!("validator {}: {}", i, validator_id);
@@ -1583,6 +1644,8 @@ fn test_full_leader_validator_network() {
         let validator_ledger_path = tmp_copy_ledger(
             &bootstrap_leader_ledger_path,
             "test_full_leader_validator_network",
+            &mint,
+            &bootstrap_leader_keypair,
         );
 
         ledger_paths.push(validator_ledger_path.clone());

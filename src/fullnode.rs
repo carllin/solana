@@ -938,8 +938,12 @@ mod tests {
                 .unwrap();
         }
 
-        let validator_ledger_path =
-            tmp_copy_ledger(&bootstrap_leader_ledger_path, "test_wrong_role_transition");
+        let validator_ledger_path = tmp_copy_ledger(
+            &bootstrap_leader_ledger_path,
+            "test_wrong_role_transition",
+            &mint,
+            &bootstrap_leader_keypair,
+        );
         let ledger_paths = vec![
             bootstrap_leader_ledger_path.clone(),
             validator_ledger_path.clone(),

@@ -489,7 +489,6 @@ impl DbLedger {
         for blob in new_blobs.iter() {
             let blob = blob.borrow();
             let blob_slot = blob.slot()?;
-
             // Check if we've already inserted the slot metadata for this blob's slot
             let entry = slot_meta_working_set.entry(blob_slot).or_insert_with(|| {
                 // Store a 2-tuple of the metadata (working copy, backup copy)
@@ -1332,16 +1331,31 @@ pub fn create_tmp_sample_ledger(
     (mint, path, genesis_entries)
 }
 
-pub fn tmp_copy_ledger(from: &str, name: &str) -> String {
+pub fn tmp_copy_ledger(
+    from: &str,
+    name: &str,
+    mint: &Mint,
+    bootstrap_leader_keypair: &Keypair,
+) -> String {
     let tostr = get_tmp_ledger_path(name);
 
+    DbLedger::destroy(&tostr).expect("Expected successful database destruction");
+    let genesis_entries = mint.create_entries();
+
+    // Write genesis entries to new ledger
+    genesis(&tostr, bootstrap_leader_keypair, &genesis_entries)
+        .expect("Expect successful write of genesis entries");
     let db_ledger = DbLedger::open(from).unwrap();
     let ledger_entries = db_ledger.read_ledger().unwrap();
 
-    DbLedger::destroy(&tostr).expect("Expected successful database destruction");
+    // Write remaining entries other than genesis to new ledger
     let db_ledger = DbLedger::open(&tostr).unwrap();
     db_ledger
-        .write_entries(DEFAULT_SLOT_HEIGHT, 0, ledger_entries)
+        .write_entries(
+            DEFAULT_SLOT_HEIGHT,
+            genesis_entries.len() as u64,
+            ledger_entries.skip(genesis_entries.len()),
+        )
         .unwrap();
 
     tostr
