@@ -541,10 +541,6 @@ impl DbLedger {
                         // inserting a new slot
                         (Rc::new(RefCell::new(meta.clone())), None)
                     } else {
-                        println!(
-                            "blob_slot index: {}, ct: {}, consumed: {}",
-                            blob_slot, meta.consumed_ticks, meta.consumed
-                        );
                         (Rc::new(RefCell::new(meta.clone())), Some(meta))
                     }
                 } else {
