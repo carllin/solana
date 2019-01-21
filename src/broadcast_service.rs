@@ -188,6 +188,7 @@ pub struct BroadcastService {
 }
 
 impl BroadcastService {
+    #[allow(clippy::too_many_arguments)]
     fn run(
         bank: &Arc<Bank>,
         sock: &UdpSocket,
@@ -249,6 +250,7 @@ impl BroadcastService {
     /// WriteStage is the last stage in the pipeline), which will then close Broadcast service,
     /// which will then close FetchStage in the Tpu, and then the rest of the Tpu,
     /// completing the cycle.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bank: Arc<Bank>,
         sock: UdpSocket,
