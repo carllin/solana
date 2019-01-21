@@ -195,10 +195,8 @@ impl LeaderScheduler {
     pub fn max_tick_height_for_slot(&self, slot_index: u64) -> u64 {
         if self.use_only_bootstrap_leader {
             std::u64::MAX
-        } else if slot_index == 0 {
-            self.bootstrap_height
         } else {
-            (slot_index - 1) * self.leader_rotation_interval + self.bootstrap_height
+            slot_index * self.leader_rotation_interval + self.bootstrap_height
         }
     }
 
