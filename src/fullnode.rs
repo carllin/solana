@@ -139,6 +139,7 @@ impl Fullnode {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_storage_rotate(
         node: Node,
         ledger_config: Option<DbLedgerConfig>,
