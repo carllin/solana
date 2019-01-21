@@ -376,9 +376,7 @@ impl ReplayStage {
 
     fn get_next_slot(db_ledger: &DbLedger, slot_index: u64) -> Option<u64> {
         // Find the next slot that chains to the old slot
-        let next_slots = db_ledger
-            .get_slots_since(&vec![slot_index])
-            .expect("Db error");
+        let next_slots = db_ledger.get_slots_since(&[slot_index]).expect("Db error");
         if next_slots.is_empty() {
             None
         } else {
