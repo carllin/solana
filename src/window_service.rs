@@ -180,6 +180,7 @@ pub fn window_service(
 
                     let reqs = repair(
                         &db_ledger,
+                        0,
                         &cluster_info,
                         &id,
                         times,

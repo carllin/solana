@@ -9,9 +9,7 @@ use solana::db_ledger::{DbLedger, DbLedgerConfig, DEFAULT_SLOT_HEIGHT};
 use solana::entry::{reconstruct_entries_from_blobs, Entry};
 use solana::fullnode::{Fullnode, FullnodeConfig, FullnodeReturnType};
 use solana::gossip_service::GossipService;
-use solana::leader_scheduler::{
-    make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig,
-};
+use solana::leader_scheduler::{make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig};
 use solana::packet::SharedBlob;
 use solana::poh_service::NUM_TICKS_PER_SECOND;
 use solana::result;
