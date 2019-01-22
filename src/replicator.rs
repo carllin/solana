@@ -174,8 +174,6 @@ impl Replicator {
         // todo: pull blobs off the retransmit_receiver and recycle them?
         let (retransmit_sender, retransmit_receiver) = channel();
 
-        let (entry_sender, entry_receiver) = channel();
-
         let t_window = window_service(
             db_ledger.clone(),
             cluster_info.clone(),
@@ -192,10 +190,12 @@ impl Replicator {
         );
 
         info!("window created, waiting for ledger download done");
-        let start = Instant::now();
-        let mut received_so_far = 0;
+        let _start = Instant::now();
+        let _received_so_far = 0;
 
-        while !done.load(Ordering::Relaxed) {
+        // TODO: Remake replicator
+        done.store(true, Ordering::Relaxed);
+        /*while !done.load(Ordering::Relaxed) {
             sleep(Duration::from_millis(100));
 
             let elapsed = start.elapsed();
@@ -207,7 +207,7 @@ impl Replicator {
                     "Timed out waiting to receive any blocks",
                 )));
             }
-        }
+        }*/
 
         info!("Done receiving entries from window_service");
 
