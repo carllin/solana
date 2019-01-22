@@ -1378,7 +1378,7 @@ fn test_dropped_handoff_recovery() {
     let num_blocks_per_slot = 2;
     let leader_rotation_interval = TICKS_PER_BLOCK * num_blocks_per_slot;
     let seed_rotation_interval = num_slots_per_epoch * leader_rotation_interval;
-    //Set the bootstrap height to be a multiple of TICKS_PER_BLOCK bigger than the
+    // Set the bootstrap height to be a multiple of TICKS_PER_BLOCK bigger than the
     // initial tick height
     let bootstrap_height =
         initial_tick_height + (TICKS_PER_BLOCK - (initial_tick_height % TICKS_PER_BLOCK));
