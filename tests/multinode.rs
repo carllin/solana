@@ -10,7 +10,7 @@ use solana::entry::{reconstruct_entries_from_blobs, Entry};
 use solana::fullnode::{Fullnode, FullnodeConfig, FullnodeReturnType};
 use solana::gossip_service::GossipService;
 use solana::leader_scheduler::{
-    make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig, DEFAULT_TICKS_PER_SLOT,
+    make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig,
 };
 use solana::packet::SharedBlob;
 use solana::poh_service::NUM_TICKS_PER_SECOND;
@@ -1766,7 +1766,7 @@ fn test_broadcast_last_tick() {
     let voting_keypair = VotingKeypair::new_local(&bootstrap_leader_keypair);
     let db_ledger_config = DbLedgerConfig::new(bootstrap_height, leader_rotation_interval);
 
-    let mut bootstrap_leader = Fullnode::new(
+    let bootstrap_leader = Fullnode::new(
         bootstrap_leader_node,
         &bootstrap_leader_keypair,
         Some(db_ledger_config),
