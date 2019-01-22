@@ -276,10 +276,14 @@ fn test_replicator_startup_ledger_hang() {
     let leader_info = leader_node.info.clone();
 
     let leader_ledger_path = "replicator_test_leader_ledger";
-    let (_, leader_ledger_path) = create_tmp_genesis(leader_ledger_path, 100, leader_info.id, 1);
+    let (mint, leader_ledger_path) = create_tmp_genesis(leader_ledger_path, 100, leader_info.id, 1);
 
-    let validator_ledger_path =
-        tmp_copy_ledger(&leader_ledger_path, "replicator_test_validator_ledger");
+    let validator_ledger_path = tmp_copy_ledger(
+        &leader_ledger_path,
+        "replicator_test_validator_ledger",
+        &mint,
+        &leader_keypair,
+    );
 
     {
         let signer_proxy =
@@ -287,6 +291,7 @@ fn test_replicator_startup_ledger_hang() {
 
         let _ = Fullnode::new(
             leader_node,
+            None,
             &leader_ledger_path,
             leader_keypair,
             Some(Arc::new(signer_proxy)),
@@ -303,6 +308,7 @@ fn test_replicator_startup_ledger_hang() {
 
         let _ = Fullnode::new(
             validator_node,
+            None,
             &validator_ledger_path,
             validator_keypair,
             Some(Arc::new(signer_proxy)),
