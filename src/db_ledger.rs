@@ -141,6 +141,18 @@ pub struct SlotMeta {
 }
 
 impl SlotMeta {
+    pub fn contains_all_ticks(&self, slot_height: u64, db_ledger: &DbLedger) -> bool {
+        self.num_expected_ticks(slot_height, db_ledger) == self.consumed_ticks
+    }
+
+    pub fn num_expected_ticks(&self, slot_height: u64, db_ledger: &DbLedger) -> u64 {
+        if slot_height == 0 {
+            db_ledger.num_bootstrap_ticks
+        } else {
+            db_ledger.ticks_per_block * self.num_blocks
+        }
+    }
+
     fn new(slot_index: u64, num_blocks: u64) -> Self {
         SlotMeta {
             consumed: 0,
@@ -150,23 +162,6 @@ impl SlotMeta {
             next_slots: vec![],
             is_trunk: slot_index == 0,
         }
-    }
-
-    fn contains_all_ticks(
-        &self,
-        slot_height: u64,
-        num_bootstrap_ticks: u64,
-        ticks_per_block: u64,
-    ) -> bool {
-        let num_expected_slot_ticks = {
-            if slot_height == 0 {
-                num_bootstrap_ticks
-            } else {
-                ticks_per_block * self.num_blocks
-            }
-        };
-
-        num_expected_slot_ticks == self.consumed_ticks
     }
 }
 
@@ -527,11 +522,7 @@ impl DbLedger {
             let slot_meta = &mut entry.0.borrow_mut();
 
             // This slot is full, skip the bogus blob
-            if slot_meta.contains_all_ticks(
-                blob_slot,
-                self.num_bootstrap_ticks,
-                self.ticks_per_block,
-            ) {
+            if slot_meta.contains_all_ticks(blob_slot, &self) {
                 println!(
                     "cat: bs: {}, bi: {}, ct: {}",
                     blob_slot,
@@ -677,12 +668,12 @@ impl DbLedger {
         self.data_cf.put_by_slot_index(slot, index, bytes)
     }
 
-    pub fn get_data_blob(&self, slot: u64, index: u64) -> Result<Option<Blob>> {
-        let bytes = self.get_data_blob_bytes(slot, index)?;
+    pub fn get_data_blob(&self, slot_index: u64, blob_index: u64) -> Result<Option<Blob>> {
+        let bytes = self.get_data_blob_bytes(slot_index, blob_index)?;
         Ok(bytes.map(|bytes| {
             let blob = Blob::new(&bytes);
-            assert!(blob.slot().unwrap() == slot);
-            assert!(blob.index().unwrap() == index);
+            assert!(blob.slot().unwrap() == slot_index);
+            assert!(blob.index().unwrap() == blob_index);
             blob
         }))
     }
@@ -698,12 +689,14 @@ impl DbLedger {
 
     // Given a start and end entry index, find all the missing
     // indexes in the ledger in the range [start_index, end_index)
+    // for the slot with slot_height == slot
     fn find_missing_indexes(
         db_iterator: &mut DbLedgerRawIterator,
         slot: u64,
         start_index: u64,
         end_index: u64,
         key: &dyn Fn(u64, u64) -> Vec<u8>,
+        slot_height_from_key: &dyn Fn(&[u8]) -> Result<u64>,
         index_from_key: &dyn Fn(&[u8]) -> Result<u64>,
         max_missing: usize,
     ) -> Vec<u64> {
@@ -729,15 +722,29 @@ impl DbLedger {
                 break;
             }
             let current_key = db_iterator.key().expect("Expect a valid key");
-            let current_index = index_from_key(&current_key)
-                .expect("Expect to be able to parse index from valid key");
+            let current_slot = slot_height_from_key(&current_key)
+                .expect("Expect to be able to parse slot from valid key");
+            let current_index = {
+                if current_slot > slot {
+                    end_index
+                } else {
+                    index_from_key(&current_key)
+                        .expect("Expect to be able to parse index from valid key")
+                }
+            };
             let upper_index = min(current_index, end_index);
+
             for i in prev_index..upper_index {
                 missing_indexes.push(i);
                 if missing_indexes.len() == max_missing {
                     break 'outer;
                 }
             }
+
+            if current_slot > slot {
+                break;
+            }
+
             if current_index >= end_index {
                 break;
             }
@@ -764,6 +771,7 @@ impl DbLedger {
             start_index,
             end_index,
             &DataCf::key,
+            &DataCf::slot_height_from_key,
             &DataCf::index_from_key,
             max_missing,
         )
@@ -784,6 +792,7 @@ impl DbLedger {
             start_index,
             end_index,
             &ErasureCf::key,
+            &ErasureCf::slot_height_from_key,
             &ErasureCf::index_from_key,
             max_missing,
         )
@@ -954,11 +963,7 @@ impl DbLedger {
                 current_slot.borrow_mut().is_trunk = true;
 
                 let current_slot = &RefCell::borrow(&*current_slot);
-                if current_slot.contains_all_ticks(
-                    current_slot_index,
-                    self.num_bootstrap_ticks,
-                    self.ticks_per_block,
-                ) {
+                if current_slot.contains_all_ticks(current_slot_index, self) {
                     for next_slot_index in current_slot.next_slots.iter() {
                         let next_slot = self.find_slot_meta_else_create(
                             working_set,
@@ -982,12 +987,8 @@ impl DbLedger {
         current_slot: &mut SlotMeta,
     ) {
         prev_slot.next_slots.push(current_slot_height);
-        current_slot.is_trunk = prev_slot.is_trunk
-            && prev_slot.contains_all_ticks(
-                prev_slot_height,
-                self.num_bootstrap_ticks,
-                self.ticks_per_block,
-            );
+        current_slot.is_trunk =
+            prev_slot.is_trunk && prev_slot.contains_all_ticks(prev_slot_height, self);
     }
 
     fn is_newly_completed_slot(
@@ -996,7 +997,7 @@ impl DbLedger {
         slot_meta: &SlotMeta,
         backup_slot_meta: &Option<SlotMeta>,
     ) -> bool {
-        slot_meta.contains_all_ticks(slot_height, self.num_bootstrap_ticks, self.ticks_per_block)
+        slot_meta.contains_all_ticks(slot_height, self)
             && (backup_slot_meta.is_none()
                 || slot_meta.consumed_ticks != backup_slot_meta.as_ref().unwrap().consumed_ticks)
     }
