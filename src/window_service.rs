@@ -185,7 +185,7 @@ pub fn window_service(
                     }
                     trace!("{} let's repair! times = {}", id, times);
 
-                    let reqs = repair(
+                    /*let reqs = repair(
                         &db_ledger,
                         &cluster_info,
                         &id,
@@ -202,7 +202,7 @@ pub fn window_service(
                                 0
                             });
                         }
-                    }
+                    }*/
                 }
             }
         })
