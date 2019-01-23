@@ -99,18 +99,21 @@ impl RepairService {
     fn generate_repairs(db_ledger: &DbLedger, max_repairs: usize) -> Result<Vec<(u64, u64)>> {
         // Slot height and blob indexes for blobs we want to repair
         let mut repairs: Vec<(u64, u64)> = vec![];
-        let mut slots = vec![0];
-        while repairs.len() < max_repairs && !slots.is_empty() {
-            let slot_height = slots.pop().unwrap();
-            let slot = db_ledger.meta(slot_height)?;
+        let mut current_slot_height = Some(0);
+        while repairs.len() < max_repairs && current_slot_height.is_some() {
+            let slot = db_ledger.meta(current_slot_height.unwrap())?;
             if slot.is_none() {
-                continue;
+                break;
             }
             let slot = slot.unwrap();
-            slots.extend(slot.next_slots.clone());
-            let new_repairs =
-                Self::process_slot(db_ledger, slot_height, &slot, max_repairs - repairs.len())?;
+            let new_repairs = Self::process_slot(
+                db_ledger,
+                current_slot_height.unwrap(),
+                &slot,
+                max_repairs - repairs.len(),
+            )?;
             repairs.extend(new_repairs);
+            current_slot_height = db_ledger.get_next_slot(current_slot_height.unwrap())?;
         }
 
         Ok(repairs)
