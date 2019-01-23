@@ -5,7 +5,9 @@ use crate::counter::Counter;
 use crate::db_ledger::DbLedger;
 use crate::db_window::*;
 use crate::leader_scheduler::LeaderScheduler;
+use crate::repair_service::RepairService;
 use crate::result::{Error, Result};
+use crate::service::Service;
 use crate::streamer::{BlobReceiver, BlobSender};
 use log::Level;
 use rand::{thread_rng, Rng};
@@ -13,10 +15,10 @@ use solana_metrics::{influxdb, submit};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::timing::duration_as_ms;
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, RwLock};
-use std::thread::{Builder, JoinHandle};
+use std::thread::{self, Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub const MAX_REPAIR_BACKOFF: usize = 128;
@@ -107,96 +109,91 @@ fn recv_window(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn window_service(
-    db_ledger: Arc<DbLedger>,
-    cluster_info: Arc<RwLock<ClusterInfo>>,
-    tick_height: u64,
-    entry_height: u64,
-    max_entry_height: u64,
-    r: BlobReceiver,
-    retransmit: BlobSender,
-    repair_socket: Arc<UdpSocket>,
-    leader_scheduler: Arc<RwLock<LeaderScheduler>>,
-    done: Arc<AtomicBool>,
-) -> JoinHandle<()> {
-    Builder::new()
-        .name("solana-window".to_string())
-        .spawn(move || {
-            let mut tick_height_ = tick_height;
-            let mut last = entry_height;
-            let mut times = 0;
-            let id = cluster_info.read().unwrap().id();
-            trace!("{}: RECV_WINDOW started", id);
-            loop {
-                if let Err(e) = recv_window(
-                    &db_ledger,
-                    &id,
-                    &leader_scheduler,
-                    &mut tick_height_,
-                    max_entry_height,
-                    &r,
-                    &retransmit,
-                    &done,
-                ) {
-                    match e {
-                        Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
-                        Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
-                        _ => {
-                            inc_new_counter_info!("streamer-window-error", 1, 1);
-                            error!("window error: {:?}", e);
-                        }
-                    }
-                }
+// Implement a destructor for the window_service thread to signal it exited
+// even on panics
+struct Finalizer {
+    exit_sender: Arc<AtomicBool>,
+}
 
-                let meta = db_ledger.meta(0);
+impl Finalizer {
+    fn new(exit_sender: Arc<AtomicBool>) -> Self {
+        Finalizer { exit_sender }
+    }
+}
+// Implement a destructor for Finalizer.
+impl Drop for Finalizer {
+    fn drop(&mut self) {
+        self.exit_sender.clone().store(true, Ordering::Relaxed);
+    }
+}
 
-                if let Ok(Some(meta)) = meta {
-                    let received = meta.received;
-                    let consumed = meta.consumed;
+pub struct WindowService {
+    t_window: JoinHandle<()>,
+    repair_service: RepairService,
+}
 
-                    // Consumed should never be bigger than received
-                    assert!(consumed <= received);
-                    if received == consumed {
-                        trace!(
-                            "{} we have everything received: {} consumed: {}",
-                            id,
-                            received,
-                            consumed
-                        );
-                        continue;
-                    }
-
-                    //exponential backoff
-                    if !repair_backoff(&mut last, &mut times, consumed) {
-                        trace!("{} !repair_backoff() times = {}", id, times);
-                        continue;
-                    }
-                    trace!("{} let's repair! times = {}", id, times);
-
-                    let reqs = repair(
+impl WindowService {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        db_ledger: Arc<DbLedger>,
+        cluster_info: Arc<RwLock<ClusterInfo>>,
+        tick_height: u64,
+        max_entry_height: u64,
+        r: BlobReceiver,
+        retransmit: BlobSender,
+        repair_socket: Arc<UdpSocket>,
+        leader_scheduler: Arc<RwLock<LeaderScheduler>>,
+        done: Arc<AtomicBool>,
+    ) -> WindowService {
+        let exit = Arc::new(AtomicBool::new(false));
+        let exit_ = exit.clone();
+        let repair_service =
+            RepairService::new(db_ledger.clone(), exit, repair_socket, cluster_info.clone());
+        let t_window = Builder::new()
+            .name("solana-window".to_string())
+            .spawn(move || {
+                let _exit = Finalizer::new(exit_);
+                let mut tick_height_ = tick_height;
+                let id = cluster_info.read().unwrap().id();
+                trace!("{}: RECV_WINDOW started", id);
+                loop {
+                    if let Err(e) = recv_window(
                         &db_ledger,
-                        0,
-                        &cluster_info,
                         &id,
-                        times,
-                        tick_height_,
-                        max_entry_height,
                         &leader_scheduler,
-                    );
-
-                    if let Ok(reqs) = reqs {
-                        for (to, req) in reqs {
-                            repair_socket.send_to(&req, to).unwrap_or_else(|e| {
-                                info!("{} repair req send_to({}) error {:?}", id, to, e);
-                                0
-                            });
+                        &mut tick_height_,
+                        max_entry_height,
+                        &r,
+                        &retransmit,
+                        &done,
+                    ) {
+                        match e {
+                            Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
+                            Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
+                            _ => {
+                                inc_new_counter_info!("streamer-window-error", 1, 1);
+                                error!("window error: {:?}", e);
+                            }
                         }
                     }
                 }
-            }
-        })
-        .unwrap()
+            })
+            .unwrap();
+
+        WindowService {
+            t_window,
+            repair_service,
+        }
+    }
+}
+
+impl Service for WindowService {
+    type JoinReturnType = ();
+
+    fn join(self) -> thread::Result<()> {
+        self.t_window.join()?;
+        self.repair_service.join()
+    }
 }
 
 #[cfg(test)]
@@ -206,10 +203,11 @@ mod test {
     use crate::db_ledger::DbLedger;
     use crate::entry::make_consecutive_blobs;
     use crate::leader_scheduler::LeaderScheduler;
+    use crate::service::Service;
 
     use crate::packet::{SharedBlob, PACKET_DATA_SIZE};
     use crate::streamer::{blob_receiver, responder};
-    use crate::window_service::{repair_backoff, window_service};
+    use crate::window_service::{repair_backoff, WindowService};
     use solana_sdk::hash::Hash;
     use std::fs::remove_dir_all;
     use std::net::UdpSocket;
@@ -236,10 +234,9 @@ mod test {
         let db_ledger = Arc::new(
             DbLedger::open(&db_ledger_path).expect("Expected to be able to open database ledger"),
         );
-        let t_window = window_service(
+        let window_service = WindowService::new(
             db_ledger,
             subs,
-            0,
             0,
             0,
             r_reader,
@@ -278,7 +275,7 @@ mod test {
         exit.store(true, Ordering::Relaxed);
         t_receiver.join().expect("join");
         t_responder.join().expect("join");
-        t_window.join().expect("join");
+        window_service.join().expect("join");
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
         let _ignored = remove_dir_all(&db_ledger_path);
     }
@@ -300,10 +297,9 @@ mod test {
         let db_ledger = Arc::new(
             DbLedger::open(&db_ledger_path).expect("Expected to be able to open database ledger"),
         );
-        let t_window = window_service(
+        let window_service = WindowService::new(
             db_ledger,
             subs.clone(),
-            0,
             0,
             0,
             r_reader,
@@ -359,7 +355,7 @@ mod test {
         exit.store(true, Ordering::Relaxed);
         t_receiver.join().expect("join");
         t_responder.join().expect("join");
-        t_window.join().expect("join");
+        window_service.join().expect("join");
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
         let _ignored = remove_dir_all(&db_ledger_path);
     }

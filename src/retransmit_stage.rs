@@ -8,7 +8,7 @@ use crate::leader_scheduler::LeaderScheduler;
 use crate::result::{Error, Result};
 use crate::service::Service;
 use crate::streamer::BlobReceiver;
-use crate::window_service::window_service;
+use crate::window_service::WindowService;
 use log::Level;
 use solana_metrics::{influxdb, submit};
 use std::net::UdpSocket;
@@ -119,6 +119,7 @@ fn retransmitter(
 
 pub struct RetransmitStage {
     thread_hdls: Vec<JoinHandle<()>>,
+    window_service: WindowService,
 }
 
 impl RetransmitStage {
@@ -128,7 +129,6 @@ impl RetransmitStage {
         db_ledger: Arc<DbLedger>,
         cluster_info: &Arc<RwLock<ClusterInfo>>,
         tick_height: u64,
-        entry_height: u64,
         retransmit_socket: Arc<UdpSocket>,
         repair_socket: Arc<UdpSocket>,
         fetch_stage_receiver: BlobReceiver,
@@ -143,11 +143,10 @@ impl RetransmitStage {
             retransmit_receiver,
         );
         let done = Arc::new(AtomicBool::new(false));
-        let t_window = window_service(
+        let window_service = WindowService::new(
             db_ledger,
             cluster_info.clone(),
             tick_height,
-            entry_height,
             0,
             fetch_stage_receiver,
             retransmit_sender,
@@ -156,8 +155,11 @@ impl RetransmitStage {
             done,
         );
 
-        let thread_hdls = vec![t_retransmit, t_window];
-        Self { thread_hdls }
+        let thread_hdls = vec![t_retransmit];
+        Self {
+            thread_hdls,
+            window_service,
+        }
     }
 }
 
@@ -168,6 +170,7 @@ impl Service for RetransmitStage {
         for thread_hdl in self.thread_hdls {
             thread_hdl.join()?;
         }
+        self.window_service.join()?;
         Ok(())
     }
 }

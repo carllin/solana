@@ -172,7 +172,7 @@ fn generate_slots(
         .collect()
 }
 
-// Implement a destructor for the BroadcastService3 thread to signal it exited
+// Implement a destructor for the BroadcastService thread to signal it exited
 // even on panics
 struct Finalizer {
     exit_sender: Arc<AtomicBool>,
