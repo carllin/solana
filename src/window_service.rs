@@ -10,7 +10,6 @@ use crate::result::{Error, Result};
 use crate::service::Service;
 use crate::streamer::{BlobReceiver, BlobSender};
 use log::Level;
-use rand::{thread_rng, Rng};
 use solana_metrics::{influxdb, submit};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::timing::duration_as_ms;
@@ -26,27 +25,6 @@ pub const MAX_REPAIR_BACKOFF: usize = 128;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum WindowServiceReturnType {
     LeaderRotation(u64),
-}
-
-fn repair_backoff(last: &mut u64, times: &mut usize, consumed: u64) -> bool {
-    //exponential backoff
-    if *last != consumed {
-        //start with a 50% chance of asking for repairs
-        *times = 1;
-    }
-    *last = consumed;
-    *times += 1;
-
-    // Experiment with capping repair request duration.
-    // Once nodes are too far behind they can spend many
-    // seconds without asking for repair
-    if *times > MAX_REPAIR_BACKOFF {
-        // 50% chance that a request will fire between 64 - 128 tries
-        *times = MAX_REPAIR_BACKOFF / 2;
-    }
-
-    //if we get lucky, make the request, which should exponentially get less likely
-    thread_rng().gen_range(0, *times as u64) == 0
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -207,7 +185,7 @@ mod test {
 
     use crate::packet::{SharedBlob, PACKET_DATA_SIZE};
     use crate::streamer::{blob_receiver, responder};
-    use crate::window_service::{repair_backoff, WindowService};
+    use crate::window_service::WindowService;
     use solana_sdk::hash::Hash;
     use std::fs::remove_dir_all;
     use std::net::UdpSocket;
@@ -358,34 +336,5 @@ mod test {
         window_service.join().expect("join");
         DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
         let _ignored = remove_dir_all(&db_ledger_path);
-    }
-
-    #[test]
-    pub fn test_repair_backoff() {
-        let num_tests = 100;
-        let res: usize = (0..num_tests)
-            .map(|_| {
-                let mut last = 0;
-                let mut times = 0;
-                let total: usize = (0..127)
-                    .map(|x| {
-                        let rv = repair_backoff(&mut last, &mut times, 1) as usize;
-                        assert_eq!(times, x + 2);
-                        rv
-                    })
-                    .sum();
-                assert_eq!(times, 128);
-                assert_eq!(last, 1);
-                repair_backoff(&mut last, &mut times, 1);
-                assert_eq!(times, 64);
-                repair_backoff(&mut last, &mut times, 2);
-                assert_eq!(times, 2);
-                assert_eq!(last, 2);
-                total
-            })
-            .sum();
-        let avg = res / num_tests;
-        assert!(avg >= 3);
-        assert!(avg <= 5);
     }
 }
