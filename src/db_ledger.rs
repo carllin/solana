@@ -189,6 +189,12 @@ impl MetaCf {
         let key = Self::key(slot_height);
         self.put(&key, slot_meta)
     }
+
+    pub fn index_from_key(key: &[u8]) -> Result<u64> {
+        let mut rdr = io::Cursor::new(&key[..]);
+        let index = rdr.read_u64::<BigEndian>()?;
+        Ok(index)
+    }
 }
 
 impl LedgerColumnFamily for MetaCf {
@@ -419,6 +425,17 @@ impl DbLedger {
         let ledger_path = Path::new(ledger_path).join(DB_LEDGER_DIRECTORY);
         DB::destroy(&Options::default(), &ledger_path)?;
         Ok(())
+    }
+
+    pub fn get_next_slot(&self, slot_height: u64) -> Result<Option<u64>> {
+        let mut db_iterator = self.db.raw_iterator_cf(self.meta_cf.handle())?;
+        db_iterator.seek(&MetaCf::key(slot_height + 1));
+        if !db_iterator.valid() {
+            Ok(None)
+        } else {
+            let key = &db_iterator.key().expect("Expected valid key");
+            Ok(Some(MetaCf::index_from_key(&key)?))
+        }
     }
 
     pub fn write_shared_blobs<I>(&self, shared_blobs: I) -> Result<Vec<Entry>>
@@ -1370,6 +1387,31 @@ mod tests {
     use std::thread::sleep;
     use std::thread::Builder;
     use std::time::Duration;
+
+    #[test]
+    fn test_get_next_slot() {
+        let ledger_path = get_tmp_ledger_path("test_get_next_slot");
+        let ledger = DbLedger::open(&ledger_path).unwrap();
+        let num_metas = 10;
+        for i in 0..num_metas {
+            ledger
+                .meta_cf
+                .put_slot_meta(i * 2, &SlotMeta::new(i * 2, 1))
+                .unwrap()
+        }
+
+        for i in 0..num_metas {
+            if i == num_metas - 1 {
+                assert_eq!(ledger.get_next_slot(i * 2).unwrap(), None);
+            } else {
+                assert_eq!(ledger.get_next_slot(i * 2).unwrap(), Some((i + 1) * 2));
+            }
+        }
+
+        // Destroying database without closing it first is undefined behavior
+        drop(ledger);
+        DbLedger::destroy(&ledger_path).expect("Expected successful database destruction");
+    }
 
     #[test]
     fn test_put_get_simple() {
