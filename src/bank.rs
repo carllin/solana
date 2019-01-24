@@ -1868,6 +1868,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_bank_storage() {
         solana_logger::setup();
         let alice = Mint::new(1000);

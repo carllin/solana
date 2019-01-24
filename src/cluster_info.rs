@@ -533,22 +533,29 @@ impl ClusterInfo {
         s: &UdpSocket,
     ) -> Result<()> {
         let (me, orders): (NodeInfo, &[NodeInfo]) = {
-            // copy to avoid locking during IO
+            // copy to av   oid locking during IO
             let s = obj.read().unwrap();
             (s.my_data().clone(), peers)
         };
+
+        println!(
+            "{}: trying to retransmit {}",
+            me.id,
+            blob.read().unwrap().index().unwrap()
+        );
         blob.write()
             .unwrap()
             .set_id(&me.id)
             .expect("set_id in pub fn retransmit");
         let rblob = blob.read().unwrap();
-        trace!("retransmit orders {}", orders.len());
+        println!("{}: retransmit orders {}", me.id, orders.len());
         let errs: Vec<_> = orders
             .par_iter()
             .map(|v| {
-                debug!(
-                    "{}: retransmit blob {} to {} {}",
+                println!(
+                    "{}: retransmit blob {} {} to {} {}",
                     me.id,
+                    rblob.slot().unwrap(),
                     rblob.index().unwrap(),
                     v.id,
                     v.tvu,
@@ -561,7 +568,7 @@ impl ClusterInfo {
         for e in errs {
             if let Err(e) = &e {
                 inc_new_counter_info!("cluster_info-retransmit-send_to_error", 1, 1);
-                error!("retransmit result {:?}", e);
+                println!("retransmit result {:?}", e);
             }
             e?;
         }
@@ -682,6 +689,13 @@ impl ClusterInfo {
         let n = thread_rng().gen::<usize>() % valid.len();
         let addr = valid[n].gossip; // send the request to the peer's gossip port
         let out = self.window_index_request_bytes(slot_height, blob_index)?;
+        println!(
+            "{}: Sending request for si: {}, bi: {} to {}",
+            self.id(),
+            slot_height,
+            blob_index,
+            valid[n].id
+        );
 
         submit(
             influxdb::Point::new("cluster-info")
@@ -821,6 +835,10 @@ impl ClusterInfo {
         slot_height: u64,
         blob_index: u64,
     ) -> Vec<SharedBlob> {
+        println!(
+            "{}, got request for si: {}, bi: {} from: {}",
+            me.id, slot_height, blob_index, from.id
+        );
         if let Some(db_ledger) = db_ledger {
             // Try to find the requested index in one of the slots
             let blob = db_ledger.get_data_blob(slot_height, blob_index);
@@ -828,7 +846,10 @@ impl ClusterInfo {
             if let Ok(Some(mut blob)) = blob {
                 inc_new_counter_info!("cluster_info-window-request-ledger", 1);
                 blob.meta.set_addr(from_addr);
-
+                println!(
+                    "{}, sending response for si: {}, bi: {} to: {}",
+                    me.id, slot_height, blob_index, from.id
+                );
                 return vec![Arc::new(RwLock::new(blob))];
             }
         }
@@ -977,7 +998,7 @@ impl ClusterInfo {
 
         let self_id = me.read().unwrap().gossip.id;
         if from.id == me.read().unwrap().gossip.id {
-            warn!(
+            println!(
                 "{}: Ignored received RequestWindowIndex from ME {} {} {} ",
                 self_id, from.id, slot_height, blob_index,
             );
@@ -988,12 +1009,9 @@ impl ClusterInfo {
         me.write().unwrap().insert_info(from.clone());
         let my_info = me.read().unwrap().my_data().clone();
         inc_new_counter_info!("cluster_info-window-request-recv", 1);
-        trace!(
+        println!(
             "{}: received RequestWindowIndex from: {} slot_height: {}, blob_index: {}",
-            self_id,
-            from.id,
-            slot_height,
-            blob_index,
+            self_id, from.id, slot_height, blob_index,
         );
         let res = Self::run_window_request(
             &from,
@@ -1119,6 +1137,7 @@ impl ClusterInfo {
                     &response_sender,
                 );
                 if exit.load(Ordering::Relaxed) {
+                    println!("{} listener exited 1", me.read().unwrap().gossip.id);
                     return;
                 }
                 if e.is_err() {

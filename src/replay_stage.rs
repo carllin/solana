@@ -176,7 +176,7 @@ impl ReplayStage {
         // an error occurred processing one of the entries (causing the rest of the entries to
         // not be processed).
         if entries_len != 0 {
-            println!("Sending {} entries", entries.len());
+            println!("{:?}, Sending {} entries", keypair.pubkey(), entries.len());
             ledger_entry_sender.send(entries)?;
         }
 
@@ -218,8 +218,10 @@ impl ReplayStage {
             .max_tick_height_for_slot(current_slot);
 
         println!(
-            "mthfs: {}, current_slot: {}",
-            max_tick_height_for_slot, current_slot
+            "{:?}: mthfs: {}, current_slot: {}",
+            keypair.pubkey(),
+            max_tick_height_for_slot,
+            current_slot
         );
 
         let mut current_slot = Some(current_slot);
@@ -245,6 +247,12 @@ impl ReplayStage {
                                 &db_ledger,
                                 prev_slot.expect("prev_slot must exist"),
                             );
+                            println!(
+                                "{:?}, new_slot is: {:?}, old_slot: {:?}",
+                                keypair.pubkey(),
+                                new_slot,
+                                prev_slot
+                            );
                             if new_slot.is_none() {
                                 break;
                             } else {
@@ -256,10 +264,18 @@ impl ReplayStage {
                                     .read()
                                     .unwrap()
                                     .max_tick_height_for_slot(current_slot.unwrap());
+                                println!(
+                                    "New max_tick_height_for_slot {:?}: {}",
+                                    current_slot, max_tick_height_for_slot
+                                );
                             }
                         }
 
-                        println!("Fetching entries from db for slot: {:?}", current_slot);
+                        println!(
+                            "{:?}, Fetching entries from db for slot: {:?}",
+                            keypair.pubkey(),
+                            current_slot
+                        );
                         // Fetch the next entries from the database
                         if let Ok(entries) = db_ledger.get_slot_entries(
                             current_slot.unwrap(),
@@ -267,6 +283,7 @@ impl ReplayStage {
                             Some(MAX_ENTRY_RECV_PER_ITER as u64),
                         ) {
                             if entries.is_empty() {
+                                println!("Fetched zero entries");
                                 break;
                             }
                             if let Err(e) = Self::process_entries(
@@ -289,8 +306,11 @@ impl ReplayStage {
                         let current_tick_height = bank.tick_height();
 
                         println!(
-                            "mthfs: {}, cth: {}",
-                            max_tick_height_for_slot, current_tick_height
+                            "{:?}, current_slot: {:?} mthfs: {}, cth: {}",
+                            keypair.pubkey(),
+                            current_slot,
+                            max_tick_height_for_slot,
+                            current_tick_height
                         );
                         // We've reached the end of a slot, reset our state and check
                         // for leader rotation
@@ -298,7 +318,7 @@ impl ReplayStage {
                             // Check for leader rotation
                             let my_id = keypair.pubkey();
                             let current_leader = Self::get_leader(&bank, &cluster_info);
-                            println!("current_leader: {}", current_leader);
+                            println!("{:?}, current_leader: {}", keypair.pubkey(), current_leader);
                             if my_id == current_leader {
                                 return Some(ReplayStageReturnType::LeaderRotation(
                                     current_tick_height,
@@ -317,7 +337,8 @@ impl ReplayStage {
                         }
 
                         println!(
-                            "current_slot: {}, bi: {}",
+                            "{:?}, current_slot: {}, bi: {}",
+                            keypair.pubkey(),
                             current_slot.unwrap(),
                             current_blob_index
                         );

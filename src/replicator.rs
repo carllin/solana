@@ -191,6 +191,7 @@ impl Replicator {
         let _received_so_far = 0;
 
         // TODO: Remake replicator
+        done.store(true, Ordering::Relaxed);
         /*while !done.load(Ordering::Relaxed) {
             sleep(Duration::from_millis(100));
 
