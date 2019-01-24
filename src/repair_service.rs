@@ -5,6 +5,7 @@ use crate::cluster_info::ClusterInfo;
 use crate::db_ledger::{DbLedger, SlotMeta};
 use crate::result::Result;
 use crate::service::Service;
+use solana_metrics::{influxdb, submit};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -60,11 +61,37 @@ impl RepairService {
                         .filter_map(|(slot_height, blob_index)| {
                             rcluster_info
                                 .window_index_request(slot_height, blob_index)
+                                .map(|result| (result, slot_height, blob_index))
                                 .ok()
                         })
                         .collect();
 
-                    for (to, req) in reqs {
+                    for ((to, req), slot_height, blob_index) in reqs {
+                        if let Ok(local_addr) = repair_socket.local_addr() {
+                            submit(
+                                influxdb::Point::new("repair_service")
+                                    .add_field(
+                                        "repair_slot",
+                                        influxdb::Value::Integer(slot_height as i64),
+                                    )
+                                    .to_owned()
+                                    .add_field(
+                                        "repair_blob",
+                                        influxdb::Value::Integer(blob_index as i64),
+                                    )
+                                    .to_owned()
+                                    .add_field("to", influxdb::Value::String(to.to_string()))
+                                    .to_owned()
+                                    .add_field(
+                                        "from",
+                                        influxdb::Value::String(local_addr.to_string()),
+                                    )
+                                    .to_owned()
+                                    .add_field("id", influxdb::Value::String(id.to_string()))
+                                    .to_owned(),
+                            );
+                        }
+
                         repair_socket.send_to(&req, to).unwrap_or_else(|e| {
                             println!("{} repair req send_to({}) error {:?}", id, to, e);
                             0
