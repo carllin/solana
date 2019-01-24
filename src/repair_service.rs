@@ -12,8 +12,23 @@ use std::thread::sleep;
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 
-pub const MAX_REPAIR_LENGTH: usize = 128;
+pub const MAX_REPAIR_LENGTH: usize = 16;
 pub const REPAIR_MS: u64 = 100;
+pub const MAX_REPAIR_TRIES: u64 = 128;
+
+struct RepairInfo {
+    max_slot: u64,
+    repair_tries: u64,
+}
+
+impl RepairInfo {
+    fn new() -> Self {
+        RepairInfo {
+            max_slot: 0,
+            repair_tries: 0,
+        }
+    }
+}
 
 pub struct RepairService {
     t_repair: JoinHandle<()>,
@@ -26,6 +41,7 @@ impl RepairService {
         repair_socket: Arc<UdpSocket>,
         cluster_info: Arc<RwLock<ClusterInfo>>,
     ) -> Self {
+        let mut repair_info = RepairInfo::new();
         let id = cluster_info.read().unwrap().id();
         let t_repair = Builder::new()
             .name("solana-repair-service".to_string())
@@ -35,7 +51,8 @@ impl RepairService {
                 }
 
                 let rcluster_info = cluster_info.read().unwrap();
-                let repairs = Self::generate_repairs(&db_ledger, MAX_REPAIR_LENGTH);
+                let repairs =
+                    Self::generate_repairs(&db_ledger, MAX_REPAIR_LENGTH, &mut repair_info);
 
                 if let Ok(repairs) = repairs {
                     let reqs: Vec<_> = repairs
@@ -101,11 +118,20 @@ impl RepairService {
         }
     }
 
-    fn generate_repairs(db_ledger: &DbLedger, max_repairs: usize) -> Result<Vec<(u64, u64)>> {
+    fn generate_repairs(
+        db_ledger: &DbLedger,
+        max_repairs: usize,
+        repair_info: &mut RepairInfo,
+    ) -> Result<Vec<(u64, u64)>> {
         // Slot height and blob indexes for blobs we want to repair
         let mut repairs: Vec<(u64, u64)> = vec![];
         let mut current_slot_height = Some(0);
         while repairs.len() < max_repairs && current_slot_height.is_some() {
+            if current_slot_height.unwrap() > repair_info.max_slot {
+                repair_info.repair_tries = 0;
+                repair_info.max_slot = current_slot_height.unwrap();
+            }
+
             let slot = db_ledger.meta(current_slot_height.unwrap())?;
             if slot.is_none() {
                 current_slot_height = db_ledger.get_next_slot(current_slot_height.unwrap())?;
@@ -120,6 +146,17 @@ impl RepairService {
             )?;
             repairs.extend(new_repairs);
             current_slot_height = db_ledger.get_next_slot(current_slot_height.unwrap())?;
+        }
+
+        // Only increment repair_tries if the ledger contains every blob for every slot
+        if repairs.is_empty() {
+            repair_info.repair_tries += 1;
+        }
+
+        // Optimistically try the next slot if we haven't gotten any repairs
+        // for a while
+        if repair_info.repair_tries >= MAX_REPAIR_TRIES {
+            repairs.push((repair_info.max_slot + 1, 0))
         }
 
         Ok(repairs)
@@ -138,7 +175,59 @@ impl Service for RepairService {
 mod test {
     use super::*;
     use crate::db_ledger::{get_tmp_ledger_path, DbLedger, DbLedgerConfig};
+    use crate::entry::create_ticks;
     use crate::entry::{make_tiny_test_entries, EntrySlice};
+    use solana_sdk::hash::Hash;
+
+    #[test]
+    pub fn test_repair_missed_future_slot() {
+        let db_ledger_path = get_tmp_ledger_path("test_repair_missed_future_slot");
+        {
+            let num_ticks_per_block = 1;
+            let db_ledger_config = DbLedgerConfig::new(num_ticks_per_block, num_ticks_per_block, 1);
+            let db_ledger = DbLedger::open_config(&db_ledger_path, &db_ledger_config).unwrap();
+
+            let mut blobs = create_ticks(1, Hash::default()).to_blobs();
+            blobs[0].set_index(0).unwrap();
+            blobs[0].set_slot(0).unwrap();
+
+            db_ledger.write_blobs(&blobs).unwrap();
+
+            let mut repair_info = RepairInfo::new();
+            // We have all the blobs for all the slots in the ledger, wait for optimistic
+            // future repair after MAX_REPAIR_TRIES
+            for i in 0..MAX_REPAIR_TRIES {
+                // Check that repair tries to patch the empty slot
+                assert_eq!(repair_info.repair_tries, i);
+                assert_eq!(repair_info.max_slot, 0);
+                let expected = if i == MAX_REPAIR_TRIES - 1 {
+                    vec![(1, 0)]
+                } else {
+                    vec![]
+                };
+                assert_eq!(
+                    RepairService::generate_repairs(&db_ledger, 2, &mut repair_info).unwrap(),
+                    expected
+                );
+            }
+
+            // Insert a bigger blob
+            let mut blobs = create_ticks(1, Hash::default()).to_blobs();
+            blobs[0].set_index(0).unwrap();
+            blobs[0].set_slot(1).unwrap();
+
+            db_ledger.write_blobs(&blobs).unwrap();
+            assert_eq!(
+                RepairService::generate_repairs(&db_ledger, 2, &mut repair_info).unwrap(),
+                vec![]
+            );
+            assert_eq!(repair_info.repair_tries, 1);
+            assert_eq!(repair_info.max_slot, 1);
+        }
+
+        DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
+    }
+
     #[test]
     pub fn test_repair_empty_slot() {
         let db_ledger_path = get_tmp_ledger_path("test_repair_empty_slot");
@@ -151,12 +240,14 @@ mod test {
             blobs[0].set_index(1).unwrap();
             blobs[0].set_slot(2).unwrap();
 
+            let mut repair_info = RepairInfo::new();
+
             // Write this blob to slot 2, should chain to slot 1, which we haven't received
             // any blobs for
             db_ledger.write_blobs(&blobs).unwrap();
             // Check that repair tries to patch the empty slot
             assert_eq!(
-                RepairService::generate_repairs(&db_ledger, 2).unwrap(),
+                RepairService::generate_repairs(&db_ledger, 2, &mut repair_info).unwrap(),
                 vec![(1, 0), (2, 0)]
             );
         }
@@ -174,6 +265,8 @@ mod test {
             let num_entries_per_slot = 10;
             let num_slots = 2;
             let mut blobs = make_tiny_test_entries(num_slots * num_entries_per_slot).to_blobs();
+
+            let mut repair_info = RepairInfo::new();
 
             // Insert every nth entry for each slot
             let nth = 3;
@@ -199,12 +292,14 @@ mod test {
 
             // Across all slots, find all missing indexes in the range [0, num_entries_per_slot * nth]
             assert_eq!(
-                RepairService::generate_repairs(&db_ledger, std::usize::MAX).unwrap(),
+                RepairService::generate_repairs(&db_ledger, std::usize::MAX, &mut repair_info)
+                    .unwrap(),
                 expected
             );
 
             assert_eq!(
-                RepairService::generate_repairs(&db_ledger, expected.len() - 2).unwrap()[..],
+                RepairService::generate_repairs(&db_ledger, expected.len() - 2, &mut repair_info)
+                    .unwrap()[..],
                 expected[0..expected.len() - 2]
             );
 
@@ -229,11 +324,13 @@ mod test {
                 })
                 .collect();
             assert_eq!(
-                RepairService::generate_repairs(&db_ledger, std::usize::MAX).unwrap(),
+                RepairService::generate_repairs(&db_ledger, std::usize::MAX, &mut repair_info)
+                    .unwrap(),
                 expected
             );
             assert_eq!(
-                RepairService::generate_repairs(&db_ledger, expected.len() - 2).unwrap()[..],
+                RepairService::generate_repairs(&db_ledger, expected.len() - 2, &mut repair_info)
+                    .unwrap()[..],
                 expected[0..expected.len() - 2]
             );
         }
