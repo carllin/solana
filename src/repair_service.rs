@@ -9,12 +9,12 @@ use solana_sdk::pubkey::Pubkey;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use std::thread::sleep;
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 
-pub const MAX_REPAIR_LENGTH: usize = 16;
+pub const MAX_REPAIR_LENGTH: usize = 32;
 pub const REPAIR_MS: u64 = 100;
+pub const MAX_TRIES: u64 = 1;
 
 pub struct RepairService {
     t_repair: JoinHandle<()>,
@@ -55,7 +55,31 @@ impl RepairService {
                         });
                     }
                 }
-                sleep(Duration::from_millis(REPAIR_MS));
+
+                // Block until there are updates again
+                {
+                    let (cvar, lock) = &db_ledger.new_blobs_signal;
+                    let mut has_updates = lock.lock().unwrap();
+                    let mut num_retries = 0;
+                    loop {
+                        // Check for exit signal
+                        if exit.load(Ordering::Relaxed) {
+                            return;
+                        }
+
+                        // Check boolean predicate to protect against spurious wakeups
+                        if !*has_updates && num_retries < MAX_TRIES {
+                            has_updates = cvar
+                                .wait_timeout(has_updates, Duration::from_millis(REPAIR_MS))
+                                .unwrap()
+                                .0;
+                            num_retries += 1;
+                        } else {
+                            println!("{} breaking num_retries: {}", id, num_retries);
+                            break;
+                        }
+                    }
+                }
             })
             .unwrap();
 
