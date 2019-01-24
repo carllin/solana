@@ -73,9 +73,14 @@ impl RepairService {
             let num_unreceived_ticks = {
                 if slot.consumed == slot.received {
                     let num_expected_ticks = slot.num_expected_ticks(slot_height, db_ledger);
+                    if num_expected_ticks == 0 {
+                        // This signals that we have received nothing for this slot, try to get at least the
+                        // first entry
+                        1
+                    }
                     // This signals that we will never use other slots (leader rotation is
                     // off)
-                    if num_expected_ticks == std::u64::MAX
+                    else if num_expected_ticks == std::u64::MAX
                         || num_expected_ticks <= slot.consumed_ticks
                     {
                         0
@@ -103,7 +108,8 @@ impl RepairService {
         while repairs.len() < max_repairs && current_slot_height.is_some() {
             let slot = db_ledger.meta(current_slot_height.unwrap())?;
             if slot.is_none() {
-                break;
+                current_slot_height = db_ledger.get_next_slot(current_slot_height.unwrap())?;
+                continue;
             }
             let slot = slot.unwrap();
             let new_repairs = Self::process_slot(
@@ -133,78 +139,104 @@ mod test {
     use super::*;
     use crate::db_ledger::{get_tmp_ledger_path, DbLedger, DbLedgerConfig};
     use crate::entry::{make_tiny_test_entries, EntrySlice};
+    #[test]
+    pub fn test_repair_empty_slot() {
+        let db_ledger_path = get_tmp_ledger_path("test_repair_empty_slot");
+        {
+            let num_ticks_per_block = 10;
+            let db_ledger_config = DbLedgerConfig::new(num_ticks_per_block, num_ticks_per_block, 1);
+            let db_ledger = DbLedger::open_config(&db_ledger_path, &db_ledger_config).unwrap();
+
+            let mut blobs = make_tiny_test_entries(1).to_blobs();
+            blobs[0].set_index(1).unwrap();
+            blobs[0].set_slot(2).unwrap();
+
+            // Write this blob to slot 2, should chain to slot 1, which we haven't received
+            // any blobs for
+            db_ledger.write_blobs(&blobs).unwrap();
+            // Check that repair tries to patch the empty slot
+            assert_eq!(
+                RepairService::generate_repairs(&db_ledger, 2).unwrap(),
+                vec![(1, 0), (2, 0)]
+            );
+        }
+        DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
+    }
 
     #[test]
     pub fn test_generate_repairs() {
         let db_ledger_path = get_tmp_ledger_path("test_generate_repairs");
-        let num_ticks_per_block = 10;
-        let db_ledger_config = DbLedgerConfig::new(num_ticks_per_block, num_ticks_per_block, 1);
-        let db_ledger = DbLedger::open_config(&db_ledger_path, &db_ledger_config).unwrap();
+        {
+            let num_ticks_per_block = 10;
+            let db_ledger_config = DbLedgerConfig::new(num_ticks_per_block, num_ticks_per_block, 1);
+            let db_ledger = DbLedger::open_config(&db_ledger_path, &db_ledger_config).unwrap();
 
-        let num_entries_per_slot = 10;
-        let num_slots = 2;
-        let mut blobs = make_tiny_test_entries(num_slots * num_entries_per_slot).to_blobs();
+            let num_entries_per_slot = 10;
+            let num_slots = 2;
+            let mut blobs = make_tiny_test_entries(num_slots * num_entries_per_slot).to_blobs();
 
-        // Insert every nth entry for each slot
-        let nth = 3;
-        for (i, b) in blobs.iter_mut().enumerate() {
-            b.set_index(((i % num_entries_per_slot) * nth) as u64)
-                .unwrap();
-            b.set_slot((i / num_entries_per_slot) as u64).unwrap();
+            // Insert every nth entry for each slot
+            let nth = 3;
+            for (i, b) in blobs.iter_mut().enumerate() {
+                b.set_index(((i % num_entries_per_slot) * nth) as u64)
+                    .unwrap();
+                b.set_slot((i / num_entries_per_slot) as u64).unwrap();
+            }
+
+            db_ledger.write_blobs(&blobs).unwrap();
+
+            let missing_indexes_per_slot: Vec<u64> = (0..num_entries_per_slot - 1)
+                .flat_map(|x| ((nth * x + 1) as u64..(nth * x + nth) as u64))
+                .collect();
+
+            let expected: Vec<(u64, u64)> = (0..num_slots)
+                .flat_map(|slot_height| {
+                    missing_indexes_per_slot
+                        .iter()
+                        .map(move |blob_index| (slot_height as u64, *blob_index))
+                })
+                .collect();
+
+            // Across all slots, find all missing indexes in the range [0, num_entries_per_slot * nth]
+            assert_eq!(
+                RepairService::generate_repairs(&db_ledger, std::usize::MAX).unwrap(),
+                expected
+            );
+
+            assert_eq!(
+                RepairService::generate_repairs(&db_ledger, expected.len() - 2).unwrap()[..],
+                expected[0..expected.len() - 2]
+            );
+
+            // Now fill in all the holes for each slot such that for each slot, consumed == received.
+            // Because none of the slots contain ticks, we should see that the repair requests
+            // ask for ticks, starting from the last received index for that slot
+            for (slot_height, blob_index) in expected {
+                let mut b = make_tiny_test_entries(1).to_blobs().pop().unwrap();
+                b.set_index(blob_index).unwrap();
+                b.set_slot(slot_height).unwrap();
+                db_ledger.write_blobs(&vec![b]).unwrap();
+            }
+
+            let last_index_per_slot = ((num_entries_per_slot - 1) * nth) as u64;
+            let missing_indexes_per_slot: Vec<u64> =
+                (last_index_per_slot + 1..last_index_per_slot + 1 + num_ticks_per_block).collect();
+            let expected: Vec<(u64, u64)> = (0..num_slots)
+                .flat_map(|slot_height| {
+                    missing_indexes_per_slot
+                        .iter()
+                        .map(move |blob_index| (slot_height as u64, *blob_index))
+                })
+                .collect();
+            assert_eq!(
+                RepairService::generate_repairs(&db_ledger, std::usize::MAX).unwrap(),
+                expected
+            );
+            assert_eq!(
+                RepairService::generate_repairs(&db_ledger, expected.len() - 2).unwrap()[..],
+                expected[0..expected.len() - 2]
+            );
         }
-
-        db_ledger.write_blobs(&blobs).unwrap();
-
-        let missing_indexes_per_slot: Vec<u64> = (0..num_entries_per_slot - 1)
-            .flat_map(|x| ((nth * x + 1) as u64..(nth * x + nth) as u64))
-            .collect();
-
-        let expected: Vec<(u64, u64)> = (0..num_slots)
-            .flat_map(|slot_height| {
-                missing_indexes_per_slot
-                    .iter()
-                    .map(move |blob_index| (slot_height as u64, *blob_index))
-            })
-            .collect();
-
-        // Across all slots, find all missing indexes in the range [0, num_entries_per_slot * nth]
-        assert_eq!(
-            RepairService::generate_repairs(&db_ledger, std::usize::MAX).unwrap(),
-            expected
-        );
-
-        assert_eq!(
-            RepairService::generate_repairs(&db_ledger, expected.len() - 2).unwrap()[..],
-            expected[0..expected.len() - 2]
-        );
-
-        // Now fill in all the holes for each slot such that for each slot, consumed == received.
-        // Because none of the slots contain ticks, we should see that the repair requests
-        // ask for ticks, starting from the last received index for that slot
-        for (slot_height, blob_index) in expected {
-            let mut b = make_tiny_test_entries(1).to_blobs().pop().unwrap();
-            b.set_index(blob_index).unwrap();
-            b.set_slot(slot_height).unwrap();
-            db_ledger.write_blobs(&vec![b]).unwrap();
-        }
-
-        let last_index_per_slot = ((num_entries_per_slot - 1) * nth) as u64;
-        let missing_indexes_per_slot: Vec<u64> =
-            (last_index_per_slot + 1..last_index_per_slot + 1 + num_ticks_per_block).collect();
-        let expected: Vec<(u64, u64)> = (0..num_slots)
-            .flat_map(|slot_height| {
-                missing_indexes_per_slot
-                    .iter()
-                    .map(move |blob_index| (slot_height as u64, *blob_index))
-            })
-            .collect();
-        assert_eq!(
-            RepairService::generate_repairs(&db_ledger, std::usize::MAX).unwrap(),
-            expected
-        );
-        assert_eq!(
-            RepairService::generate_repairs(&db_ledger, expected.len() - 2).unwrap()[..],
-            expected[0..expected.len() - 2]
-        );
+        DbLedger::destroy(&db_ledger_path).expect("Expected successful database destruction");
     }
 }
