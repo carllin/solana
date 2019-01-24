@@ -829,6 +829,19 @@ impl ClusterInfo {
                 inc_new_counter_info!("cluster_info-window-request-ledger", 1);
                 blob.meta.set_addr(from_addr);
 
+                submit(
+                    influxdb::Point::new("cluster_info_send_window_request")
+                        .add_field("repair_slot", influxdb::Value::Integer(slot_height as i64))
+                        .to_owned()
+                        .add_field("repair_blob", influxdb::Value::Integer(blob_index as i64))
+                        .to_owned()
+                        .add_field("to", influxdb::Value::String(from_addr.to_string()))
+                        .to_owned()
+                        .add_field("from", influxdb::Value::String(me.gossip.to_string()))
+                        .to_owned()
+                        .add_field("id", influxdb::Value::String(me.id.to_string()))
+                        .to_owned(),
+                );
                 return vec![Arc::new(RwLock::new(blob))];
             }
         }
@@ -1069,14 +1082,22 @@ impl ClusterInfo {
                 vec![]
             }
             Protocol::RequestWindowIndex(from, slot_height, blob_index) => {
-                Self::handle_request_window_index(
+                let blobs = Self::handle_request_window_index(
                     me,
                     &from,
                     db_ledger,
                     slot_height,
                     blob_index,
                     from_addr,
-                )
+                );
+
+                submit(
+                    influxdb::Point::new("cluster-info-request_window_index_total")
+                        .add_field("count", influxdb::Value::Integer(blobs.len() as i64))
+                        .to_owned(),
+                );
+
+                blobs
             }
         }
     }
