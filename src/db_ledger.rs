@@ -142,7 +142,12 @@ pub struct SlotMeta {
 
 impl SlotMeta {
     pub fn contains_all_ticks(&self, slot_height: u64, db_ledger: &DbLedger) -> bool {
-        self.num_expected_ticks(slot_height, db_ledger) <= self.consumed_ticks
+        if self.num_blocks == 0 {
+            // A placeholder slot does not contain all the ticks
+            false
+        } else {
+            self.num_expected_ticks(slot_height, db_ledger) <= self.consumed_ticks
+        }
     }
 
     pub fn num_expected_ticks(&self, slot_height: u64, db_ledger: &DbLedger) -> u64 {
