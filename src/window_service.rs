@@ -61,10 +61,20 @@ fn recv_window(
     trace!("{} num blobs received: {}", id, dq.len());
 
     for b in dq {
-        let (pix, meta_size) = {
+        let (slot, pix, meta_size) = {
             let p = b.read().unwrap();
-            (p.index()?, p.meta.size)
+            (p.slot()?, p.index()?, p.meta.size)
         };
+
+        submit(
+            influxdb::Point::new("recv-window-blob")
+                .add_field("slot", influxdb::Value::Integer(slot as i64))
+                .to_owned()
+                .add_field("index", influxdb::Value::Integer(pix as i64))
+                .to_owned()
+                .add_field("id", influxdb::Value::String(id.to_string()))
+                .to_owned(),
+        );
 
         trace!("{} window pix: {} size: {}", id, pix, meta_size);
 
