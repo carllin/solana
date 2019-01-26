@@ -291,7 +291,14 @@ impl ClusterInfo {
             .filter_map(|x| x.value.contact_info())
             .filter(|x| ContactInfo::is_valid_address(&x.tvu))
             .cloned()
-            .collect()
+            .collect();
+
+        if result.len() == 0 {
+            let keys: Vec<_> = self.gossip.crds.table.keys().collect();
+            let values: Vec<_> = self.gossip.crds.table.values().collect();
+            println!("gossip table len: {}, keys: {:?}, values: {:?}", self.gossip.crds.table.len(), keys, values);
+        }
+        result
     }
 
     /// all peers that have a valid tvu
@@ -678,6 +685,7 @@ impl ClusterInfo {
         //  by a valid tvu port location
         let valid: Vec<_> = self.repair_peers();
         if valid.is_empty() {
+            println!("No peers");
             Err(ClusterInfoError::NoPeers)?;
         }
         let n = thread_rng().gen::<usize>() % valid.len();
@@ -741,6 +749,8 @@ impl ClusterInfo {
     fn gossip_request(&mut self) -> Vec<(SocketAddr, Protocol)> {
         let pulls: Vec<_> = self.new_pull_requests();
         let pushes: Vec<_> = self.new_push_requests();
+        println!("sending {} new pull requests", pulls.len());
+        println!("sending {} new push requests", pushes.len());
         vec![pulls, pushes].into_iter().flat_map(|x| x).collect()
     }
 
