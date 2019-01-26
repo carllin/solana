@@ -284,7 +284,7 @@ impl ClusterInfo {
 
     /// compute broadcast table (includes own tvu)
     pub fn tvu_peers(&self) -> Vec<NodeInfo> {
-        self.gossip
+        let result: Vec<_> = self.gossip
             .crds
             .table
             .values()
@@ -296,7 +296,12 @@ impl ClusterInfo {
         if result.len() == 0 {
             let keys: Vec<_> = self.gossip.crds.table.keys().collect();
             let values: Vec<_> = self.gossip.crds.table.values().collect();
-            println!("gossip table len: {}, keys: {:?}, values: {:?}", self.gossip.crds.table.len(), keys, values);
+            println!(
+                "gossip table len: {}, keys: {:?}, values: {:?}",
+                self.gossip.crds.table.len(),
+                keys,
+                values
+            );
         }
         result
     }
@@ -910,6 +915,7 @@ impl ClusterInfo {
             return vec![];
         }
         let mut from = caller.contact_info().cloned().unwrap();
+        println!("Handle pull request from: {}", from.id);
         if from.id == self_id {
             warn!(
                 "PullRequest ignored, I'm talking to myself: me={} remoteme={}",
@@ -927,7 +933,7 @@ impl ClusterInfo {
         let len = data.len();
         trace!("get updates since response {}", len);
         if data.is_empty() {
-            trace!("no updates me {}", self_id);
+            println!("Pullrequest no updates me {}", self_id);
             vec![]
         } else {
             let rsp = Protocol::PullResponse(self_id, data);
@@ -946,7 +952,10 @@ impl ClusterInfo {
         let len = data.len();
         let now = Instant::now();
         let self_id = me.read().unwrap().gossip.id;
-        trace!("PullResponse me: {} len={}", self_id, len);
+        println!(
+            "Handle PullResponse from: {} me: {} len={}",
+            from, self_id, len
+        );
         me.write()
             .unwrap()
             .gossip
@@ -961,6 +970,7 @@ impl ClusterInfo {
         from: Pubkey,
         data: &[CrdsValue],
     ) -> Vec<SharedBlob> {
+        println!("Handle push message from: {}", from);
         let self_id = me.read().unwrap().gossip.id;
         inc_new_counter_info!("cluster_info-push_message", 1);
         let prunes: Vec<_> = me
@@ -975,6 +985,7 @@ impl ClusterInfo {
             inc_new_counter_info!("cluster_info-push_message-pushes", pushes.len());
             let mut rsp: Vec<_> = ci
                 .and_then(|ci| {
+                    println!("Sending prune messages to {}: {:?}", from, prunes);
                     let mut prune_msg = PruneData {
                         pubkey: self_id,
                         prunes,
@@ -1008,8 +1019,6 @@ impl ClusterInfo {
         blob_index: u64,
         from_addr: &SocketAddr,
     ) -> Vec<SharedBlob> {
-        let now = Instant::now();
-
         //TODO this doesn't depend on cluster_info module, could be moved
         //but we are using the listen thread to service these request
         //TODO verify from is signed
@@ -1024,6 +1033,7 @@ impl ClusterInfo {
             return vec![];
         }
 
+        let now = Instant::now();
         me.write().unwrap().insert_info(from.clone());
         let my_info = me.read().unwrap().my_data().clone();
         inc_new_counter_info!("cluster_info-window-request-recv", 1);
@@ -1031,6 +1041,7 @@ impl ClusterInfo {
             "{}: received RequestWindowIndex from: {} slot_height: {}, blob_index: {}",
             self_id, from.id, slot_height, blob_index,
         );
+
         let res = Self::run_window_request(
             &from,
             &from_addr,
@@ -1055,31 +1066,70 @@ impl ClusterInfo {
         match request {
             // TODO verify messages faster
             Protocol::PullRequest(filter, caller) => {
+                let from_id = caller.contact_info().map(|info| info.id);
+                println!(
+                    "{} Received Protocol PullRequest from: {:?}",
+                    timestamp(),
+                    from_id
+                );
                 //Pulls don't need to be verified
-                Self::handle_pull_request(me, filter, caller, from_addr)
+                let now = Instant::now();
+                let result = Self::handle_pull_request(me, filter, caller, from_addr);
+
+                println!(
+                    "{} Protocol PullRequest from: {:?} elapsed {}",
+                    timestamp(),
+                    from_id,
+                    now.elapsed().as_secs()
+                );
+                result
             }
             Protocol::PullResponse(from, mut data) => {
+                println!("{} Received PullResponse from {}", timestamp(), from);
+                let now = Instant::now();
                 data.retain(|v| {
                     let ret = v.verify();
                     if !ret {
+                        println!("failed verification");
                         inc_new_counter_info!("cluster_info-gossip_pull_response_verify_fail", 1);
                     }
                     ret
                 });
                 Self::handle_pull_response(me, from, data);
+                println!(
+                    "{} Protocol PullResponse from {} elapsed {}",
+                    timestamp(),
+                    from,
+                    now.elapsed().as_secs()
+                );
                 vec![]
             }
             Protocol::PushMessage(from, mut data) => {
+                println!(
+                    "{} Received Protocol PushMessage from: {}",
+                    timestamp(),
+                    from
+                );
+                let now = Instant::now();
                 data.retain(|v| {
                     let ret = v.verify();
                     if !ret {
+                        println!("failed verification");
                         inc_new_counter_info!("cluster_info-gossip_push_msg_verify_fail", 1);
                     }
                     ret
                 });
-                Self::handle_push_message(me, from, &data)
+                let result = Self::handle_push_message(me, from, &data);
+                println!(
+                    "{} Protocol PushMessage from: {}, elapsed {}",
+                    timestamp(),
+                    from,
+                    now.elapsed().as_secs()
+                );
+                result
             }
             Protocol::PruneMessage(from, data) => {
+                let now = Instant::now();
                 if data.verify() {
                     inc_new_counter_info!("cluster_info-prune_message", 1);
                     inc_new_counter_info!("cluster_info-prune_message-size", data.prunes.len());
@@ -1102,6 +1152,12 @@ impl ClusterInfo {
                 } else {
                     inc_new_counter_info!("cluster_info-gossip_prune_msg_verify_fail", 1);
                 }
+                println!(
+                    "{} Protocol PruneMessage from: {} elapsed {}",
+                    timestamp(),
+                    from,
+                    now.elapsed().as_secs()
+                );
                 vec![]
             }
             Protocol::RequestWindowIndex(from, slot_height, blob_index) => {
@@ -1114,6 +1170,7 @@ impl ClusterInfo {
                     from_addr,
                 );
 
+                let now = Instant::now();
                 submit(
                     influxdb::Point::new("cluster-info-request_window_index_total")
                         .add_field("count", influxdb::Value::Integer(blobs.len() as i64))
@@ -1128,6 +1185,11 @@ impl ClusterInfo {
                         blob.read().unwrap().index()
                     );
                 }
+                println!(
+                    "{} RequestWindowIndex elapsed {}",
+                    timestamp(),
+                    now.elapsed().as_secs()
+                );
                 blobs
             }
         }

@@ -79,6 +79,7 @@ impl CrdsGossipPush {
         let new_value = crds.new_versioned(now, value);
         let value_hash = new_value.value_hash;
         if self.pushed_once.get(&value_hash).is_some() {
+            println!("Sending prune for label: {}", label);
             return Err(CrdsGossipError::PushMessagePrune);
         }
         let old = crds.insert_versioned(new_value);
@@ -111,7 +112,15 @@ impl CrdsGossipPush {
             let mut failed = false;
             for p in &peers {
                 let filter = self.active_set.get_mut(p);
-                failed |= filter.is_none() || filter.unwrap().contains(&label.pubkey());
+                let is_none = filter.is_none();
+                failed |= is_none || filter.unwrap().contains(&label.pubkey());
+                if failed && !is_none {
+                    println!(
+                        "Not sending push messages about {} to {}",
+                        label.pubkey(),
+                        p
+                    );
+                }
             }
             if failed {
                 continue;
@@ -137,6 +146,7 @@ impl CrdsGossipPush {
         for v in &values {
             self.push_messages.remove(&v.label());
         }
+        println!("Sending push messages about {:?} to {:?}", values, peers);
         (peers, values)
     }
 
@@ -168,6 +178,12 @@ impl CrdsGossipPush {
         let mut ixs: Vec<_> = (0..crds.table.len()).collect();
         ixs.shuffle(&mut rand::thread_rng());
 
+        println!(
+            "need: {}, ratio: {}, len: {}",
+            need,
+            ratio,
+            self.active_set.len()
+        );
         for ix in ixs {
             let item = crds.table.get_index(ix);
             if item.is_none() {
@@ -198,6 +214,7 @@ impl CrdsGossipPush {
         let mut keys: Vec<Pubkey> = self.active_set.keys().cloned().collect();
         keys.shuffle(&mut rand::thread_rng());
         let num = keys.len() / ratio;
+        println!("new_items: {}, num: {}", new_items.len(), num);
         for k in &keys[..num] {
             self.active_set.remove(k);
         }

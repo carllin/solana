@@ -22,6 +22,7 @@ impl GossipService {
         gossip_socket: UdpSocket,
         exit: Arc<AtomicBool>,
     ) -> Self {
+        println!("My gossip socket: {:?}", gossip_socket.local_addr());
         let (request_sender, request_receiver) = channel();
         let gossip_socket = Arc::new(gossip_socket);
         println!(

@@ -104,10 +104,14 @@ impl Crds {
             .map(|current| new_value > *current)
             .unwrap_or(true);
         if do_insert {
+            println!(
+                "INSERT data sucesss: label: {}, value: {:?} new.wallclock: {}",
+                label, new_value, wallclock,
+            );
             let old = self.table.insert(label, new_value);
             Ok(old)
         } else {
-            trace!("INSERT FAILED data: {} new.wallclock: {}", label, wallclock,);
+            println!("INSERT FAILED data: {} new.wallclock: {}", label, wallclock,);
             Err(CrdsError::InsertFailed)
         }
     }

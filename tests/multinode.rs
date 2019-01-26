@@ -1648,7 +1648,7 @@ fn test_full_leader_validator_network() {
     // Otherwise, some nodes may never reach the target height if a critical
     // next leader node exits first, and stops generating entries. (We don't
     // have a timeout mechanism).
-    let target_height = bootstrap_height + seed_rotation_interval;
+    let target_height = bootstrap_height + 10 * seed_rotation_interval;
     let mut num_reached_target_height = 0;
 
     while num_reached_target_height != N + 1 {
