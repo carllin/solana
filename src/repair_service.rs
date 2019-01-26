@@ -51,7 +51,6 @@ impl RepairService {
                     break;
                 }
 
-                let rcluster_info = cluster_info.read().unwrap();
                 let repairs =
                     Self::generate_repairs(&db_ledger, MAX_REPAIR_LENGTH, &mut repair_info);
 
@@ -59,7 +58,9 @@ impl RepairService {
                     let reqs: Vec<_> = repairs
                         .into_iter()
                         .filter_map(|(slot_height, blob_index)| {
-                            rcluster_info
+                            cluster_info
+                                .read()
+                                .unwrap()
                                 .window_index_request(slot_height, blob_index)
                                 .map(|result| (result, slot_height, blob_index))
                                 .ok()
