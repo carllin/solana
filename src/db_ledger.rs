@@ -549,12 +549,6 @@ impl DbLedger {
 
             // This slot is full, skip the bogus blob
             if slot_meta.contains_all_ticks(blob_slot, &self) {
-                println!(
-                    "cat: bs: {}, bi: {}, ct: {}",
-                    blob_slot,
-                    blob.index(),
-                    slot_meta.consumed_ticks
-                );
                 continue;
             }
 
@@ -1938,7 +1932,6 @@ mod tests {
         // Fill in the holes for each of the remaining slots, we should get a single update
         // for each
         for slot_index in num_slots / 2..num_slots {
-            println!("slot_index: {}", slot_index);
             let entries = make_tiny_test_entries(1);
             let mut blob = entries[0].to_blob();
             blob.set_index(slot_index as u64 - 1);
