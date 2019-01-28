@@ -94,7 +94,7 @@ impl RepairService {
                         }
 
                         repair_socket.send_to(&req, to).unwrap_or_else(|e| {
-                            println!("{} repair req send_to({}) error {:?}", id, to, e);
+                            info!("{} repair req send_to({}) error {:?}", id, to, e);
                             0
                         });
                     }

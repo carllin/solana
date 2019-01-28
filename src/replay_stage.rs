@@ -178,7 +178,6 @@ impl ReplayStage {
         // an error occurred processing one of the entries (causing the rest of the entries to
         // not be processed).
         if entries_len != 0 {
-            println!("Sending {} entries", entries.len());
             ledger_entry_sender.send(entries)?;
         }
 
@@ -219,11 +218,6 @@ impl ReplayStage {
             .unwrap()
             .max_tick_height_for_slot(current_slot);
 
-        println!(
-            "mthfs: {}, current_slot: {}",
-            max_tick_height_for_slot, current_slot
-        );
-
         let mut current_slot = Some(current_slot);
         let mut prev_slot = None;
         let db_ledger_ = db_ledger.clone();
@@ -261,7 +255,6 @@ impl ReplayStage {
                             }
                         }
 
-                        println!("Fetching entries from db for slot: {:?}", current_slot);
                         // Fetch the next entries from the database
                         if let Ok(entries) = db_ledger.get_slot_entries(
                             current_slot.unwrap(),
@@ -290,17 +283,12 @@ impl ReplayStage {
 
                         let current_tick_height = bank.tick_height();
 
-                        println!(
-                            "mthfs: {}, cth: {}",
-                            max_tick_height_for_slot, current_tick_height
-                        );
                         // We've reached the end of a slot, reset our state and check
                         // for leader rotation
                         if max_tick_height_for_slot == current_tick_height {
                             // Check for leader rotation
                             let my_id = keypair.pubkey();
                             let current_leader = Self::get_leader(&bank, &cluster_info);
-                            println!("current_leader: {}", current_leader);
                             if my_id == current_leader {
                                 return Some(ReplayStageReturnType::LeaderRotation(
                                     current_tick_height,
@@ -317,12 +305,6 @@ impl ReplayStage {
                             current_slot = None;
                             continue;
                         }
-
-                        println!(
-                            "current_slot: {}, bi: {}",
-                            current_slot.unwrap(),
-                            current_blob_index
-                        );
                     }
 
                     // Block until there are updates again
@@ -757,7 +739,6 @@ mod test {
             let leader_rotation_index = (bootstrap_height - initial_tick_height - 1) as usize;
             let mut expected_last_id = Hash::default();
             for i in 0..total_entries_to_send {
-                println!("i: {}", i);
                 let entry = Entry::new(&mut last_id, 0, num_hashes, vec![]);
                 last_id = entry.id;
                 db_ledger
