@@ -24,7 +24,7 @@ impl GossipService {
     ) -> Self {
         let (request_sender, request_receiver) = channel();
         let gossip_socket = Arc::new(gossip_socket);
-        trace!(
+        println!(
             "GossipService: id: {}, listening on: {:?}",
             &cluster_info.read().unwrap().my_data().id,
             gossip_socket.local_addr().unwrap()
@@ -32,7 +32,12 @@ impl GossipService {
         let t_receiver =
             streamer::blob_receiver(gossip_socket.clone(), exit.clone(), request_sender);
         let (response_sender, response_receiver) = channel();
-        let t_responder = streamer::responder("gossip", gossip_socket, response_receiver);
+        let t_responder = streamer::responder_log(
+            cluster_info.read().unwrap().my_data().id,
+            "gossip",
+            gossip_socket,
+            response_receiver,
+        );
         let t_listen = ClusterInfo::listen(
             cluster_info.clone(),
             db_ledger,

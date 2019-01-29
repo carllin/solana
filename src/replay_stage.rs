@@ -174,6 +174,7 @@ impl ReplayStage {
         // an error occurred processing one of the entries (causing the rest of the entries to
         // not be processed).
         if entries_len != 0 {
+            println!("Sending {} entries", entries.len());
             ledger_entry_sender.send(entries)?;
         }
 
@@ -236,6 +237,10 @@ impl ReplayStage {
 
                     let current_entry_height = *entry_height.read().unwrap();
 
+                    println!(
+                        "{:?}: mthfs: {}, current_slot: {}, current_index: {}",
+                        my_id, max_tick_height_for_slot, current_slot, current_entry_height);
+
                     let entries = {
                         if let Ok(entries) = db_ledger.get_slot_entries(
                             current_slot,
@@ -267,11 +272,16 @@ impl ReplayStage {
 
                         let current_tick_height = bank.tick_height();
 
+                        println!(
+                            "After process_entries: {:?}, current_slot: {:?} mthfs: {}, cth: {}, current_entry_height: {}",
+                            my_id, current_slot, max_tick_height_for_slot, current_tick_height, *entry_height.read().unwrap()
+                        );
                         // We've reached the end of a slot, reset our state and check
                         // for leader rotation
                         if max_tick_height_for_slot == current_tick_height {
                             // Check for leader rotation
                             let leader_id = Self::get_leader(&bank, &cluster_info);
+                            println!("{:?}, next_leader: {}", my_id, leader_id);
                             if leader_id != last_leader_id && my_id == leader_id {
                                 to_leader_sender
                                     .send(TvuReturnType::LeaderRotation(

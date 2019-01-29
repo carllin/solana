@@ -198,6 +198,10 @@ impl BroadcastService {
         blob_sender: &BlobSender,
     ) -> BroadcastServiceReturnType {
         let me = cluster_info.read().unwrap().my_data().clone();
+        println!(
+            "{} BROADCAST STARTING entry_height: {}",
+            me.id, entry_height
+        );
 
         let mut broadcast = Broadcast {
             id: me.id,

@@ -353,11 +353,13 @@ impl Fullnode {
             let should_be_leader = self.role_notifiers.0.try_recv();
             match should_be_leader {
                 Ok(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
+                    println!("{} VALIDATOR TO LEADER", self.id);
                     self.validator_to_leader(tick_height, entry_height, last_entry_id);
                     return Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation));
                 }
                 _ => match should_be_forwarder {
                     Ok(TpuReturnType::LeaderRotation) => {
+                        println!("{} LEADER TO VALIDATOR", self.id);
                         self.leader_to_validator()?;
                         return Ok(Some(FullnodeReturnType::LeaderToValidatorRotation));
                     }

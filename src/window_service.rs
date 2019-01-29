@@ -79,7 +79,7 @@ fn recv_window(
     //send a contiguous set of blocks
     let mut consume_queue = Vec::new();
 
-    trace!("{} num blobs received: {}", id, dq.len());
+    println!("{} num blobs received: {}", id, dq.len());
 
     for b in dq {
         let (pix, meta_size) = {
@@ -87,7 +87,7 @@ fn recv_window(
             (p.index(), p.meta.size)
         };
 
-        trace!("{} window pix: {} size: {}", id, pix, meta_size);
+        println!("{} window pix: {} size: {}", id, pix, meta_size);
 
         let _ = process_blob(
             leader_scheduler,
