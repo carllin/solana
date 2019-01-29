@@ -11,6 +11,7 @@ use crate::rpc::JsonRpcService;
 use crate::rpc_pubsub::PubSubService;
 use crate::service::Service;
 use crate::storage_stage::StorageState;
+use crate::streamer::BlobSender;
 use crate::tpu::{Tpu, TpuReturnType};
 use crate::tvu::{Sockets, Tvu, TvuReturnType};
 use crate::vote_signer_proxy::VoteSignerProxy;
@@ -97,6 +98,7 @@ pub struct Fullnode {
     broadcast_socket: UdpSocket,
     pub node_services: NodeServices,
     pub role_notifiers: (TvuRotationReceiver, TpuRotationReceiver),
+    blob_sender: BlobSender,
 }
 
 impl Fullnode {
@@ -259,7 +261,7 @@ impl Fullnode {
         let (to_leader_sender, to_leader_receiver) = channel();
         let (to_validator_sender, to_validator_receiver) = channel();
 
-        let tvu = Tvu::new(
+        let (tvu, blob_sender) = Tvu::new(
             vote_signer,
             &bank,
             entry_height,
@@ -297,6 +299,7 @@ impl Fullnode {
             keypair.pubkey(),
             scheduled_leader == keypair.pubkey(),
             &to_validator_sender,
+            &blob_sender,
         );
 
         inc_new_counter_info!("fullnode-new", 1);
@@ -314,6 +317,7 @@ impl Fullnode {
             tpu_sockets: node.sockets.tpu,
             broadcast_socket: node.sockets.broadcast,
             role_notifiers: (to_leader_receiver, to_validator_receiver),
+            blob_sender,
         }
     }
 
@@ -376,6 +380,7 @@ impl Fullnode {
             &last_id,
             self.keypair.pubkey(),
             &to_validator_sender,
+            &self.blob_sender,
         )
     }
 
