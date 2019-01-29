@@ -152,7 +152,7 @@ impl SlotMeta {
 
     pub fn num_expected_ticks(&self, slot_height: u64, db_ledger: &DbLedger) -> u64 {
         if slot_height == 0 {
-            db_ledger.num_bootstrap_ticks
+            db_ledger.num_bootstrap_ticks - 1
         } else {
             db_ledger.ticks_per_block * self.num_blocks
         }

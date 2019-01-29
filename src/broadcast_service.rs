@@ -201,6 +201,10 @@ impl BroadcastService {
         exit_signal: &Arc<AtomicBool>,
     ) -> BroadcastServiceReturnType {
         let me = cluster_info.read().unwrap().my_data().clone();
+        println!(
+            "{} BROADCAST STARTING si: {}, bi: {}",
+            me.id, slot_index, blob_index
+        );
 
         let mut broadcast = Broadcast {
             id: me.id,
