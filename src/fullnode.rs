@@ -719,7 +719,7 @@ mod tests {
         let validator_node = Node::new_localhost_with_pubkey(validator_keypair.pubkey());
 
         // Make a common mint and a genesis entry for both leader + validator's ledgers
-        let num_ending_ticks = 3;
+        let num_ending_ticks = 2;
         let (_genesis_block, mint_keypair, bootstrap_leader_ledger_path, genesis_entries) =
             create_tmp_sample_ledger(
                 "test_wrong_role_transition",
@@ -734,8 +734,15 @@ mod tests {
             .expect("expected at least one genesis entry")
             .id;
 
-        // Write the entries to the ledger that will cause leader rotation
-        // after the bootstrap height
+        let genesis_tick_height = genesis_entries
+            .iter()
+            .fold(0, |tick_count, entry| tick_count + entry.is_tick() as u64);
+
+        // Set the bootstrap height to be a multiple of TICKS_PER_BLOCK bigger than the
+        // number of ticks in the genesis entries
+        let bootstrap_height =
+            genesis_tick_height + (TICKS_PER_BLOCK - (genesis_tick_height % TICKS_PER_BLOCK));
+
         let validator_keypair = Arc::new(validator_keypair);
 
         // Make the bootstrap height exactly the current tick height, so that we can
@@ -746,14 +753,12 @@ mod tests {
             &mint_keypair,
             &last_id,
             &last_id,
-            num_ending_ticks,
+            bootstrap_height - genesis_tick_height,
         );
 
-        let genesis_tick_height = genesis_entries
-            .iter()
-            .fold(0, |tick_count, entry| tick_count + entry.is_tick() as u64)
-            + num_ending_ticks as u64;
-
+        let active_set_entries_len = active_set_entries.len();
+        // Write the entries to the ledger that will cause leader rotation
+        // after the bootstrap height is reached
         {
             let db_ledger = DbLedger::open(&bootstrap_leader_ledger_path).unwrap();
             db_ledger
@@ -782,7 +787,7 @@ mod tests {
             bootstrap_height,
             leader_rotation_interval,
             seed_rotation_interval,
-            genesis_tick_height,
+            bootstrap_height + active_set_entries_len as u64,
         );
 
         let db_ledger_config =
