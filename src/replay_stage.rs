@@ -282,9 +282,10 @@ impl ReplayStage {
                         }
 
                         println!(
-                            "{:?}, Fetching entries from db for slot: {:?}",
+                            "{:?}, Fetching entries from db for slot: {:?}, current_index: {}",
                             keypair.pubkey(),
-                            current_slot
+                            current_slot,
+                            current_blob_index,
                         );
                         // Fetch the next entries from the database
                         if let Ok(entries) = db_ledger.get_slot_entries(
@@ -296,6 +297,7 @@ impl ReplayStage {
                                 println!("Fetched zero entries");
                                 break;
                             }
+                            println!("Received {} entries", entries.len());
                             if let Err(e) = Self::process_entries(
                                 entries,
                                 &bank,

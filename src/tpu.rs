@@ -170,6 +170,7 @@ impl Tpu {
         to_validator_sender: &TpuRotationSender,
         blob_sender: &BlobSender,
     ) {
+        println!("switch to leader");
         match &self.tpu_mode {
             TpuMode::Leader(svcs) => {
                 svcs.fetch_stage.close();
@@ -194,6 +195,7 @@ impl Tpu {
             leader_id,
             &to_validator_sender,
         );
+
 
         let broadcast_service = BroadcastService::new(
             bank.clone(),

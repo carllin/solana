@@ -593,19 +593,19 @@ impl ClusterInfo {
             .flat_map(|(b, vs)| {
                 let blob = b.read().unwrap();
 
-                    let v_ids = vs.iter().map(|v| v.id);
-                    let tvus = vs.iter().map(|v| v.tvu);
-                    let ids_and_tvus: Vec<_> = v_ids.zip(tvus).collect();
+                let v_ids = vs.iter().map(|v| v.id);
+                let tvus = vs.iter().map(|v| v.tvu);
+                let ids_and_tvus: Vec<_> = v_ids.zip(tvus).collect();
 
-                    println!(
-                        "{}: BROADCAST slot: {} idx: {} sz: {} to {:?} coding: {}",
-                        id,
-                        blob.slot().unwrap(),
-                        blob.index().unwrap(),
-                        blob.meta.size,
-                        ids_and_tvus,
-                        blob.is_coding()
-                    );
+                println!(
+                    "{}: BROADCAST slot: {} idx: {} sz: {} to {:?} coding: {}",
+                    id,
+                    blob.slot().unwrap(),
+                    blob.index().unwrap(),
+                    blob.meta.size,
+                    ids_and_tvus,
+                    blob.is_coding()
+                );
 
                 assert!(blob.meta.size <= BLOB_SIZE);
                 let send_errs_for_blob: Vec<_> = vs

@@ -344,6 +344,7 @@ impl Fullnode {
         trace!("leader_to_validator");
 
         let (scheduled_leader, _) = self.bank.get_current_leader().unwrap();
+        println!("leader to validator: sl {}, cth: {}", scheduled_leader, self.bank.tick_height());
         self.cluster_info
             .write()
             .unwrap()
@@ -369,7 +370,7 @@ impl Fullnode {
     }
 
     pub fn validator_to_leader(&mut self, tick_height: u64, last_id: Hash) {
-        trace!("validator_to_leader");
+        println!("validator_to_leader");
         self.cluster_info
             .write()
             .unwrap()

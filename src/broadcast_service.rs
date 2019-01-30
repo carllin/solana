@@ -62,6 +62,7 @@ impl Broadcast {
             num_entries += entries.len();
             ventries.push(entries);
         }
+
         let last_tick = match self.max_tick_height {
             Some(max_tick_height) => {
                 if let Some(Some(last)) = ventries.last().map(|entries| entries.last()) {
@@ -81,6 +82,21 @@ impl Broadcast {
         //  this may span slots if this leader broadcasts for consecutive slots...
         let slots = generate_slots(&ventries, leader_scheduler);
 
+        //
+        let flattened: Vec<&Entry> = ventries.iter().flatten().collect();
+        let mut index = self.blob_index;
+        let prev_slot = 0;
+        for (e, slot) in flattened.iter().zip(&slots) {
+            if *slot != prev_slot {
+                index = 0;
+            }
+            println!(
+                "Broadcasting entry with id: {}, slot: {}, index: {}",
+                e.id, slot, index
+            );
+            index += 1;
+        }
+        //
         let blobs: Vec<_> = ventries
             .into_par_iter()
             .flat_map(|p| p.to_shared_blobs())
