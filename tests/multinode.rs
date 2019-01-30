@@ -763,7 +763,7 @@ fn test_multi_node_dynamic_network() {
 
     ledger_paths.push(leader_ledger_path.clone());
     let signer_proxy = VoteSignerProxy::new_local(&leader_keypair);
-    let server = Fullnode::new(
+    let mut server = Fullnode::new(
         leader,
         leader_keypair,
         None,
@@ -933,13 +933,12 @@ fn test_multi_node_dynamic_network() {
             info!("Verifying signature of the last transaction in the validators");
 
             let mut num_nodes_behind = 0u64;
-            validators.retain(|server| {
+            for server in validators.iter_mut() {
                 let mut client = mk_client(&server.0);
                 trace!("{} checking signature", server.0.id);
                 num_nodes_behind += if client.check_signature(&sig) { 0 } else { 1 };
                 server.1.exit();
-                true
-            });
+            }
 
             info!(
                 "Validators lagging: {}/{}",
@@ -952,7 +951,7 @@ fn test_multi_node_dynamic_network() {
 
     info!("done!");
     assert_eq!(consecutive_success, 10);
-    for (_, node) in &validators {
+    for (_, node) in &mut validators {
         node.exit();
     }
     server.exit();

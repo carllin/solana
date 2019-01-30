@@ -250,7 +250,7 @@ pub mod tests {
         let vote_account_keypair = Arc::new(Keypair::new());
         let vote_signer = VoteSignerProxy::new_local(&vote_account_keypair);
         let (sender, _receiver) = channel();
-        let tvu = Tvu::new(
+        let (tvu, _) = Tvu::new(
             Some(Arc::new(vote_signer)),
             &bank,
             0,

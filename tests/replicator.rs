@@ -85,7 +85,7 @@ fn test_replicator_startup() {
 
         let mut fullnode_config = FullnodeConfig::default();
         fullnode_config.storage_rotate_count = STORAGE_ROTATE_TEST_COUNT;
-        let validator = Fullnode::new(
+        let mut validator = Fullnode::new(
             validator_node,
             validator_keypair,
             None,
