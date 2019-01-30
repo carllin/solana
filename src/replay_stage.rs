@@ -172,13 +172,12 @@ impl ReplayStage {
             .last()
             .expect("Entries cannot be empty at this point")
             .id;
-
+        let entries_len = entries.len() as u64;
+        *current_blob_index += entries_len;
         inc_new_counter_info!(
             "replicate-transactions",
             entries.iter().map(|x| x.transactions.len()).sum()
         );
-
-        let entries_len = entries.len() as u64;
         // TODO: In line with previous behavior, this will write all the entries even if
         // an error occurred processing one of the entries (causing the rest of the entries to
         // not be processed).
@@ -187,7 +186,6 @@ impl ReplayStage {
             ledger_entry_sender.send(entries)?;
         }
 
-        *current_blob_index += entries_len;
         res?;
         inc_new_counter_info!(
             "replicate_stage-duration",
@@ -310,7 +308,7 @@ impl ReplayStage {
                                 &last_entry_id.clone(),
                                 entry_stream.as_mut(),
                             ) {
-                                error!("{:?}", e);
+                                println!("Replay stage process_entries err: {:?}", e);
                             }
                         } else {
                             break;
