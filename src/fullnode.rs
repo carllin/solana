@@ -26,7 +26,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, RwLock};
+use std::thread::sleep;
 use std::thread::Result;
+use std::time::Duration;
 use std::time::Instant;
 
 pub type TvuRotationSender = Sender<TvuReturnType>;
@@ -340,11 +342,29 @@ impl Fullnode {
         }
     }
 
-    pub fn leader_to_validator(&mut self) -> Result<()> {
+    pub fn leader_to_validator(&mut self, tick_height: u64) -> Result<()> {
         trace!("leader_to_validator");
 
-        let (scheduled_leader, _) = self.bank.get_current_leader().unwrap();
-        println!("leader to validator: sl {}, cth: {}", scheduled_leader, self.bank.tick_height());
+        while self.bank.tick_height() < tick_height {
+            println!(
+                "expected tick height: {}, bth: {}",
+                tick_height,
+                self.bank.tick_height()
+            );
+            sleep(Duration::from_millis(10));
+        }
+
+        let (scheduled_leader, _) = self
+            .bank
+            .leader_scheduler
+            .read()
+            .unwrap()
+            .get_scheduled_leader(tick_height + 1)
+            .unwrap();
+        println!(
+            "leader to validator: sl {}, cth: {}",
+            scheduled_leader, tick_height,
+        );
         self.cluster_info
             .write()
             .unwrap()
@@ -422,9 +442,9 @@ impl Fullnode {
                     return Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation));
                 }
                 _ => match should_be_forwarder {
-                    Ok(TpuReturnType::LeaderRotation) => {
+                    Ok(TpuReturnType::LeaderRotation(tick_height)) => {
                         println!("{} LEADER TO VALIDATOR", self.keypair.pubkey());
-                        self.leader_to_validator()?;
+                        self.leader_to_validator(tick_height)?;
                         return Ok(Some(FullnodeReturnType::LeaderToValidatorRotation));
                     }
                     _ => {
@@ -714,6 +734,7 @@ mod tests {
             }
         }
         assert!(bootstrap_leader.node_services.tpu.is_leader());
+        println!("WAITING ON CLOSE");
         bootstrap_leader.close().unwrap();
     }
 
@@ -976,7 +997,7 @@ mod tests {
                     break;
                 }
                 _ => match should_be_forwarder {
-                    Ok(TpuReturnType::LeaderRotation) => {
+                    Ok(TpuReturnType::LeaderRotation(_)) => {
                         panic!("shouldn't be rotating to forwarder")
                     }
                     _ => continue,
