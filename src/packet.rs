@@ -194,7 +194,7 @@ impl Packets {
                     }
                     trace!("got {} packets", npkts);
                     i += npkts;
-                    if npkts != NUM_RCVMMSGS || i >= 1024 {
+                    if npkts != NUM_RCVMMSGS {
                         inc_new_counter_info!("packets-recv_count", i);
                         return Ok(i);
                     }
