@@ -24,7 +24,7 @@ use std::net::UdpSocket;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, RwLock};
 use std::thread::Result;
 use std::time::Instant;
@@ -115,7 +115,8 @@ impl Fullnode {
         config: FullnodeConfig,
     ) -> Self {
         let id = keypair.pubkey();
-        let (genesis_block, db_ledger) = Self::make_db_ledger(ledger_path);
+        let (genesis_block, db_ledger, ledger_signal_sender, ledger_signal_receiver) =
+            Self::make_db_ledger(ledger_path);
         let (bank, entry_height, last_entry_id) =
             Self::new_bank_from_db_ledger(&genesis_block, &db_ledger, leader_scheduler);
 
@@ -233,6 +234,8 @@ impl Fullnode {
             to_leader_sender,
             &storage_state,
             config.entry_stream,
+            ledger_signal_sender,
+            ledger_signal_receiver,
         );
         let max_tick_height = {
             let ls_lock = bank.leader_scheduler.read().unwrap();
@@ -383,7 +386,7 @@ impl Fullnode {
         self.join()
     }
 
-    fn new_bank_from_db_ledger(
+    pub fn new_bank_from_db_ledger(
         genesis_block: &GenesisBlock,
         db_ledger: &DbLedger,
         leader_scheduler: Arc<RwLock<LeaderScheduler>>,
@@ -413,7 +416,7 @@ impl Fullnode {
         ledger_path: &str,
         leader_scheduler: Arc<RwLock<LeaderScheduler>>,
     ) -> (Bank, u64, Hash) {
-        let (genesis_block, db_ledger) = Self::make_db_ledger(ledger_path);
+        let (genesis_block, db_ledger, _, _) = Self::make_db_ledger(ledger_path);
         Self::new_bank_from_db_ledger(&genesis_block, &db_ledger, leader_scheduler)
     }
 
@@ -421,14 +424,19 @@ impl Fullnode {
         &self.bank.leader_scheduler
     }
 
-    fn make_db_ledger(ledger_path: &str) -> (GenesisBlock, Arc<DbLedger>) {
-        let db_ledger = Arc::new(
-            DbLedger::open(ledger_path).expect("Expected to successfully open database ledger"),
-        );
-
+    fn make_db_ledger(
+        ledger_path: &str,
+    ) -> (
+        GenesisBlock,
+        Arc<DbLedger>,
+        SyncSender<bool>,
+        Receiver<bool>,
+    ) {
+        let (db_ledger, l_sender, l_receiver) =
+            DbLedger::open(ledger_path).expect("Expected to successfully open database ledger");
         let genesis_block =
             GenesisBlock::load(ledger_path).expect("Expected to successfully open genesis block");
-        (genesis_block, db_ledger)
+        (genesis_block, Arc::new(db_ledger), l_sender, l_receiver)
     }
 }
 
@@ -685,7 +693,6 @@ mod tests {
             );
 
             assert!(validator.node_services.tpu.is_leader());
-
             validator.close().expect("Expected leader node to close");
             bootstrap_leader
                 .close()
@@ -835,5 +842,128 @@ mod tests {
         DbLedger::destroy(&validator_ledger_path)
             .expect("Expected successful database destruction");
         let _ignored = remove_dir_all(&validator_ledger_path).unwrap();
+    }
+
+    #[test]
+    fn test_tvu_behind() {
+        // Make leader node
+        let leader_keypair = Arc::new(Keypair::new());
+        let validator_keypair = Arc::new(Keypair::new());
+
+        let (leader_node, _, leader_ledger_path, _, _) =
+            setup_leader_validator(&leader_keypair, &validator_keypair, 1, 0, "test_tvu_behind");
+
+        let leader_node_info = leader_node.info.clone();
+
+        // Set the leader scheduler for the validator
+        let leader_rotation_interval = NUM_TICKS_PER_SECOND as u64 * 5;
+        let bootstrap_height = leader_rotation_interval;
+
+        let leader_scheduler_config = LeaderSchedulerConfig::new(
+            bootstrap_height,
+            leader_rotation_interval,
+            leader_rotation_interval * 2,
+            bootstrap_height,
+        );
+
+        let voting_keypair = VotingKeypair::new_local(&leader_keypair);
+        // Start the bootstrap leader
+        let mut leader = Fullnode::new(
+            leader_node,
+            &leader_keypair,
+            &leader_ledger_path,
+            Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
+            voting_keypair,
+            Some(&leader_node_info),
+            &FullnodeConfig::default(),
+        );
+
+        // Hold Tvu bank lock to prevent tvu from making progress
+        {
+            let w_last_ids = leader.bank.last_ids().write().unwrap();
+
+            // Wait for leader -> validator transition
+            let signal = leader
+                .role_notifiers
+                .1
+                .recv()
+                .expect("signal for leader -> validator transition");
+            let (rn_sender, rn_receiver) = channel();
+            rn_sender.send(signal).expect("send");
+            leader.role_notifiers = (leader.role_notifiers.0, rn_receiver);
+
+            // Make sure the tvu bank is behind
+            assert!(w_last_ids.tick_height < bootstrap_height);
+        }
+
+        // Release tvu bank lock, tvu should start making progress again and
+        // handle_role_transition should successfully rotate the leader to a validator
+        assert_eq!(
+            leader.handle_role_transition().unwrap().unwrap(),
+            FullnodeReturnType::LeaderToValidatorRotation
+        );
+        assert_eq!(
+            leader.cluster_info.read().unwrap().leader_id(),
+            validator_keypair.pubkey(),
+        );
+        assert!(!leader.node_services.tpu.is_leader());
+        // Confirm the bank actually made progress
+        assert_eq!(leader.bank.tick_height(), bootstrap_height);
+
+        // Shut down
+        leader.close().expect("leader shutdown");
+        DbLedger::destroy(&leader_ledger_path).expect("Expected successful database destruction");
+        let _ignored = remove_dir_all(&leader_ledger_path).unwrap();
+    }
+
+    fn setup_leader_validator(
+        leader_keypair: &Arc<Keypair>,
+        validator_keypair: &Arc<Keypair>,
+        num_genesis_ticks: u64,
+        num_ending_ticks: u64,
+        test_name: &str,
+    ) -> (Node, Node, String, u64, Hash) {
+        // Make a leader identity
+        let leader_node = Node::new_localhost_with_pubkey(leader_keypair.pubkey());
+        let leader_id = leader_node.info.id;
+
+        // Create validator identity
+        let (mint_keypair, ledger_path, genesis_entry_height, last_id) =
+            create_tmp_sample_ledger(test_name, 10_000, num_genesis_ticks, leader_id, 500);
+
+        let validator_node = Node::new_localhost_with_pubkey(validator_keypair.pubkey());
+
+        // Write two entries so that the validator is in the active set:
+        //
+        // 1) Give the validator a nonzero number of tokens
+        // Write the bootstrap entries to the ledger that will cause leader rotation
+        // after the bootstrap height
+        //
+        // 2) A vote from the validator
+        let (active_set_entries, _) = make_active_set_entries(
+            validator_keypair,
+            &mint_keypair,
+            &last_id,
+            &last_id,
+            num_ending_ticks,
+        );
+
+        let db_ledger = DbLedger::open(&ledger_path).unwrap().0;
+        db_ledger
+            .write_entries(
+                DEFAULT_SLOT_HEIGHT,
+                genesis_entry_height,
+                &active_set_entries,
+            )
+            .unwrap();
+
+        let entry_height = genesis_entry_height + active_set_entries.len() as u64;
+        (
+            leader_node,
+            validator_node,
+            ledger_path,
+            entry_height,
+            active_set_entries.last().unwrap().id,
+        )
     }
 }

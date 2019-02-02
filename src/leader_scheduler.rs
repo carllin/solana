@@ -184,6 +184,15 @@ impl LeaderScheduler {
         }
     }
 
+    // Returns the last tick height for a given slot index
+    pub fn max_tick_height_for_slot(&self, slot_index: u64) -> u64 {
+        if self.use_only_bootstrap_leader {
+            std::u64::MAX
+        } else {
+            slot_index * self.leader_rotation_interval + self.bootstrap_height
+        }
+    }
+
     // Let Leader X be the leader at the input tick height. This function returns the
     // the PoH height at which Leader X's slot ends.
     pub fn max_height_for_leader(&self, height: u64) -> Option<u64> {
