@@ -163,21 +163,19 @@ pub fn window_service(
                     // Consumed should never be bigger than received
                     assert!(consumed <= received);
                     if received == consumed {
-                        trace!(
+                        println!(
                             "{} we have everything received: {} consumed: {}",
-                            id,
-                            received,
-                            consumed
+                            id, received, consumed
                         );
                         continue;
                     }
 
                     //exponential backoff
                     if !repair_backoff(&mut last, &mut times, consumed) {
-                        trace!("{} !repair_backoff() times = {}", id, times);
+                        println!("{} !repair_backoff() times = {}", id, times);
                         continue;
                     }
-                    trace!("{} let's repair! times = {}", id, times);
+                    println!("{} let's repair! times = {}", id, times);
 
                     let reqs = repair(
                         &db_ledger,

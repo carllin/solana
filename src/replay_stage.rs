@@ -239,7 +239,8 @@ impl ReplayStage {
 
                     println!(
                         "{:?}: mthfs: {}, current_slot: {}, current_index: {}",
-                        my_id, max_tick_height_for_slot, current_slot, current_entry_height);
+                        my_id, max_tick_height_for_slot, current_slot, current_entry_height
+                    );
 
                     let entries = {
                         if let Ok(entries) = db_ledger.get_slot_entries(

@@ -82,6 +82,11 @@ pub fn repair(
         max_entry_height + 2
     };
 
+    println!(
+        "consumed: {}, received: {}, mreh: {}",
+        consumed, received, max_repair_entry_height
+    );
+
     let idxs = db_ledger.find_missing_data_indexes(
         DEFAULT_SLOT_HEIGHT,
         consumed,
