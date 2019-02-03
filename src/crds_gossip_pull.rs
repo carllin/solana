@@ -172,10 +172,12 @@ impl CrdsGossipPull {
     /// The value_hash of an active item is put into self.purged_values queue
     pub fn purge_active(&mut self, crds: &mut Crds, self_id: Pubkey, min_ts: u64) {
         let old = crds.find_old_labels(min_ts);
+
         let mut purged: VecDeque<_> = old
             .iter()
             .filter(|label| label.pubkey() != self_id)
             .filter_map(|label| {
+                println!("Removing label: {:?}", label);
                 let rv = crds
                     .lookup_versioned(label)
                     .map(|val| (val.value_hash, val.local_timestamp));
@@ -183,6 +185,7 @@ impl CrdsGossipPull {
                 rv
             })
             .collect();
+        println!("After purge remaining len: {}", crds.table.len());
         self.purged_values.append(&mut purged);
     }
     /// Purge values from the `self.purged_values` queue that are older then purge_timeout

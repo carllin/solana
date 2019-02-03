@@ -273,8 +273,8 @@ impl ReplayStage {
                         let current_tick_height = bank.tick_height();
 
                         println!(
-                            "After process_entries: {:?}, current_slot: {:?} mthfs: {}, cth: {}, current_entry_height: {}",
-                            my_id, current_slot, max_tick_height_for_slot, current_tick_height, *entry_height.read().unwrap()
+                            "After process_entries: {:?}, current_slot: {:?} mthfs: {}, cth: {}",
+                            my_id, current_slot, max_tick_height_for_slot, current_tick_height
                         );
                         // We've reached the end of a slot, reset our state and check
                         // for leader rotation
