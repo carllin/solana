@@ -45,9 +45,23 @@ impl TpuForwarder {
                 msgs.read().unwrap().packets.len()
             );
 
-            let send_addr = get_forwarding_addr(cluster_info.read().unwrap().leader_data(), &my_id);
+            let (send_addr, leader_id) = {
+                let c = cluster_info.read().unwrap();
+                let leader_data = c.leader_data();
+                let leader_id = leader_data.as_ref().map(|x| x.id);
+                let send_addr = get_forwarding_addr(leader_data, &my_id);
+                (send_addr, leader_id)
+            };
 
             if let Some(send_addr) = send_addr {
+                println!(
+                    "Forwarding transactions to leader: {:?}, send_addr: {}",
+                    leader_id, send_addr
+                );
+                inc_new_counter_info!(
+                    "tpu_forwarder-msgs_forwarded",
+                    msgs.read().unwrap().packets.len()
+                );
                 msgs.write().unwrap().set_addr(&send_addr);
                 msgs.read().unwrap().send_to(&socket)?;
             }

@@ -284,7 +284,8 @@ impl ClusterInfo {
 
     /// compute broadcast table (includes own tvu)
     pub fn tvu_peers(&self) -> Vec<NodeInfo> {
-        let result: Vec<_> = self.gossip
+        let result: Vec<_> = self
+            .gossip
             .crds
             .table
             .values()
