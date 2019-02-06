@@ -51,7 +51,8 @@ impl RepairService {
                 break;
             }
 
-            let repairs = Self::generate_repairs(&id, blocktree, MAX_REPAIR_LENGTH, &mut repair_info);
+            let repairs =
+                Self::generate_repairs(&id, blocktree, MAX_REPAIR_LENGTH, &mut repair_info);
 
             if let Ok(repairs) = repairs {
                 let reqs: Vec<_> = repairs

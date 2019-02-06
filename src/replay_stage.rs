@@ -261,6 +261,7 @@ impl ReplayStage {
                     };
 
                     let entry_len = entries.len();
+                    println!("Fetch result, got {} entries", entry_len);
                     // Fetch the next entries from the database
                     if !entries.is_empty() {
                         if let Err(e) = Self::process_entries(

@@ -74,7 +74,7 @@ impl Broadcast {
 
         // Generate the slot heights for all the entries inside ventries
         //  this may span slots if this leader broadcasts for consecutive slots...
-        let slots = generate_slots(&ventries, leader_scheduler);
+        let slots = generate_slots(&ventries, leader_scheduler, self.blob_index);
 
         let blobs: Vec<_> = ventries
             .into_par_iter()
@@ -131,6 +131,7 @@ impl Broadcast {
 fn generate_slots(
     ventries: &[Vec<Entry>],
     leader_scheduler: &Arc<RwLock<LeaderScheduler>>,
+    mut blob_index: u64,
 ) -> Vec<u64> {
     // Generate the slot heights for all the entries inside ventries
     let r_leader_scheduler = leader_scheduler.read().unwrap();
@@ -141,6 +142,8 @@ fn generate_slots(
                 .iter()
                 .map(|e| {
                     let tick_height = if e.is_tick() {
+                        println!("BROADCAST: entry {:?} is tick", blob_index);
+                        blob_index += 1;
                         e.tick_height
                     } else {
                         e.tick_height + 1
@@ -194,10 +197,12 @@ impl BroadcastService {
             let r_leader_scheduler = bank.leader_scheduler.read().unwrap();
             let tick_height = bank.tick_height();
             println!(
-                "{} BROADCAST STARTING si: {}, bi: {}",
+                "{} BROADCAST STARTING si: {}, bi: {}, mthfs: {:?}, th: {}",
                 me.id,
                 r_leader_scheduler.tick_height_to_slot(tick_height),
-                blob_index
+                blob_index,
+                max_tick_height,
+                tick_height
             );
         }
 

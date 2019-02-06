@@ -313,10 +313,9 @@ impl Fullnode {
     }
 
     fn leader_to_validator(&mut self, tick_height: u64) -> FullnodeReturnType {
-        trace!(
+        println!(
             "leader_to_validator({:?}): tick_height={}",
-            self.id,
-            tick_height,
+            self.id, tick_height,
         );
 
         let scheduled_leader = {
@@ -338,6 +337,7 @@ impl Fullnode {
         if scheduled_leader == self.id {
             debug!("node is still the leader");
             let last_entry_id = self.node_services.tvu.get_state();
+            println!("switching back to leader: tick_height: {}", tick_height);
             self.validator_to_leader(tick_height, last_entry_id);
             FullnodeReturnType::LeaderToLeaderRotation
         } else {
