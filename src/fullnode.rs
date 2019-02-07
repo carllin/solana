@@ -419,6 +419,7 @@ impl Fullnode {
                 let should_be_forwarder = self.to_validator_receiver.recv_timeout(timeout);
                 match should_be_forwarder {
                     Ok(TpuReturnType::LeaderRotation(tick_height)) => {
+                        println!("{} LEADER TO VALIDATOR", self.id);
                         return Some((self.leader_to_validator(tick_height), tick_height + 1));
                     }
                     Err(RecvTimeoutError::Timeout) => continue,
@@ -428,6 +429,7 @@ impl Fullnode {
                 let should_be_leader = self.to_leader_receiver.recv_timeout(timeout);
                 match should_be_leader {
                     Ok(TvuReturnType::LeaderRotation(tick_height, last_entry_id)) => {
+                        println!("{} VALIDATOR TO LEADER", self.id);
                         self.validator_to_leader(tick_height, last_entry_id);
                         return Some((
                             FullnodeReturnType::ValidatorToLeaderRotation,

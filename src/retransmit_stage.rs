@@ -52,6 +52,8 @@ fn retransmit(
         NEIGHBORHOOD_SIZE,
         GROW_LAYER_CAPACITY,
     );
+
+    println!("num_layers: {}", num_layers);
     if num_layers <= 1 {
         /* single layer data plane */
         for b in &mut dq {

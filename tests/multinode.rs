@@ -1330,7 +1330,7 @@ fn test_full_leader_validator_network() {
 
     // Create the bootstrap leader node information
     let bootstrap_leader_keypair = Arc::new(Keypair::new());
-    info!("bootstrap leader: {:?}", bootstrap_leader_keypair.pubkey());
+    println!("bootstrap leader: {:?}", bootstrap_leader_keypair.pubkey());
     let bootstrap_leader_node = Node::new_localhost_with_pubkey(bootstrap_leader_keypair.pubkey());
     let bootstrap_leader_info = bootstrap_leader_node.info.clone();
 
@@ -1451,7 +1451,7 @@ fn test_full_leader_validator_network() {
     // Wait for the bootstrap_leader to transition to a validator
     loop {
         let transition = bootstrap_leader_rotation_receiver.recv().unwrap();
-        info!("bootstrap leader transition event: {:?}", transition);
+        println!("bootstrap leader transition event: {:?}", transition);
         if transition.0 == FullnodeReturnType::LeaderToValidatorRotation {
             break;
         }
@@ -1459,10 +1459,10 @@ fn test_full_leader_validator_network() {
 
     // Ensure each node in the cluster rotates into the leader role
     for (id, _, rotation_receiver) in &nodes {
-        info!("Waiting for {:?} to become the leader", id);
+        println!("Waiting for {:?} to become the leader", id);
         loop {
             let transition = rotation_receiver.recv().unwrap();
-            info!("node {:?} transition event: {:?}", id, transition);
+            println!("node {:?} transition event: {:?}", id, transition);
             if transition.0 == FullnodeReturnType::ValidatorToLeaderRotation {
                 break;
             }

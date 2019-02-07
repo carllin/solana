@@ -161,6 +161,7 @@ pub fn retransmit_all_leader_blocks(
     retransmit: &BlobSender,
     id: &Pubkey,
 ) -> Result<()> {
+    println!("retransmitting {} leader blocks", dq.len());
     let mut retransmit_queue: Vec<SharedBlob> = Vec::new();
     for b in dq {
         // Check if the blob is from the scheduled leader for its slot. If so,
@@ -169,6 +170,8 @@ pub fn retransmit_all_leader_blocks(
         if let Some(leader_id) = leader_scheduler.read().unwrap().get_leader_for_slot(slot) {
             if leader_id != *id {
                 add_blob_to_retransmit_queue(b, leader_id, &mut retransmit_queue);
+            } else {
+                println!("b: {}, not for slot", b.read().unwrap().index());
             }
         }
     }

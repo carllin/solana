@@ -29,7 +29,7 @@ fn test_wallet_timestamp_tx() {
     let bob_pubkey = Keypair::new().pubkey();
 
     let (sender, receiver) = channel();
-    run_local_drone(alice, sender);
+    run_locsal_drone(alice, sender);
     let drone_addr = receiver.recv().unwrap();
 
     let rpc_client = RpcClient::new_from_socket(leader_data.rpc);

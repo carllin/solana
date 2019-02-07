@@ -71,6 +71,11 @@ impl PohRecorder {
         last_entry_id: Hash,
         max_tick_height: u64,
     ) -> Self {
+        println!(
+            "Poh Recorder, bank tick height: {}, mth: {}",
+            bank.tick_height(),
+            max_tick_height
+        );
         let poh = Arc::new(Mutex::new(Poh::new(last_entry_id, bank.tick_height())));
         PohRecorder {
             poh,

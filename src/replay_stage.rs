@@ -159,6 +159,7 @@ impl ReplayStage {
         // an error occurred processing one of the entries (causing the rest of the entries to
         // not be processed).
         if entries_len != 0 {
+            println!("Sending {} entries", entries.len());
             ledger_entry_sender.send(entries)?;
         }
 
@@ -186,6 +187,7 @@ impl ReplayStage {
         ledger_signal_sender: SyncSender<bool>,
         ledger_signal_receiver: Receiver<bool>,
     ) -> (Self, EntryReceiver) {
+        println!("replay_stage: current_tick_height: {}", bank.tick_height());
         let (ledger_entry_sender, ledger_entry_receiver) = channel();
         let mut entry_stream = entry_stream.cloned().map(EntryStream::new);
 
@@ -222,6 +224,10 @@ impl ReplayStage {
                             prev_slot.expect("prev_slot must exist"),
                         );
                         if new_slot.is_some() {
+                            println!(
+                                "{:?}, new_slot is: {:?}, old_slot: {:?}",
+                                my_id, new_slot, prev_slot
+                            );
                             // Reset the state
                             current_slot = new_slot;
                             current_blob_index = 0;
@@ -234,6 +240,10 @@ impl ReplayStage {
                         }
                     }
 
+                    println!(
+                        "{:?}, Fetching entries from db for slot: {:?}, blob_index: {}",
+                        my_id, current_slot, current_blob_index
+                    );
                     let entries = {
                         if let Some(slot) = current_slot {
                             if let Ok(entries) = blocktree.get_slot_entries(
@@ -263,21 +273,30 @@ impl ReplayStage {
                             &last_entry_id,
                             entry_stream.as_mut(),
                         ) {
-                            error!("process_entries failed: {:?}", e);
+                            println!("process_entries failed: {:?}", e);
                         }
 
                         let current_tick_height = bank.tick_height();
 
+                        println!(
+                            "{:?}, current_slot: {:?} mthfs: {}, cth: {}, bi: {}",
+                            my_id,
+                            current_slot,
+                            max_tick_height_for_slot,
+                            current_tick_height,
+                            current_blob_index
+                        );
                         // We've reached the end of a slot, reset our state and check
                         // for leader rotation
                         if max_tick_height_for_slot == current_tick_height {
                             // Check for leader rotation
                             let leader_id = Self::get_leader_for_next_tick(&bank);
-
+                            println!("{:?}, next_leader: {}", my_id, leader_id);
                             // TODO: Remove this soon once we boot the leader from ClusterInfo
                             cluster_info.write().unwrap().set_leader(leader_id);
 
                             if leader_id != last_leader_id && my_id == leader_id {
+                                println!("SENDING LEADER ROTATION FROM REPLAY");
                                 to_leader_sender
                                     .send(TvuReturnType::LeaderRotation(
                                         current_tick_height,
@@ -374,7 +393,7 @@ mod test {
     use std::sync::{Arc, RwLock};
 
     #[test]
-    #[ignore] // TODO: Fix this test to not send all entries in slot 0
+    #[ignore]
     pub fn test_replay_stage_leader_rotation_exit() {
         solana_logger::setup();
 

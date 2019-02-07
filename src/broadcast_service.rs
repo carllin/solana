@@ -190,6 +190,16 @@ impl BroadcastService {
         blob_sender: &BlobSender,
     ) -> BroadcastServiceReturnType {
         let me = cluster_info.read().unwrap().my_data().clone();
+        {
+            let r_leader_scheduler = bank.leader_scheduler.read().unwrap();
+            let tick_height = bank.tick_height();
+            println!(
+                "{} BROADCAST STARTING si: {}, bi: {}",
+                me.id,
+                r_leader_scheduler.tick_height_to_slot(tick_height),
+                blob_index
+            );
+        }
 
         let mut broadcast = Broadcast {
             id: me.id,

@@ -534,7 +534,7 @@ impl ClusterInfo {
         blobs: &[SharedBlob],
     ) -> Result<()> {
         if broadcast_table.is_empty() {
-            debug!("{}:not enough peers in cluster_info table", id);
+            println!("{}:not enough peers in cluster_info table", id);
             inc_new_counter_info!("cluster_info-broadcast-not_enough_peers_error", 1);
             Err(ClusterInfoError::NoPeers)?;
         }
@@ -567,19 +567,20 @@ impl ClusterInfo {
         s: &UdpSocket,
     ) -> Result<()> {
         let (me, orders): (NodeInfo, &[NodeInfo]) = {
-            // copy to avoid locking during IO
+            // copy to av   oid locking during IO
             let s = obj.read().unwrap();
             (s.my_data().clone(), peers)
         };
         blob.write().unwrap().set_id(&me.id);
         let rblob = blob.read().unwrap();
-        trace!("retransmit orders {}", orders.len());
+        println!("{}: retransmit orders {}", me.id, orders.len());
         let errs: Vec<_> = orders
             .par_iter()
             .map(|v| {
-                debug!(
-                    "{}: retransmit blob {} to {} {}",
+                println!(
+                    "{}: retransmit blob {} {} to {} {}",
                     me.id,
+                    rblob.slot(),
                     rblob.index(),
                     v.id,
                     v.tvu,
@@ -592,7 +593,7 @@ impl ClusterInfo {
         for e in errs {
             if let Err(e) = &e {
                 inc_new_counter_info!("cluster_info-retransmit-send_to_error", 1, 1);
-                error!("retransmit result {:?}", e);
+                println!("retransmit result {:?}", e);
             }
             e?;
         }
@@ -617,24 +618,19 @@ impl ClusterInfo {
             .flat_map(|(b, vs)| {
                 let blob = b.read().unwrap();
 
-                let ids_and_tvus = if log_enabled!(Level::Trace) {
-                    let v_ids = vs.iter().map(|v| v.id);
-                    let tvus = vs.iter().map(|v| v.tvu);
-                    let ids_and_tvus = v_ids.zip(tvus).collect();
+                let v_ids = vs.iter().map(|v| v.id);
+                let tvus = vs.iter().map(|v| v.tvu);
+                let ids_and_tvus: Vec<_> = v_ids.zip(tvus).collect();
 
-                    trace!(
-                        "{}: BROADCAST idx: {} sz: {} to {:?} coding: {}",
-                        id,
-                        blob.index(),
-                        blob.meta.size,
-                        ids_and_tvus,
-                        blob.is_coding()
-                    );
-
-                    ids_and_tvus
-                } else {
-                    vec![]
-                };
+                println!(
+                    "{}: BROADCAST slot: {} idx: {} sz: {} to {:?} coding: {}",
+                    id,
+                    blob.slot(),
+                    blob.index(),
+                    blob.meta.size,
+                    ids_and_tvus,
+                    blob.is_coding()
+                );
 
                 assert!(blob.meta.size <= BLOB_SIZE);
                 let send_errs_for_blob: Vec<_> = vs
@@ -712,6 +708,13 @@ impl ClusterInfo {
         let n = thread_rng().gen::<usize>() % valid.len();
         let addr = valid[n].gossip; // send the request to the peer's gossip port
         let out = self.window_index_request_bytes(slot_height, blob_index)?;
+        println!(
+            "{}: Sending request for si: {}, bi: {} to {}",
+            self.id(),
+            slot_height,
+            blob_index,
+            valid[n].id
+        );
 
         submit(
             influxdb::Point::new("cluster-info")
@@ -851,6 +854,10 @@ impl ClusterInfo {
         slot_height: u64,
         blob_index: u64,
     ) -> Vec<SharedBlob> {
+        println!(
+            "{}, got request for si: {}, bi: {} from: {}",
+            me.id, slot_height, blob_index, from.id
+        );
         if let Some(blocktree) = blocktree {
             // Try to find the requested index in one of the slots
             let blob = blocktree.get_data_blob(slot_height, blob_index);
@@ -859,6 +866,23 @@ impl ClusterInfo {
                 inc_new_counter_info!("cluster_info-window-request-ledger", 1);
                 blob.meta.set_addr(from_addr);
 
+                submit(
+                    influxdb::Point::new("cluster_info_send_window_request")
+                        .add_field("repair_slot", influxdb::Value::Integer(slot_height as i64))
+                        .to_owned()
+                        .add_field("repair_blob", influxdb::Value::Integer(blob_index as i64))
+                        .to_owned()
+                        .add_field("to", influxdb::Value::String(from_addr.to_string()))
+                        .to_owned()
+                        .add_field("from", influxdb::Value::String(me.gossip.to_string()))
+                        .to_owned()
+                        .add_field("id", influxdb::Value::String(me.id.to_string()))
+                        .to_owned(),
+                );
+                println!(
+                    "{}, sending response for si: {}, bi: {} to: {}",
+                    me.id, slot_height, blob_index, from.id
+                );
                 return vec![Arc::new(RwLock::new(blob))];
             }
         }
@@ -1007,7 +1031,7 @@ impl ClusterInfo {
 
         let self_id = me.read().unwrap().gossip.id;
         if from.id == me.read().unwrap().gossip.id {
-            warn!(
+            println!(
                 "{}: Ignored received RequestWindowIndex from ME {} {} {} ",
                 self_id, from.id, slot_height, blob_index,
             );
@@ -1018,12 +1042,9 @@ impl ClusterInfo {
         me.write().unwrap().insert_info(from.clone());
         let my_info = me.read().unwrap().my_data().clone();
         inc_new_counter_info!("cluster_info-window-request-recv", 1);
-        trace!(
+        println!(
             "{}: received RequestWindowIndex from: {} slot_height: {}, blob_index: {}",
-            self_id,
-            from.id,
-            slot_height,
-            blob_index,
+            self_id, from.id, slot_height, blob_index,
         );
         let res = Self::run_window_request(
             &from,
@@ -1099,14 +1120,30 @@ impl ClusterInfo {
                 vec![]
             }
             Protocol::RequestWindowIndex(from, slot_height, blob_index) => {
-                Self::handle_request_window_index(
+                let blobs = Self::handle_request_window_index(
                     me,
                     &from,
                     blocktree,
                     slot_height,
                     blob_index,
                     from_addr,
-                )
+                );
+
+                submit(
+                    influxdb::Point::new("cluster-info-request_window_index_total")
+                        .add_field("count", influxdb::Value::Integer(blobs.len() as i64))
+                        .to_owned(),
+                );
+
+                println!("RequestWindowIndex response: {}", blobs.len());
+                for blob in blobs.iter() {
+                    println!(
+                        "RequestWindowIndex response: {:?}, {:?}",
+                        blob.read().unwrap().slot(),
+                        blob.read().unwrap().index()
+                    );
+                }
+                blobs
             }
         }
     }
@@ -1149,6 +1186,7 @@ impl ClusterInfo {
                     &response_sender,
                 );
                 if exit.load(Ordering::Relaxed) {
+                    println!("{} listener exited 1", me.read().unwrap().gossip.id);
                     return;
                 }
                 if e.is_err() {

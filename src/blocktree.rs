@@ -519,6 +519,7 @@ impl Blocktree {
         // so we can detect changes to the slot metadata later
         let mut slot_meta_working_set = HashMap::new();
         let new_blobs: Vec<_> = new_blobs.into_iter().collect();
+        println!("INSERTING {} blobs", new_blobs.len());
         let mut prev_inserted_blob_datas = HashMap::new();
 
         let mut consecutive_entries = vec![];
@@ -546,6 +547,7 @@ impl Blocktree {
                         // inserting a new slot
                         (Rc::new(RefCell::new(meta.clone())), None)
                     } else {
+                        println!("meta {} has tick count: {}", blob_slot, meta.consumed_ticks);
                         (Rc::new(RefCell::new(meta.clone())), Some(meta))
                     }
                 } else {
@@ -583,6 +585,11 @@ impl Blocktree {
             let meta: &SlotMeta = &RefCell::borrow(&*meta_copy);
             // Check if the working copy of the metadata has changed
             if Some(meta) != meta_backup.as_ref() {
+                println!(
+                    "meta finsihed {} has tick count: {}",
+                    slot_height,
+                    RefCell::borrow(meta_copy).consumed_ticks
+                );
                 should_signal = should_signal || Self::slot_has_updates(meta, &meta_backup);
                 write_batch.put_cf(
                     self.meta_cf.handle(),
@@ -1105,6 +1112,10 @@ impl Blocktree {
         let blob_slot = blob_to_insert.slot();
         let blob_size = blob_to_insert.size();
 
+        println!(
+            "inserting blob slot: {}, blob index: {}",
+            blob_slot, blob_index
+        );
         if blob_index < slot_meta.consumed
             || prev_inserted_blob_datas.contains_key(&(blob_slot, blob_index))
         {

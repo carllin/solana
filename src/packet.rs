@@ -430,7 +430,7 @@ impl Blob {
                 let p = r.read().unwrap();
                 let a = p.meta.addr();
                 if let Err(e) = socket.send_to(&p.data[..p.meta.size], &a) {
-                    warn!(
+                    println!(
                         "error sending {} byte packet to {:?}: {:?}",
                         p.meta.size, a, e
                     );

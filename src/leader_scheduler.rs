@@ -140,10 +140,9 @@ impl LeaderScheduler {
     // new schedule as a side-effect.
     pub fn update_tick_height(&mut self, tick_height: u64, bank: &Bank) {
         let epoch = self.tick_height_to_epoch(tick_height);
-        trace!(
+        println!(
             "update_tick_height: tick_height={} (epoch={})",
-            tick_height,
-            epoch,
+            tick_height, epoch,
         );
         if epoch < self.current_epoch {
             return;
@@ -218,8 +217,9 @@ impl LeaderScheduler {
                 .values()
                 .filter_map(|account| {
                     if vote_program::check_id(&account.owner) {
+                        println!("vote account owner: {:?}", account.owner);
                         if let Ok(vote_state) = VoteState::deserialize(&account.userdata) {
-                            trace!("get_active_set: account vote_state: {:?}", vote_state);
+                            println!("get_active_set: account vote_state: {:?}", vote_state);
                             return vote_state
                                 .votes
                                 .back()
@@ -244,10 +244,9 @@ impl LeaderScheduler {
         } else {
             self.tick_height_to_epoch(tick_height) + 1
         };
-        trace!(
+        println!(
             "generate_schedule: tick_height={} (epoch={})",
-            tick_height,
-            epoch
+            tick_height, epoch
         );
         if epoch < self.current_epoch {
             // Don't support going backwards for implementation convenience
@@ -271,6 +270,7 @@ impl LeaderScheduler {
 
         self.seed = Self::calculate_seed(tick_height);
         let active_set = self.get_active_set(tick_height, &bank);
+        println!("active set: {:?}", active_set);
         let ranked_active_set = Self::rank_active_set(bank, active_set.iter());
 
         if ranked_active_set.is_empty() {
@@ -320,7 +320,7 @@ impl LeaderScheduler {
         }
 
         assert!(!self.epoch_schedule[0].is_empty());
-        trace!(
+        println!(
             "generate_schedule: schedule for ticks ({}, {}): {:?} ",
             tick_height,
             tick_height + self.ticks_per_epoch,

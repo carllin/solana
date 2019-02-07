@@ -4,6 +4,7 @@
 use crate::packet::{Blob, SharedBlobs, SharedPackets};
 use crate::result::{Error, Result};
 use solana_metrics::{influxdb, submit};
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::timing::duration_as_ms;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -96,8 +97,42 @@ pub fn responder(name: &'static str, sock: Arc<UdpSocket>, r: BlobReceiver) -> J
         .spawn(move || loop {
             if let Err(e) = recv_send(&sock, &r) {
                 match e {
-                    Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
-                    Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
+                    Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
+                        println!("{} Send disconnected", name);
+                        break;
+                    }
+                    Error::RecvTimeoutError(RecvTimeoutError::Timeout) => {
+                        if name == "gossip" {
+                            println!("{} Send timed out", name);
+                        }
+                    }
+                    _ => println!("{} responder error: {:?}", name, e),
+                }
+            }
+        })
+        .unwrap()
+}
+
+pub fn responder_log(
+    id: Pubkey,
+    name: &'static str,
+    sock: Arc<UdpSocket>,
+    r: BlobReceiver,
+) -> JoinHandle<()> {
+    Builder::new()
+        .name(format!("solana-responder-{}", name))
+        .spawn(move || loop {
+            if let Err(e) = recv_send(&sock, &r) {
+                match e {
+                    Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
+                        println!("{} Send disconnected", name);
+                        break;
+                    }
+                    Error::RecvTimeoutError(RecvTimeoutError::Timeout) => {
+                        if name == "gossip" {
+                            println!("{} {} Send timed out", name, id);
+                        }
+                    }
                     _ => warn!("{} responder error: {:?}", name, e),
                 }
             }
