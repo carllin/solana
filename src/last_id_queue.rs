@@ -141,6 +141,10 @@ impl LastIdQueue {
     /// merge for entryq is a swap
     pub fn merge_into_root(&mut self, other: Self) {
         let (entries, tick_height, last_id) = { (other.entries, other.tick_height, other.last_id) };
+        println!(
+            "merging last ids, self.tick_height: {}, other.tick_height: {}",
+            self.tick_height, tick_height
+        );
         self.entries = entries;
         self.tick_height = tick_height;
         self.last_id = last_id;

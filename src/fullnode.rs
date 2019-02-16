@@ -379,7 +379,7 @@ impl Fullnode {
             );
             transition
         } else {
-            debug!("{:?} rotating to validator role", self.id);
+            println!("{:?} rotating to validator role", self.id);
             self.node_services.tpu.switch_to_forwarder(
                 next_leader,
                 self.tpu_sockets

@@ -1023,7 +1023,6 @@ fn test_leader_to_validator_transition() {
 }
 
 #[test]
-#[ignore]
 fn test_leader_validator_basic() {
     solana_logger::setup();
 
@@ -1036,15 +1035,15 @@ fn test_leader_validator_basic() {
     let validator_keypair = Arc::new(Keypair::new());
     let validator_node = Node::new_localhost_with_pubkey(validator_keypair.pubkey());
 
-    info!("leader id: {}", leader_keypair.pubkey());
-    info!("validator id: {}", validator_keypair.pubkey());
+    println!("leader id: {}", leader_keypair.pubkey());
+    println!("validator id: {}", validator_keypair.pubkey());
 
     // Create the leader scheduler config
     let mut fullnode_config = FullnodeConfig::default();
     let ticks_per_slot = 5;
     fullnode_config.leader_scheduler_config = LeaderSchedulerConfig::new(
         ticks_per_slot,
-        1, // 1 slot per epoch
+        32, // 1 slot per epoch
         ticks_per_slot,
     );
     let blocktree_config = fullnode_config.ledger_config();

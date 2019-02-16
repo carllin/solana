@@ -131,6 +131,7 @@ impl Forks {
             assert_eq!(old_root.fork_id(), new_root_id);
             Ok(Some(new_root_id))
         } else {
+            println!("do nothing");
             Ok(None)
         }
     }

@@ -142,10 +142,9 @@ impl LeaderScheduler {
     // new schedule as a side-effect.
     pub fn update_tick_height(&mut self, tick_height: u64, bank: &Bank) {
         let epoch = self.tick_height_to_epoch(tick_height);
-        trace!(
+        println!(
             "update_tick_height: tick_height={} (epoch={})",
-            tick_height,
-            epoch,
+            tick_height, epoch,
         );
 
         if tick_height == 0 {
@@ -243,10 +242,9 @@ impl LeaderScheduler {
     // Updates the leader schedule to include ticks from tick_height to the first tick of the next epoch
     fn generate_schedule(&mut self, tick_height: u64, bank: &Bank) {
         let epoch = self.tick_height_to_epoch(tick_height);
-        trace!(
+        println!(
             "generate_schedule: tick_height={} (epoch={})",
-            tick_height,
-            epoch
+            tick_height, epoch
         );
         if epoch < self.current_epoch {
             // Don't support going backwards for implementation convenience
@@ -273,7 +271,7 @@ impl LeaderScheduler {
         let ranked_active_set = Self::rank_active_set(bank, active_set.iter());
 
         if ranked_active_set.is_empty() {
-            info!(
+            println!(
                 "generate_schedule: empty ranked_active_set at tick_height {}, using leader_schedule from previous epoch",
                 tick_height,
             );
@@ -319,7 +317,7 @@ impl LeaderScheduler {
         }
 
         assert!(!self.epoch_schedule[0].is_empty());
-        trace!(
+        println!(
             "generate_schedule: schedule for ticks ({}, {}): {:?} ",
             tick_height,
             tick_height + self.ticks_per_epoch,

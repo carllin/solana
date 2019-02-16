@@ -236,10 +236,8 @@ impl ReplayStage {
                     }
 
                     if current_slot.is_none() {
-                        let new_slot = get_next_slot(
-                            &blocktree,
-                            prev_slot.expect("prev_slot must exist"),
-                        );
+                        let new_slot =
+                            get_next_slot(&blocktree, prev_slot.expect("prev_slot must exist"));
                         if let Some(new_slot) = new_slot {
                             // Reset the state
                             current_slot = Some(new_slot);
@@ -250,16 +248,14 @@ impl ReplayStage {
                                 .unwrap()
                                 .max_tick_height_for_slot(new_slot);
                         }
-                        info!(
+                        println!(
                             "updated to current_slot: {:?} leader_id: {} max_tick_height: {}",
-                            current_slot,
-                            leader_id,
-                            max_tick_height
+                            current_slot, leader_id, max_tick_height
                         );
                     }
 
                     if current_slot.is_some() && my_id == leader_id {
-                        info!("skip validating current_slot: {:?}", current_slot);
+                        println!("skip validating current_slot: {:?}", current_slot);
                         // skip validating this slot
                         prev_slot = current_slot;
                         current_slot = None;
@@ -267,7 +263,10 @@ impl ReplayStage {
 
                     let entries = {
                         if let Some(slot) = current_slot {
-                            info!("replay getting slot_entries: {} {}", slot, current_blob_index);
+                            info!(
+                                "replay getting slot_entries: {} {}",
+                                slot, current_blob_index
+                            );
                             if let Ok(entries) = blocktree.get_slot_entries(
                                 slot,
                                 current_blob_index,
@@ -281,7 +280,7 @@ impl ReplayStage {
                             vec![]
                         }
                     };
-                    info!("entries: {:?}", entries);
+                    println!("entries: {:?}", entries);
 
                     let entry_len = entries.len();
                     // Fetch the next entries from the database
@@ -307,57 +306,61 @@ impl ReplayStage {
                         ) {
                             error!("process_entries failed: {:?}", e);
                         }
+                    }
 
-                        let current_tick_height = bank
-                            .fork(slot)
-                            .expect("fork for current slot must exist")
-                            .tick_height();
+                    let slot = {
+                        if current_slot.is_some() {
+                            current_slot.unwrap()
+                        } else {
+                            prev_slot.unwrap()
+                        }
+                    };
+                    let current_tick_height = bank
+                        .fork(slot)
+                        .expect("fork for current slot must exist")
+                        .tick_height();
 
-                        // we've reached the end of a slot, reset our state and check
-                        // for leader rotation
-                        info!(
-                            "max_tick_height: {} current_tick_height: {}",
-                            max_tick_height,
-                            current_tick_height
+                    // we've reached the end of a slot, reset our state and check
+                    // for leader rotation
+                    println!(
+                        "{} max_tick_height: {} current_tick_height: {}",
+                        my_id, max_tick_height, current_tick_height
+                    );
+
+                    if max_tick_height == current_tick_height {
+                        // Check for leader rotation
+                        let next_leader_id = bank
+                            .leader_scheduler
+                            .read()
+                            .unwrap()
+                            .get_leader_for_slot(slot + 1)
+                            .expect("Scheduled leader should be calculated by this point");
+
+                        trace!(
+                            "next_leader_id: {} leader_id_for_slot: {} my_id: {}",
+                            next_leader_id,
+                            leader_id,
+                            my_id
                         );
 
-                        if max_tick_height == current_tick_height {
-                            // Check for leader rotation
-                            let next_leader_id = bank
-                                .leader_scheduler
-                                .read()
-                                .unwrap()
-                                .get_leader_for_slot(slot + 1)
-                                .expect("Scheduled leader should be calculated by this point");
-
-                            info!(
-                                "next_leader_id: {} leader_id_for_slot: {} my_id: {}",
-                                next_leader_id,
-                                leader_id,
-                                my_id
-                            );
-
-                            if my_id == next_leader_id {
+                        if leader_id != next_leader_id {
+                            if my_id == leader_id {
                                 // construct the leader's bank_state for it
                                 bank.init_fork(slot + 1, &last_entry_id.read().unwrap(), slot)
                                     .expect("init fork");
-                            }
 
-                            if leader_id != next_leader_id {
-                                if my_id == leader_id {
-                                    to_leader_sender.send(current_tick_height).unwrap();
-                                } else {
-                                    // TODO: Remove this soon once we boot the leader from ClusterInfo
-                                    cluster_info.write().unwrap().set_leader(leader_id);
-                                }
+                                to_leader_sender.send(current_tick_height).unwrap();
+                            } else {
+                                // TODO: Remove this soon once we boot the leader from ClusterInfo
+                                cluster_info.write().unwrap().set_leader(leader_id);
                             }
-
-                            // update slot enumeration state
-                            prev_slot = current_slot;
-                            current_slot = None;
-                            leader_id = next_leader_id;
-                            continue;
                         }
+
+                        // update slot enumeration state
+                        prev_slot = current_slot;
+                        current_slot = None;
+                        leader_id = next_leader_id;
+                        continue;
                     }
 
                     // Block until there are updates again
