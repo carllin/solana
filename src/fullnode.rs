@@ -513,6 +513,7 @@ mod tests {
     };
     use crate::entry::make_consecutive_blobs;
     use crate::entry::EntrySlice;
+    use crate::forks::ROLLBACK_DEPTH;
     use crate::gossip_service::{converge, make_listening_node};
     use crate::leader_scheduler::make_active_set_entries;
     use crate::streamer::responder;
@@ -606,7 +607,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_leader_to_leader_transition() {
         solana_logger::setup();
 
@@ -618,7 +618,7 @@ mod tests {
         // the active set, this leader will remain the leader in the second epoch. In the second
         // epoch, check that the same leader knows to shut down and restart as a leader again.
         let ticks_per_slot = 5;
-        let slots_per_epoch = 2;
+        let slots_per_epoch = ROLLBACK_DEPTH as u64 + 1;
         let ticks_per_epoch = slots_per_epoch * ticks_per_slot;
         let active_window_length = 10 * ticks_per_epoch;
         let leader_scheduler_config =
@@ -660,10 +660,15 @@ mod tests {
 
         // Wait for the bootstrap leader to transition.  Since there are no other nodes in the
         // cluster it will continue to be the leader
-        assert_eq!(
-            rotation_receiver.recv().unwrap(),
-            (FullnodeReturnType::LeaderToLeaderRotation, ticks_per_slot)
-        );
+        for i in (0..slots_per_epoch) {
+            assert_eq!(
+                rotation_receiver.recv().unwrap(),
+                (
+                    FullnodeReturnType::LeaderToLeaderRotation,
+                    (i + 1) * ticks_per_slot
+                )
+            );
+        }
         bootstrap_leader_exit();
     }
 
@@ -907,15 +912,8 @@ mod tests {
         // Wait for convergence
         converge(&leader_node_info, 2);
 
-        info!("Wait for leader -> validator transition");
-        let rotation_signal = leader
-            .rotation_receiver
-            .recv()
-            .expect("signal for leader -> validator transition");
-        debug!("received rotation signal: {:?}", rotation_signal);
-
-        // Re-send the rotation signal, it'll be received again once the tvu is unpaused
-        leader.rotation_sender.send(rotation_signal).expect("send");
+        // Wait for Tpu bank to progress while the Tvu bank is stuck
+        sleep(Duration::from_millis(1000));
 
         //        info!("Make sure the tvu bank has not reached the last tick for the slot (the last tick is ticks_per_slot - 1)");
         //        {

@@ -143,12 +143,15 @@ impl ReplayStage {
         }
 
         if num_ticks_left_in_slot == 0 {
-            let fork = bank.fork(current_slot).expect("current bank state");
+            {
+                let fork = bank.fork(current_slot).expect("current bank state");
+                println!("freezing {} from replay_stage", current_slot);
+                fork.head().freeze();
+            }
 
-            trace!("freezing {} from replay_stage", current_slot);
-            fork.head().freeze();
             bank.merge_into_root(current_slot);
             if let Some(voting_keypair) = voting_keypair {
+                let fork = bank.fork(current_slot).expect("current bank state");
                 let keypair = voting_keypair.as_ref();
                 let vote =
                     VoteTransaction::new_vote(keypair, fork.tick_height(), fork.last_id(), 0);
@@ -225,127 +228,132 @@ impl ReplayStage {
 
                 // Loop through blocktree MAX_ENTRY_RECV_PER_ITER entries at a time for each
                 // relevant slot to see if there are any available updates
-                loop {
-                    // Stop getting entries if we get exit signal
-                    if exit_.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    #[cfg(test)]
-                    while pause_.load(Ordering::Relaxed) {
-                        sleep(Duration::from_millis(200));
-                    }
+                'outer: loop {
+                    loop {
+                        // Stop getting entries if we get exit signal
+                        if exit_.load(Ordering::Relaxed) {
+                            break 'outer;
+                        }
+                        #[cfg(test)]
+                        while pause_.load(Ordering::Relaxed) {
+                            sleep(Duration::from_millis(200));
+                        }
 
-                    if current_slot.is_none() {
-                        let new_slot =
-                            get_next_slot(&blocktree, prev_slot.expect("prev_slot must exist"));
-                        if let Some(new_slot) = new_slot {
-                            // Reset the state
-                            current_slot = Some(new_slot);
-                            current_blob_index = 0;
-                            max_tick_height = bank
+                        if current_slot.is_none() {
+                            let new_slot =
+                                get_next_slot(&blocktree, prev_slot.expect("prev_slot must exist"));
+                            if let Some(new_slot) = new_slot {
+                                // Reset the state
+                                current_slot = Some(new_slot);
+                                current_blob_index = 0;
+                                max_tick_height = bank
+                                    .leader_scheduler
+                                    .read()
+                                    .unwrap()
+                                    .max_tick_height_for_slot(new_slot);
+                                println!(
+                                "updated to current_slot: {:?} leader_id: {} max_tick_height: {}",
+                                current_slot, leader_id, max_tick_height
+                            );
+                            } else {
+                                break;
+                            }
+                        }
+
+                        let slot = current_slot.unwrap();
+                        let mut entry_len = 0;
+                        if my_id != leader_id {
+                            let entries = {
+                                info!(
+                                    "replay getting slot_entries: {} {}",
+                                    slot, current_blob_index
+                                );
+                                if let Ok(entries) = blocktree.get_slot_entries(
+                                    slot,
+                                    current_blob_index,
+                                    Some(MAX_ENTRY_RECV_PER_ITER as u64),
+                                ) {
+                                    entries
+                                } else {
+                                    vec![]
+                                }
+                            };
+                            println!("entries: {:?}", entries);
+
+                            entry_len = entries.len();
+                            // Fetch the next entries from the database
+                            if !entries.is_empty() {
+                                let slot = current_slot.expect("current_slot must exist");
+
+                                // TODO: ledger provides from get_slot_entries()
+                                let base_slot = match slot {
+                                    0 => 0,
+                                    x => x - 1,
+                                };
+
+                                if let Err(e) = Self::process_entries(
+                                    entries,
+                                    slot,
+                                    base_slot,
+                                    &bank,
+                                    &cluster_info,
+                                    voting_keypair.as_ref(),
+                                    &ledger_entry_sender,
+                                    &mut current_blob_index,
+                                    &last_entry_id,
+                                ) {
+                                    error!("process_entries failed: {:?}", e);
+                                }
+                            }
+                        }
+
+                        let current_tick_height = bank
+                            .fork(slot)
+                            .expect("fork for current slot must exist")
+                            .tick_height();
+
+                        // we've reached the end of a slot, reset our state and check
+                        // for leader rotation
+                        println!(
+                            "{} max_tick_height: {} current_tick_height: {}",
+                            my_id, max_tick_height, current_tick_height
+                        );
+
+                        if max_tick_height == current_tick_height {
+                            if leader_id == my_id {
+                                let meta = blocktree
+                                    .meta(slot)
+                                    .unwrap()
+                                    .expect("meta has to exist for current_slot to be Some");
+                                // Ledger hasn't gotten last blob yet, break and wait
+                                // for a signal
+                                if meta.last_index == std::u64::MAX {
+                                    break;
+                                }
+                                let last_entry = blocktree
+                                    .get_slot_entries(slot, meta.last_index, Some(1))
+                                    .unwrap();
+                                *(last_entry_id.write().unwrap()) = last_entry[0].id;
+                                Self::merge_slot(slot, &bank);
+                            }
+
+                            // Check for leader rotation
+                            let next_leader_id = bank
                                 .leader_scheduler
                                 .read()
                                 .unwrap()
-                                .max_tick_height_for_slot(new_slot);
-                        }
-                        println!(
-                            "updated to current_slot: {:?} leader_id: {} max_tick_height: {}",
-                            current_slot, leader_id, max_tick_height
-                        );
-                    }
+                                .get_leader_for_slot(slot + 1)
+                                .expect("Scheduled leader should be calculated by this point");
 
-                    if current_slot.is_some() && my_id == leader_id {
-                        println!("skip validating current_slot: {:?}", current_slot);
-                        // skip validating this slot
-                        prev_slot = current_slot;
-                        current_slot = None;
-                    }
-
-                    let entries = {
-                        if let Some(slot) = current_slot {
-                            info!(
-                                "replay getting slot_entries: {} {}",
-                                slot, current_blob_index
+                            println!(
+                                "next_leader_id: {} for slot: {} leader_id_for_slot: {} my_id: {}",
+                                next_leader_id,
+                                slot + 1,
+                                leader_id,
+                                my_id
                             );
-                            if let Ok(entries) = blocktree.get_slot_entries(
-                                slot,
-                                current_blob_index,
-                                Some(MAX_ENTRY_RECV_PER_ITER as u64),
-                            ) {
-                                entries
-                            } else {
-                                vec![]
-                            }
-                        } else {
-                            vec![]
-                        }
-                    };
-                    println!("entries: {:?}", entries);
 
-                    let entry_len = entries.len();
-                    // Fetch the next entries from the database
-                    if !entries.is_empty() {
-                        let slot = current_slot.expect("current_slot must exist");
-
-                        // TODO: ledger provides from get_slot_entries()
-                        let base_slot = match slot {
-                            0 => 0,
-                            x => x - 1,
-                        };
-
-                        if let Err(e) = Self::process_entries(
-                            entries,
-                            slot,
-                            base_slot,
-                            &bank,
-                            &cluster_info,
-                            voting_keypair.as_ref(),
-                            &ledger_entry_sender,
-                            &mut current_blob_index,
-                            &last_entry_id,
-                        ) {
-                            error!("process_entries failed: {:?}", e);
-                        }
-                    }
-
-                    let slot = {
-                        if current_slot.is_some() {
-                            current_slot.unwrap()
-                        } else {
-                            prev_slot.unwrap()
-                        }
-                    };
-                    let current_tick_height = bank
-                        .fork(slot)
-                        .expect("fork for current slot must exist")
-                        .tick_height();
-
-                    // we've reached the end of a slot, reset our state and check
-                    // for leader rotation
-                    println!(
-                        "{} max_tick_height: {} current_tick_height: {}",
-                        my_id, max_tick_height, current_tick_height
-                    );
-
-                    if max_tick_height == current_tick_height {
-                        // Check for leader rotation
-                        let next_leader_id = bank
-                            .leader_scheduler
-                            .read()
-                            .unwrap()
-                            .get_leader_for_slot(slot + 1)
-                            .expect("Scheduled leader should be calculated by this point");
-
-                        trace!(
-                            "next_leader_id: {} leader_id_for_slot: {} my_id: {}",
-                            next_leader_id,
-                            leader_id,
-                            my_id
-                        );
-
-                        if leader_id != next_leader_id {
-                            if my_id == leader_id {
-                                // construct the leader's bank_state for it
+                            if my_id == leader_id || next_leader_id == my_id {
                                 bank.init_fork(slot + 1, &last_entry_id.read().unwrap(), slot)
                                     .expect("init fork");
 
@@ -354,18 +362,24 @@ impl ReplayStage {
                                 // TODO: Remove this soon once we boot the leader from ClusterInfo
                                 cluster_info.write().unwrap().set_leader(leader_id);
                             }
+
+                            // update slot enumeration state
+                            prev_slot = current_slot;
+                            current_slot = None;
+                            leader_id = next_leader_id;
+                            continue;
                         }
 
-                        // update slot enumeration state
-                        prev_slot = current_slot;
-                        current_slot = None;
-                        leader_id = next_leader_id;
-                        continue;
+                        // We received less than the number of entries we asked for,
+                        // so this means we've exhaused the entreis in the ledger for that
+                        // particular slot. Now break and wait for the ledger to get more
+                        // entries before continuing
+                        if entry_len < MAX_ENTRY_RECV_PER_ITER {
+                            break;
+                        }
                     }
-
                     // Block until there are updates again
-                    if entry_len < MAX_ENTRY_RECV_PER_ITER && ledger_signal_receiver.recv().is_err()
-                    {
+                    if ledger_signal_receiver.recv().is_err() {
                         // Update disconnected, exit
                         break;
                     }
@@ -398,6 +412,18 @@ impl ReplayStage {
     pub fn exit(&self) {
         self.exit.store(true, Ordering::Relaxed);
         let _ = self.ledger_signal_sender.send(true);
+    }
+
+    fn merge_slot(current_slot: u64, bank: &Bank) {
+        {
+            let bank_fork = bank
+                .fork(current_slot)
+                .expect("leader bank fork doesn't exist");
+            println!("freezing slot {}", current_slot);
+            bank_fork.head().freeze();
+        }
+
+        bank.merge_into_root(current_slot);
     }
 }
 
@@ -438,7 +464,7 @@ mod test {
     use std::sync::{Arc, RwLock};
 
     #[test]
-    #[ignore] // TODO: Fix this test to not send all entries in slot 0
+    #[ignore]
     pub fn test_replay_stage_leader_rotation_exit() {
         solana_logger::setup();
 
@@ -453,7 +479,7 @@ mod test {
 
         // Set up the LeaderScheduler so that my_id becomes the leader for epoch 1
         let ticks_per_slot = 16;
-        let leader_scheduler_config = LeaderSchedulerConfig::new(ticks_per_slot, 1, ticks_per_slot);
+        let leader_scheduler_config = LeaderSchedulerConfig::new(ticks_per_slot, 2, ticks_per_slot);
 
         // Create a ledger
         let (
@@ -527,7 +553,7 @@ mod test {
                 l_receiver,
             );
 
-            let total_entries_to_send = 2 * ticks_per_slot as usize - 2;
+            let total_entries_to_send = 2 * ticks_per_slot as usize;
             let mut entries_to_send = vec![];
             while entries_to_send.len() < total_entries_to_send {
                 let entry = next_entry_mut(&mut last_id, 1, vec![]);
@@ -546,7 +572,7 @@ mod test {
 
             info!("Wait for replay_stage to exit and check return value is correct");
             assert_eq!(
-                2 * ticks_per_slot - 1,
+                ticks_per_slot - 1,
                 rotation_receiver
                     .recv()
                     .expect("should have signaled leader rotation"),

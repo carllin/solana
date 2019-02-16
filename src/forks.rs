@@ -8,7 +8,7 @@ use solana_sdk::hash::Hash;
 use std;
 use std::result;
 
-pub const ROLLBACK_DEPTH: usize = 32usize;
+pub const ROLLBACK_DEPTH: usize = 1usize;
 
 /// Reasons a transaction might be rejected.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -87,6 +87,7 @@ impl Forks {
                 .ok_or(ForksError::UnknownFork)?;
             assert_eq!(leaf_id, leaf);
             let len = active_fork.len();
+            println!("active fork len: {}", len);
             if len > max_depth {
                 let old_root = active_fork[len - 1];
                 let new_root = active_fork[len - 2];
@@ -156,7 +157,7 @@ impl Forks {
     }
     /// Initialize the `current` fork that is a direct descendant of the `base` fork.
     pub fn init_fork(&mut self, current: u64, last_id: &Hash, base: u64) -> Result<()> {
-        info!("initing fork {} from {}", current, base);
+        println!("initing fork {} from {}", current, base);
         if let Some(state) = self.deltas.load(base) {
             if !state.0.frozen() {
                 return Err(ForksError::DeltaNotFrozen);

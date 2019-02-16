@@ -35,7 +35,6 @@ pub const NUM_THREADS: u32 = 10;
 /// Stores the stage's thread handle and output receiver.
 pub struct BankingStage {
     bank_thread_hdls: Vec<JoinHandle<UnprocessedPackets>>,
-    poh_waiter_hdl: JoinHandle<Result<()>>,
     compute_confirmation_service: ComputeLeaderConfirmationService,
 }
 
@@ -69,52 +68,6 @@ impl BankingStage {
         let poh_service = PohService::new(poh_recorder.clone(), config);
 
         let poh_exit = poh_service.poh_exit.clone();
-
-        // once poh_service finishes, we freeze the current slot and merge it into the root
-        let poh_waiter_hdl: JoinHandle<Result<()>> = {
-            let bank = bank.clone();
-            let to_validator_sender = to_validator_sender.clone();
-
-            Builder::new()
-                .name("solana-poh-waiter".to_string())
-                .spawn(move || {
-                    let poh_return_value = poh_service.join()?;
-
-                    match poh_return_value {
-                        Err(Error::PohRecorderError(PohRecorderError::MaxHeightReached)) => {
-                            trace!("leader for slot {} done", current_slot);
-                            if let Some(bank_fork) = bank.fork(current_slot) {
-                                trace!("freezing slot {}", current_slot);
-                                bank_fork.head().freeze();
-                                bank.merge_into_root(current_slot);
-
-                                let next_leader_id = bank
-                                    .leader_scheduler
-                                    .read()
-                                    .unwrap()
-                                    .get_leader_for_slot(current_slot + 1)
-                                    .expect("Scheduled leader should be calculated by this point");
-
-                                if leader_id == next_leader_id {
-                                    bank.init_fork(
-                                        current_slot + 1,
-                                        &bank.active_fork().last_id(),
-                                        current_slot,
-                                    )
-                                    .expect("init fork");
-                                }
-                            } else {
-                                trace!("current slot not found! {}", current_slot);
-                            }
-                            to_validator_sender.send(max_tick_height)?
-                        }
-                        _ => (),
-                    }
-
-                    poh_return_value
-                })
-                .unwrap()
-        };
 
         // Single thread to compute confirmation
         let compute_confirmation_service =
@@ -156,7 +109,6 @@ impl BankingStage {
         (
             Self {
                 bank_thread_hdls,
-                poh_waiter_hdl,
                 compute_confirmation_service,
             },
             entry_receiver,
@@ -305,7 +257,6 @@ impl Service for BankingStage {
             bank_thread_hdl.join()?;
         }
         self.compute_confirmation_service.join()?;
-        let _ = self.poh_waiter_hdl.join()?;
         Ok(())
     }
 }
@@ -502,7 +453,13 @@ mod tests {
             genesis_block.bootstrap_leader_id,
             &to_validator_sender,
         );
-        assert_eq!(to_validator_receiver.recv().unwrap(), max_tick_height);
+        loop {
+            let bank_tick_height = bank.active_fork().tick_height();
+            if bank_tick_height >= max_tick_height {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+        }
         drop(verified_sender);
         banking_stage.join().unwrap();
     }
@@ -529,10 +486,13 @@ mod tests {
         );
 
         // Wait for Poh recorder to hit max height
-        assert_eq!(
-            to_validator_receiver.recv().unwrap(),
-            leader_scheduler_config.ticks_per_slot
-        );
+        loop {
+            let bank_tick_height = bank.active_fork().tick_height();
+            if bank_tick_height >= leader_scheduler_config.ticks_per_slot {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+        }
 
         // Now send a transaction to the banking stage
         let transaction = SystemTransaction::new_account(

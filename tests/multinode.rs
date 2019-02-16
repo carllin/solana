@@ -6,6 +6,7 @@ use solana::blocktree::{
 use solana::client::mk_client;
 use solana::cluster_info::{Node, NodeInfo};
 use solana::entry::{reconstruct_entries_from_blobs, Entry};
+use solana::forks::ROLLBACK_DEPTH;
 use solana::fullnode::{new_bank_from_ledger, Fullnode, FullnodeConfig, FullnodeReturnType};
 use solana::gossip_service::{converge, make_listening_node};
 use solana::leader_scheduler::{make_active_set_entries, LeaderSchedulerConfig};
@@ -1041,10 +1042,11 @@ fn test_leader_validator_basic() {
     // Create the leader scheduler config
     let mut fullnode_config = FullnodeConfig::default();
     let ticks_per_slot = 5;
+    let slots_per_epoch = ROLLBACK_DEPTH as u64 + 1;
     fullnode_config.leader_scheduler_config = LeaderSchedulerConfig::new(
         ticks_per_slot,
-        32, // 1 slot per epoch
-        ticks_per_slot,
+        slots_per_epoch,
+        ticks_per_slot * slots_per_epoch - 1,
     );
     let blocktree_config = fullnode_config.ledger_config();
 
@@ -1126,38 +1128,44 @@ fn test_leader_validator_basic() {
     converge(&leader_info, 2);
 
     info!("Waiting for slot 0 -> slot 1: bootstrap leader and the validator rotate");
-    assert_eq!(
-        leader_rotation_receiver.recv().unwrap(),
-        (
-            FullnodeReturnType::LeaderToValidatorRotation,
-            ticks_per_slot,
-        )
-    );
+    for i in 0..slots_per_epoch {
+        if i != slots_per_epoch - 1 {
+            assert_eq!(
+                leader_rotation_receiver.recv().unwrap(),
+                (
+                    FullnodeReturnType::LeaderToLeaderRotation,
+                    (i + 1) * ticks_per_slot,
+                )
+            );
+        } else {
+            assert_eq!(
+                leader_rotation_receiver.recv().unwrap(),
+                (
+                    FullnodeReturnType::LeaderToValidatorRotation,
+                    slots_per_epoch * ticks_per_slot,
+                )
+            );
+        }
+    }
+
     assert_eq!(
         validator_rotation_receiver.recv().unwrap(),
         (
             FullnodeReturnType::ValidatorToLeaderRotation,
-            ticks_per_slot,
+            ticks_per_slot * slots_per_epoch,
         )
     );
 
-    info!("Waiting for slot 1 -> slot 2: validator remains the slot leader due to no votes");
-    assert_eq!(
-        validator_rotation_receiver.recv().unwrap(),
-        (
-            FullnodeReturnType::LeaderToLeaderRotation,
-            ticks_per_slot * 2,
-        )
-    );
-
-    info!("Waiting for slot 2 -> slot 3: validator remains the slot leader due to no votes");
-    assert_eq!(
-        validator_rotation_receiver.recv().unwrap(),
-        (
-            FullnodeReturnType::LeaderToLeaderRotation,
-            ticks_per_slot * 3,
-        )
-    );
+    info!("Validator remains the slot leader across epochs due to no votes");
+    for i in 1..2 * slots_per_epoch {
+        assert_eq!(
+            validator_rotation_receiver.recv().unwrap(),
+            (
+                FullnodeReturnType::LeaderToLeaderRotation,
+                ticks_per_slot * (i + slots_per_epoch),
+            )
+        );
+    }
 
     info!("Shut down");
     validator_exit();
