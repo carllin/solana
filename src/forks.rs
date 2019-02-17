@@ -75,6 +75,7 @@ impl Forks {
     /// root is the new root.
     /// Return the new root id.
     pub fn merge_into_root(&mut self, max_depth: usize, leaf: u64) -> Result<Option<u64>> {
+        println!("MERGE INTO ROOT");
         // `old` root, should have `root` as its fork_id
         // `new` root is a direct descendant of old and has new_root_id as its fork_id
         // new is merged into old
@@ -91,10 +92,12 @@ impl Forks {
             if len > max_depth {
                 let old_root = active_fork[len - 1];
                 let new_root = active_fork[len - 2];
+                println!("new_root id {}", new_root.1.fork_id());
                 if !new_root.1.frozen() {
                     trace!("new_root id {}", new_root.1.fork_id());
                     return Err(ForksError::DeltaNotFrozen);
                 }
+                println!("old id {}", old_root.1.fork_id());
                 if !old_root.1.frozen() {
                     trace!("old id {}", old_root.1.fork_id());
                     return Err(ForksError::DeltaNotFrozen);
