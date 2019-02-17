@@ -672,8 +672,7 @@ mod tests {
         bootstrap_leader_exit();
     }
 
-    #[test]
-    #[ignore] // #2691, because process_ledger() is a little dumb
+    #[test] // #2691, because process_ledger() is a little dumb
     fn test_wrong_role_transition() {
         solana_logger::setup();
 
@@ -757,7 +756,7 @@ mod tests {
         solana_logger::setup();
         // Make leader and validator node
         let ticks_per_slot = 10;
-        let slots_per_epoch = 4;
+        let slots_per_epoch = 2;
         let leader_keypair = Arc::new(Keypair::new());
         let validator_keypair = Arc::new(Keypair::new());
         let mut fullnode_config = FullnodeConfig::default();
@@ -779,7 +778,7 @@ mod tests {
         let leader_id = leader_keypair.pubkey();
         let validator_info = validator_node.info.clone();
 
-        info!("leader: {:?}", leader_id);
+        println!("leader: {:?}", leader_id);
         info!("validator: {:?}", validator_info.id);
 
         let voting_keypair = VotingKeypair::new_local(&validator_keypair);
@@ -818,7 +817,7 @@ mod tests {
             t_responder
         };
 
-        info!("waiting for validator to rotate into the leader role");
+        println!("waiting for validator to rotate into the leader role");
         let (rotation_sender, rotation_receiver) = channel();
         let validator_exit = validator.run(Some(rotation_sender));
         let rotation = rotation_receiver.recv().unwrap();

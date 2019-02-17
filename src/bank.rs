@@ -341,7 +341,10 @@ impl Bank {
                 } else {
                     break;
                 }
-                info!("updated to current_slot: {:?}", current_slot);
+                println!(
+                    "updated to current_slot: {:?}, prev_slot: {:?}",
+                    current_slot, prev_slot
+                );
             }
 
             let mut entries = {
@@ -391,6 +394,7 @@ impl Bank {
                 x => x - 1,
             };
 
+            println!("current_slot1s: {:?}", current_slot);
             if self.fork(current_slot.unwrap()).is_none() {
                 self.init_fork(current_slot.unwrap(), &entries[0].id, base_slot)
                     .expect("init fork");
@@ -400,26 +404,28 @@ impl Bank {
                 .unwrap()
                 .process_entries(&entries)?;
 
-            if num_ticks_left_in_slot == 0 {
-                let fork = self
-                    .fork(current_slot.unwrap())
-                    .expect("current bank state");
+            last_entry_id = entries.last().unwrap().id;
+            entry_height += entries.len() as u64;
 
-                trace!("freezing {} from replay_stage", current_slot.unwrap());
-                fork.head().freeze();
+            if num_ticks_left_in_slot == 0 {
+                {
+                    let fork = self
+                        .fork(current_slot.unwrap())
+                        .expect("current bank state");
+
+                    trace!("freezing {} from replay_stage", current_slot.unwrap());
+                    fork.head().freeze();
+                }
                 self.merge_into_root(current_slot.unwrap());
 
                 prev_slot = current_slot;
                 current_slot = None;
             }
 
-            last_entry_id = entries.last().unwrap().id;
-            entry_height += entries.len() as u64;
-
-            self.leader_scheduler.write().unwrap().update_tick_height(
+            /*self.leader_scheduler.write().unwrap().update_tick_height(
                 self.fork(current_slot.unwrap()).unwrap().tick_height(),
                 &self,
-            );
+            );*/
         }
         Ok((entry_height, last_entry_id))
     }
