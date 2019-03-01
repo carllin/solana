@@ -303,6 +303,7 @@ impl AccountsDB {
     }
 
     fn load(&self, fork: Fork, pubkey: &Pubkey, walk_back: bool) -> Option<Account> {
+        println!("load for epoch slot: {}", fork);
         let index = self.index_info.index.read().unwrap();
         if let Some(map) = index.get(pubkey) {
             let forks = map.0.read().unwrap();
@@ -315,6 +316,7 @@ impl AccountsDB {
                 }
                 let fork_info = self.fork_info.read().unwrap();
                 if let Some(info) = fork_info.get(&fork) {
+                    println!("info.parents len: {}", info.parents.len());
                     for parent_fork in info.parents.iter() {
                         if let Some((id, offset)) = forks.get(&parent_fork) {
                             return Some(self.get_account(*id, *offset));

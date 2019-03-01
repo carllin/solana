@@ -221,7 +221,7 @@ impl ReplayStage {
         };
         let mut last_entry_id = bank.last_id();
         let mut current_blob_index = 0;
-
+        let mut new_bank = None;
         // Start the replay stage loop
         let bank_forks = bank_forks.clone();
         let t_replay = Builder::new()
@@ -253,10 +253,10 @@ impl ReplayStage {
                         if new_slot.is_some() {
                             trace!("{} replay_stage: new_slot found: {:?}", my_id, new_slot);
                             // Reset the state
-                            bank = Self::create_and_set_working_bank(
+                            bank = Self::set_working_bank(
                                 new_slot.unwrap(),
                                 &bank_forks,
-                                &bank,
+                                new_bank.take().unwrap(),
                             );
                             current_slot = new_slot;
                             Self::reset_state(
@@ -343,13 +343,15 @@ impl ReplayStage {
 
                         let old_bank = bank.clone();
                         prev_slot = current_slot;
+                        new_bank = Some(Self::create_and_squash_new_bank(&old_bank));
                         if my_id == leader_id {
                             // Create new bank for next slot if we are the leader for that slot
-                            bank = Self::create_and_set_working_bank(
+                            bank = Self::set_working_bank(
                                 next_slot,
                                 &bank_forks,
-                                &old_bank,
+                                new_bank.take().unwrap(),
                             );
+                            println!("{} JUST SQUASHED", my_id);
                             current_slot = Some(next_slot);
                             Self::reset_state(
                                 bank.ticks_per_slot(),
@@ -410,8 +412,21 @@ impl ReplayStage {
         bank_forks: &Arc<RwLock<BankForks>>,
         parent: &Arc<Bank>,
     ) -> Arc<Bank> {
-        let new_bank = Bank::new_from_parent(&parent);
+        let new_bank = Self::create_and_squash_new_bank(parent);
+        Self::set_working_bank(slot, bank_forks, new_bank)
+    }
+
+    fn create_and_squash_new_bank(parent: &Arc<Bank>) -> Bank {
+        let new_bank = Bank::new_from_parent(parent);
         new_bank.squash();
+        new_bank
+    }
+
+    fn set_working_bank(
+        slot: u64,
+        bank_forks: &Arc<RwLock<BankForks>>,
+        new_bank: Bank,
+    ) -> Arc<Bank> {
         let mut bank_forks = bank_forks.write().unwrap();
         bank_forks.insert(slot, new_bank);
         bank_forks[slot].clone()
