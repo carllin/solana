@@ -188,7 +188,7 @@ impl ReplayStage {
                 .working_bank()
                 .vote_states(|_, _| true)
         );
-    
+
         let (forward_entry_sender, forward_entry_receiver) = channel();
         let (slot_full_sender, slot_full_receiver) = channel();
         let exit_ = exit.clone();
@@ -214,32 +214,10 @@ impl ReplayStage {
         );
         // Update Tpu and other fullnode components with the current bank
         let (mut current_slot, mut current_leader_id, mut max_tick_height_for_slot) = {
-            let slot = (tick_height + 1) / bank.ticks_per_slot();
+            let slot = tick_height / bank.ticks_per_slot();
             let first_tick_in_slot = slot * bank.ticks_per_slot();
 
             let leader_id = leader_schedule_utils::slot_leader_at(slot, &bank);
-
-            let old_bank = bank.clone();
-            // If the next slot is going to be a new slot and we're the leader for that slot,
-            // make a new working bank, set it as the working bank.
-            if tick_height + 1 == first_tick_in_slot {
-                if leader_id == my_id {
-                    bank = Self::create_and_set_working_bank(slot, &bank_forks, &old_bank);
-                }
-                current_blob_index = 0;
-            }
-
-            // Send a rotation notification back to Fullnode to initialize the TPU to the right
-            // state. After this point, the bank.tick_height() is live, which it means it can
-            // be updated by the TPU
-            to_leader_sender
-                .send(TvuRotationInfo {
-                    bank: bank.clone(),
-                    last_entry_id,
-                    slot,
-                    leader_id,
-                })
-                .unwrap();
 
             let max_tick_height_for_slot = first_tick_in_slot
                 + leader_schedule_utils::num_ticks_left_in_slot(&bank, first_tick_in_slot);
