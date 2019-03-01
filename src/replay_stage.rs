@@ -211,7 +211,6 @@ impl ReplayStage {
             let first_tick_in_slot = slot * bank.ticks_per_slot();
 
             let leader_id = leader_schedule_utils::slot_leader_at(slot, &bank);
-            trace!("node {:?} scheduled as leader for slot {}", leader_id, slot,);
 
             let old_bank = bank.clone();
             // If the next slot is going to be a new slot and we're the leader for that slot,
@@ -397,7 +396,7 @@ impl ReplayStage {
                             my_id,
                             leader_id,
                             slot,
-                            bank.id()
+                            bank.slot()
                         );
                         to_leader_sender
                             .send(TvuRotationInfo {

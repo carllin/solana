@@ -280,7 +280,7 @@ impl Fullnode {
         );
         println!(
             "\n{:?} my vote states for current epoch are {:?}",
-            rotation_info.bank.id(),
+            rotation_info.bank.slot(),
             staking_utils::node_stakes_at_epoch(
                 rotation_info.bank.as_ref(),
                 rotation_info.bank.epoch_height()

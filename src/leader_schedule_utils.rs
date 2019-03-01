@@ -7,7 +7,7 @@ use solana_sdk::pubkey::Pubkey;
 fn leader_schedule(epoch_height: u64, bank: &Bank) -> LeaderSchedule {
     println!(
         "leader schedule asking for slots at fork id {:?}",
-        bank.id()
+        bank.slot()
     );
     let stakes = staking_utils::node_stakes_at_epoch(bank, epoch_height);
     let mut seed = [0u8; 32];
