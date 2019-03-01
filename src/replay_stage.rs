@@ -10,6 +10,7 @@ use crate::packet::BlobError;
 use crate::result::{Error, Result};
 use crate::rpc_subscriptions::RpcSubscriptions;
 use crate::service::Service;
+use crate::staking_utils;
 use crate::tvu::{TvuRotationInfo, TvuRotationSender};
 use solana_metrics::counter::Counter;
 use solana_metrics::{influxdb, submit};
@@ -187,6 +188,7 @@ impl ReplayStage {
                 .working_bank()
                 .vote_states(|_, _| true)
         );
+    
         let (forward_entry_sender, forward_entry_receiver) = channel();
         let (slot_full_sender, slot_full_receiver) = channel();
         let exit_ = exit.clone();
@@ -205,6 +207,11 @@ impl ReplayStage {
             )
         };
 
+        println!(
+            "{}, before stakes: {:?}",
+            my_id,
+            staking_utils::node_stakes_at_epoch(bank.as_ref(), bank.epoch_height(),)
+        );
         // Update Tpu and other fullnode components with the current bank
         let (mut current_slot, mut current_leader_id, mut max_tick_height_for_slot) = {
             let slot = (tick_height + 1) / bank.ticks_per_slot();
@@ -240,6 +247,11 @@ impl ReplayStage {
             (Some(slot), leader_id, max_tick_height_for_slot)
         };
 
+        println!(
+            "{}, after stakes: {:?}",
+            my_id,
+            staking_utils::node_stakes_at_epoch(bank.as_ref(), bank.epoch_height(),)
+        );
         // Start the replay stage loop
         let bank_forks = bank_forks.clone();
         let t_replay = Builder::new()
