@@ -178,6 +178,15 @@ impl ReplayStage {
     where
         T: 'static + KeypairUtil + Send + Sync,
     {
+        println!(
+            "{:?} vote states are {:?}",
+            my_id,
+            bank_forks
+                .read()
+                .unwrap()
+                .working_bank()
+                .vote_states(|_, _| true)
+        );
         let (forward_entry_sender, forward_entry_receiver) = channel();
         let (slot_full_sender, slot_full_receiver) = channel();
         let exit_ = exit.clone();
@@ -383,6 +392,13 @@ impl ReplayStage {
                         );
                         // Always send rotation signal so that other services like
                         // RPC can be made aware of last slot's bank
+                        println!(
+                            "{:?} is going to rotate to {:?} for slot {:?} for fork {:?}",
+                            my_id,
+                            leader_id,
+                            slot,
+                            bank.id()
+                        );
                         to_leader_sender
                             .send(TvuRotationInfo {
                                 bank: bank.clone(),

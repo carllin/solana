@@ -5,6 +5,10 @@ use solana_sdk::pubkey::Pubkey;
 
 /// Return the leader schedule for the given epoch.
 fn leader_schedule(epoch_height: u64, bank: &Bank) -> LeaderSchedule {
+    println!(
+        "leader schedule asking for slots at fork id {:?}",
+        bank.id()
+    );
     let stakes = staking_utils::node_stakes_at_epoch(bank, epoch_height);
     let mut seed = [0u8; 32];
     seed[0..8].copy_from_slice(&epoch_height.to_le_bytes());
@@ -40,6 +44,7 @@ where
         bank.epoch_height(),
         bank.slots_per_epoch(),
     );
+    println!("{:?}", slot_index);
     let leader_schedule = leader_schedule(epoch_height, bank);
     leader_schedule[slot_index as usize]
 }

@@ -1204,7 +1204,7 @@ fn test_dropped_handoff_recovery() {
 fn test_full_leader_validator_network() {
     solana_logger::setup();
     // The number of validators
-    const N: usize = 2;
+    const N: usize = 1;
 
     // Create the common leader scheduling configuration
     let _slots_per_epoch = (N + 1) as u64;
@@ -1225,7 +1225,7 @@ fn test_full_leader_validator_network() {
     }
 
     let (mut genesis_block, mint_keypair) =
-        GenesisBlock::new_with_leader(10_000, bootstrap_leader_info.id, 500);
+        GenesisBlock::new_with_leader(10_000, bootstrap_leader_info.id, 99);
     genesis_block.ticks_per_slot = ticks_per_slot;
 
     // Make a common mint and a genesis entry for both leader + validator's ledgers

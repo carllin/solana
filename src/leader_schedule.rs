@@ -3,6 +3,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaChaRng;
 use solana_sdk::pubkey::Pubkey;
 use std::ops::Index;
+use std::thread;
 
 /// Stake-weighted leader schedule for one epoch.
 #[derive(Debug, PartialEq)]
@@ -14,7 +15,10 @@ impl LeaderSchedule {
     // Note: passing in zero stakers will cause a panic.
     pub fn new(ids_and_stakes: &[(Pubkey, u64)], seed: [u8; 32], len: u64) -> Self {
         let (ids, stakes): (Vec<_>, Vec<_>) = ids_and_stakes.iter().cloned().unzip();
+        println!("{:?} seed being used is {:?}", thread::current().id(), seed);
+        println!("my id's and stakes are {:?}", ids_and_stakes);
         let rng = &mut ChaChaRng::from_seed(seed);
+        println!("my rng {:?}", rng);
         let weighted_index = WeightedIndex::new(stakes).unwrap();
         let slot_leaders = (0..len).map(|_| ids[weighted_index.sample(rng)]).collect();
         Self { slot_leaders }

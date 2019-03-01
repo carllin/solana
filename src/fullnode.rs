@@ -15,6 +15,7 @@ use crate::rpc_pubsub_service::PubSubService;
 use crate::rpc_service::JsonRpcService;
 use crate::rpc_subscriptions::RpcSubscriptions;
 use crate::service::Service;
+use crate::staking_utils;
 use crate::storage_stage::StorageState;
 use crate::tpu::Tpu;
 use crate::tvu::{Sockets, Tvu, TvuRotationInfo, TvuRotationReceiver};
@@ -269,13 +270,23 @@ impl Fullnode {
     }
 
     fn rotate(&mut self, rotation_info: TvuRotationInfo) -> FullnodeReturnType {
-        trace!(
+        print!(
             "{:?}: rotate for slot={} to leader={:?} using last_entry_id={:?}",
-            self.id,
-            rotation_info.slot,
-            rotation_info.leader_id,
-            rotation_info.last_entry_id,
+            self.id, rotation_info.slot, rotation_info.leader_id, rotation_info.last_entry_id,
         );
+        println!(
+            "\nmy vote states are {:?}",
+            &rotation_info.bank.vote_states(|_, _| true)
+        );
+        println!(
+            "\n{:?} my vote states for current epoch are {:?}",
+            rotation_info.bank.id(),
+            staking_utils::node_stakes_at_epoch(
+                rotation_info.bank.as_ref(),
+                rotation_info.bank.epoch_height()
+            )
+        );
+
         let was_leader = leader_schedule_utils::slot_leader(&rotation_info.bank) == self.id;
 
         if let Some(ref mut rpc_service) = self.rpc_service {
@@ -464,13 +475,8 @@ pub fn make_active_set_entries(
     let new_vote_account_tx =
         VoteTransaction::fund_staking_account(active_keypair, vote_account_id, *last_id, 1, 1);
     let new_vote_account_entry = next_entry_mut(&mut last_entry_id, 1, vec![new_vote_account_tx]);
-
-    // 3) Create vote entry
-    let vote_tx = VoteTransaction::new_vote(&voting_keypair, slot_height_to_vote_on, *last_id, 0);
-    let vote_entry = next_entry_mut(&mut last_entry_id, 1, vec![vote_tx]);
-
     // 4) Create `num_ending_ticks` empty ticks
-    let mut entries = vec![transfer_entry, new_vote_account_entry, vote_entry];
+    let mut entries = vec![transfer_entry, new_vote_account_entry];
     let empty_ticks = create_ticks(num_ending_ticks, last_entry_id);
     entries.extend(empty_ticks);
 

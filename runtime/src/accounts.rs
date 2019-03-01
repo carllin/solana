@@ -256,6 +256,7 @@ impl AccountsDB {
                 if let Some(account) = self.load(fork, pubkey, true) {
                     Some((*pubkey, account))
                 } else {
+                    println!("I GOT FILTREREDEDED HELP {:?}", pubkey);
                     None
                 }
             })
@@ -318,11 +319,19 @@ impl AccountsDB {
                     for parent_fork in info.parents.iter() {
                         if let Some((id, offset)) = forks.get(&parent_fork) {
                             return Some(self.get_account(*id, *offset));
+                        } else {
+                            println!("DIDNT FIND IT!");
                         }
                     }
+                    println!("PARENT LEN: {}", info.parents.iter().len());
+                } else {
+                    println!("didn't get fork info for {:?}", fork);
                 }
             }
+        } else {
+            println!("Didn't find my account map for {:?}", pubkey);
         }
+
         None
     }
 
@@ -636,7 +645,7 @@ impl AccountsDB {
     fn remove_parents(&self, fork: Fork) -> Vec<Fork> {
         let mut info = self.fork_info.write().unwrap();
         let fork_info = info.get_mut(&fork).unwrap();
-        fork_info.parents.split_off(0)
+        fork_info.parents.clone()
     }
 
     fn is_squashed(&self, fork: Fork) -> bool {
