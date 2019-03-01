@@ -317,6 +317,7 @@ impl AccountsDB {
                 let fork_info = self.fork_info.read().unwrap();
                 if let Some(info) = fork_info.get(&fork) {
                     for parent_fork in info.parents.iter() {
+                        println!("info.parents: {:?}", info.parents);
                         if let Some((id, offset)) = forks.get(&parent_fork) {
                             return Some(self.get_account(*id, *offset));
                         } else {

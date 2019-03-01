@@ -1212,7 +1212,7 @@ fn test_full_leader_validator_network() {
     let fullnode_config = FullnodeConfig::default();
     // Create the bootstrap leader node information
     let bootstrap_leader_keypair = Arc::new(Keypair::new());
-    info!("bootstrap leader: {:?}", bootstrap_leader_keypair.pubkey());
+    println!("bootstrap leader: {:?}", bootstrap_leader_keypair.pubkey());
     let bootstrap_leader_node = Node::new_localhost_with_pubkey(bootstrap_leader_keypair.pubkey());
     let bootstrap_leader_info = bootstrap_leader_node.info.clone();
 

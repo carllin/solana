@@ -270,10 +270,10 @@ impl Fullnode {
     }
 
     fn rotate(&mut self, rotation_info: TvuRotationInfo) -> FullnodeReturnType {
-        print!(
+        println!(
             "{:?}: rotate for slot={} to leader={:?} using last_entry_id={:?}",
             self.id, rotation_info.slot, rotation_info.leader_id, rotation_info.last_entry_id,
-        );
+        );;
         println!(
             "\nmy vote states are {:?}",
             &rotation_info.bank.vote_states(|_, _| true)

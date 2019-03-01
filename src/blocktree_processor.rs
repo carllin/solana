@@ -204,7 +204,7 @@ pub fn process_blocktree(
         pending_slots.extend(meta.next_slots.iter().map(|next_slot| {
             let leader = leader_schedule_utils::slot_leader_at(*next_slot, &bank);
             let child_bank = Bank::new_from_parent_and_id(&bank, leader, *next_slot);
-            trace!("Add child bank for slot={}", next_slot);
+            println!("Add child bank for slot={}", next_slot);
             bank_forks.insert(*next_slot, child_bank);
             (*next_slot, entry_height, last_entry_id)
         }));
