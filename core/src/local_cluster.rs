@@ -88,7 +88,7 @@ impl LocalCluster {
                 &mut client,
                 voting_keypair.pubkey(),
                 &validator_keypair,
-                1,
+                lamports_per_node - 1,
             )
             .unwrap();
             let validator_server = Fullnode::new(
