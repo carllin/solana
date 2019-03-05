@@ -24,6 +24,7 @@ pub enum PohRecorderError {
     InvalidCallingObject,
     MaxHeightReached,
     MinHeightNotReached,
+    ResetAttemptedWhileTpuRunning,
 }
 
 pub type WorkingBankEntries = (Arc<Bank>, Vec<(Entry, u64)>);
@@ -60,7 +61,13 @@ impl PohRecorder {
         self.poh.tick_height
     }
     // synchronize PoH with a bank
-    pub fn reset(&mut self, tick_height: u64, blockhash: Hash) {
+    pub fn reset(&mut self, tick_height: u64, blockhash: Hash) -> Result<()> {
+        if self.working_bank.is_some() {
+            return Err(Error::PohRecorderError(
+                PohRecorderError::ResetAttemptedWhileTpuRunning,
+            ));
+        }
+
         let existing = self.tick_cache.iter().any(|(entry, entry_tick_height)| {
             if entry.hash == blockhash {
                 assert_eq!(*entry_tick_height, tick_height);
@@ -72,7 +79,7 @@ impl PohRecorder {
                 "reset skipped for: {},{}",
                 self.poh.hash, self.poh.tick_height
             );
-            return;
+            return Ok(());
         }
         let mut cache = vec![];
         info!(
@@ -81,6 +88,7 @@ impl PohRecorder {
         );
         std::mem::swap(&mut cache, &mut self.tick_cache);
         self.poh = Poh::new(blockhash, tick_height);
+        Ok(())
     }
 
     pub fn set_working_bank(&mut self, working_bank: WorkingBank) {
@@ -440,7 +448,9 @@ mod tests {
         poh_recorder.tick();
         poh_recorder.tick();
         assert_eq!(poh_recorder.tick_cache.len(), 2);
-        poh_recorder.reset(poh_recorder.poh.tick_height, poh_recorder.poh.hash);
+        poh_recorder
+            .reset(poh_recorder.poh.tick_height, poh_recorder.poh.hash)
+            .unwrap();
         assert_eq!(poh_recorder.tick_cache.len(), 2);
     }
 
@@ -450,15 +460,19 @@ mod tests {
         poh_recorder.tick();
         poh_recorder.tick();
         assert_eq!(poh_recorder.tick_cache.len(), 2);
-        poh_recorder.reset(
-            poh_recorder.tick_cache[0].1,
-            poh_recorder.tick_cache[0].0.hash,
-        );
+        poh_recorder
+            .reset(
+                poh_recorder.tick_cache[0].1,
+                poh_recorder.tick_cache[0].0.hash,
+            )
+            .unwrap();
         assert_eq!(poh_recorder.tick_cache.len(), 2);
-        poh_recorder.reset(
-            poh_recorder.tick_cache[1].1,
-            poh_recorder.tick_cache[1].0.hash,
-        );
+        poh_recorder
+            .reset(
+                poh_recorder.tick_cache[1].1,
+                poh_recorder.tick_cache[1].0.hash,
+            )
+            .unwrap();
         assert_eq!(poh_recorder.tick_cache.len(), 2);
     }
 
@@ -470,10 +484,12 @@ mod tests {
         poh_recorder.tick();
         assert_eq!(poh_recorder.tick_cache.len(), 2);
         //mixed up heights
-        poh_recorder.reset(
-            poh_recorder.tick_cache[0].1,
-            poh_recorder.tick_cache[1].0.hash,
-        );
+        poh_recorder
+            .reset(
+                poh_recorder.tick_cache[0].1,
+                poh_recorder.tick_cache[1].0.hash,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -484,9 +500,23 @@ mod tests {
         poh_recorder.tick();
         assert_eq!(poh_recorder.tick_cache.len(), 3);
         assert_eq!(poh_recorder.poh.tick_height, 3);
-        poh_recorder.reset(1, hash(b"hello"));
+        poh_recorder.reset(1, hash(b"hello")).unwrap();
         assert_eq!(poh_recorder.tick_cache.len(), 0);
         poh_recorder.tick();
         assert_eq!(poh_recorder.poh.tick_height, 2);
+    }
+
+    #[test]
+    fn test_reset_working_bank_fails() {
+        let (genesis_block, _mint_keypair) = GenesisBlock::new(2);
+        let bank = Arc::new(Bank::new(&genesis_block));
+        let (mut poh_recorder, _entry_receiver) = PohRecorder::new(0, Hash::default());
+        let working_bank = WorkingBank {
+            bank,
+            min_tick_height: 2,
+            max_tick_height: 3,
+        };
+        poh_recorder.set_working_bank(working_bank);
+        assert!(poh_recorder.reset(1, hash(b"hello")).is_err());
     }
 }

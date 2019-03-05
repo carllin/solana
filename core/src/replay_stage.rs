@@ -93,7 +93,7 @@ impl ReplayStage {
                     Self::generate_new_bank_forks(&blocktree, &mut bank_forks.write().unwrap());
                     let active_banks = bank_forks.read().unwrap().active_banks();
                     trace!("active banks {:?}", active_banks);
-                    let mut votable: Vec<u64> = vec![];
+                    let mut is_tpu_running = false;
                     for bank_id in &active_banks {
                         let bank = bank_forks.read().unwrap().get(*bank_id).unwrap().clone();
                         if !Self::is_tpu(&bank, my_id) {
@@ -107,26 +107,42 @@ impl ReplayStage {
                         let max_tick_height = (*bank_id + 1) * bank.ticks_per_slot() - 1;
                         if bank.tick_height() == max_tick_height {
                             bank.freeze();
+                            progress.entry(bank.slot()).and_modify(|e| e.2 = true);
                             info!("bank frozen {}", bank.slot());
-                            votable.push(*bank_id);
-                            progress.remove(bank_id);
                             let id = leader_schedule_utils::slot_leader_at(bank.slot(), &bank);
                             if let Err(e) = slot_full_sender.send((bank.slot(), id)) {
                                 info!("{} slot_full alert failed: {:?}", my_id, e);
                             }
                         }
+
+                        if Self::is_tpu(&bank, my_id) && !bank.is_frozen() {
+                            is_tpu_running = true;
+                        }
                     }
                     // TODO: fork selection
                     // vote on the latest one for now
-                    votable.sort();
+                    let vote = if !is_tpu_running {
+                        // Pick one of the frozen banks to vote on, clear all the other frozen
+                        // banks from the progress map
+                        let mut votable = Self::take_eligible_vote_banks(&mut progress);
+                        Self::select_vote(&mut votable)
+                    } else {
+                        None
+                    };
 
-                    if let Some(latest_slot_vote) = votable.last() {
+                    if let Some(latest_slot_vote) = vote {
                         let parent = bank_forks
                             .read()
                             .unwrap()
-                            .get(*latest_slot_vote)
+                            .get(latest_slot_vote)
                             .unwrap()
                             .clone();
+
+                        poh_recorder
+                            .lock()
+                            .unwrap()
+                            .reset(parent.tick_height(), parent.last_blockhash())
+                            .expect("No working bank exists when tpu isn't running");
 
                         subscriptions.notify_subscribers(&parent);
 
@@ -134,19 +150,18 @@ impl ReplayStage {
                             let keypair = voting_keypair.as_ref();
                             let vote = VoteTransaction::new_vote(
                                 keypair,
-                                *latest_slot_vote,
+                                latest_slot_vote,
                                 parent.last_blockhash(),
                                 0,
                             );
                             cluster_info.write().unwrap().push_vote(vote);
                         }
-                        poh_recorder
-                            .lock()
-                            .unwrap()
-                            .reset(parent.tick_height(), parent.last_blockhash());
                     }
 
-                    Self::start_leader(my_id, &bank_forks, &poh_recorder, &cluster_info);
+                    if !is_tpu_running {
+                        Self::start_leader(my_id, &bank_forks, &poh_recorder, &cluster_info);
+                    }
+
                     inc_new_counter_info!(
                         "replicate_stage-duration",
                         duration_as_ms(&now.elapsed()) as usize
@@ -217,7 +232,7 @@ impl ReplayStage {
     pub fn replay_blocktree_into_bank(
         bank: &Bank,
         blocktree: &Blocktree,
-        progress: &mut HashMap<u64, (Hash, usize)>,
+        progress: &mut HashMap<u64, (Hash, usize, bool)>,
         forward_entry_sender: &EntrySender,
     ) -> result::Result<()> {
         let (entries, num) = Self::load_blocktree_entries(bank, blocktree, progress)?;
@@ -238,25 +253,27 @@ impl ReplayStage {
     pub fn load_blocktree_entries(
         bank: &Bank,
         blocktree: &Blocktree,
-        progress: &mut HashMap<u64, (Hash, usize)>,
+        progress: &mut HashMap<u64, (Hash, usize, bool)>,
     ) -> result::Result<(Vec<Entry>, usize)> {
         let bank_id = bank.slot();
-        let bank_progress = &mut progress
-            .entry(bank_id)
-            .or_insert((bank.last_blockhash(), 0));
+        let bank_progress =
+            &mut progress
+                .entry(bank_id)
+                .or_insert((bank.last_blockhash(), 0, false));
         blocktree.get_slot_entries_with_blob_count(bank_id, bank_progress.1 as u64, None)
     }
 
     pub fn replay_entries_into_bank(
         bank: &Bank,
         entries: Vec<Entry>,
-        progress: &mut HashMap<u64, (Hash, usize)>,
+        progress: &mut HashMap<u64, (Hash, usize, bool)>,
         forward_entry_sender: &EntrySender,
         num: usize,
     ) -> result::Result<()> {
-        let bank_progress = &mut progress
-            .entry(bank.slot())
-            .or_insert((bank.last_blockhash(), 0));
+        let bank_progress =
+            &mut progress
+                .entry(bank.slot())
+                .or_insert((bank.last_blockhash(), 0, false));
         let result = Self::verify_and_process_entries(&bank, &entries, &bank_progress.0);
         bank_progress.1 += num;
         if let Some(last_entry) = entries.last() {
@@ -299,6 +316,22 @@ impl ReplayStage {
         blocktree_processor::process_entries(bank, entries)?;
 
         Ok(())
+    }
+
+    fn select_vote(votable: &mut Vec<u64>) -> Option<u64> {
+        votable.sort();
+        votable.last().cloned()
+    }
+
+    fn take_eligible_vote_banks(progress: &mut HashMap<u64, (Hash, usize, bool)>) -> Vec<u64> {
+        let mut eligible_votes = vec![];
+        progress.retain(|slot, (_, _, is_votable)| {
+            if *is_votable {
+                eligible_votes.push(*slot);
+            }
+            !*is_votable
+        });
+        eligible_votes
     }
 
     fn generate_new_bank_forks(blocktree: &Blocktree, forks: &mut BankForks) {
