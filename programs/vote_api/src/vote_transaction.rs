@@ -27,9 +27,9 @@ impl VoteTransaction {
     }
 
     /// Fund or create the staking account with tokens
-    pub fn new_account(
-        from_keypair: &Keypair,
-        voter_id: Pubkey,
+    pub fn new_account<T: KeypairUtil>(
+        from_keypair: &T,
+        vote_account_id: Pubkey,
         recent_blockhash: Hash,
         num_tokens: u64,
         fee: u64,
@@ -39,12 +39,12 @@ impl VoteTransaction {
         TransactionBuilder::new(fee)
             .push(SystemInstruction::new_program_account(
                 from_id,
-                voter_id,
+                vote_account_id,
                 num_tokens,
                 space,
                 id(),
             ))
-            .push(VoteInstruction::new_initialize_account(voter_id))
+            .push(VoteInstruction::new_initialize_account(vote_account_id))
             .sign(&[from_keypair], recent_blockhash)
     }
 
@@ -110,6 +110,7 @@ impl VoteTransaction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use solana_sdk::signature::{Keypair, KeypairUtil};
 
     #[test]
     fn test_get_votes() {

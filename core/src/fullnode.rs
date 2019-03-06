@@ -351,7 +351,7 @@ pub fn make_active_set_entries(
     let vote_account_id = voting_keypair.pubkey();
 
     let new_vote_account_tx = VoteTransaction::new_account(
-        active_keypair,
+        &**active_keypair,
         vote_account_id,
         *blockhash,
         stake.saturating_sub(2),

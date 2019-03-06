@@ -136,7 +136,7 @@ impl LocalCluster {
             *dest_pubkey
         );
         client
-            .retry_transfer(&source_keypair, &mut tx, 5)
+            .retry_transfer(source_keypair, &mut tx, 5)
             .expect("client transfer");
         retry_get_balance(client, dest_pubkey, Some(lamports)).expect("get balance")
     }
@@ -153,7 +153,7 @@ impl LocalCluster {
         if client.poll_get_balance(&vote_account_pubkey).unwrap_or(0) == 0 {
             // 1) Create vote account
             let mut transaction = VoteTransaction::new_account(
-                from_account,
+                &**from_account,
                 vote_account_pubkey,
                 client.get_recent_blockhash(),
                 amount,
@@ -161,7 +161,7 @@ impl LocalCluster {
             );
 
             client
-                .retry_transfer(&from_account, &mut transaction, 5)
+                .retry_transfer(&**from_account, &mut transaction, 5)
                 .expect("client transfer");
             retry_get_balance(client, &vote_account_pubkey, Some(amount)).expect("get balance");
 
@@ -174,7 +174,7 @@ impl LocalCluster {
             );
 
             client
-                .retry_transfer(&vote_account, &mut transaction, 5)
+                .retry_transfer(vote_account, &mut transaction, 5)
                 .expect("client transfer 2");
         }
 
