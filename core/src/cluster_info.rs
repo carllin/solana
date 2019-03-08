@@ -1543,6 +1543,7 @@ mod tests {
                 socketaddr!("127.0.0.1:1237"),
                 socketaddr!("127.0.0.1:1238"),
                 socketaddr!("127.0.0.1:1239"),
+                socketaddr!("127.0.0.1:1240"),
                 0,
             );
             let rv = ClusterInfo::run_window_request(
