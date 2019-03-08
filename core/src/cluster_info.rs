@@ -1230,7 +1230,17 @@ impl ClusterInfo {
         let (_, gossip_socket) = bind_in_range(FULLNODE_PORT_RANGE).unwrap();
         let daddr = socketaddr_any!();
 
-        let node = NodeInfo::new(*id, daddr, daddr, daddr, daddr, daddr, daddr, timestamp());
+        let node = NodeInfo::new(
+            *id,
+            daddr,
+            daddr,
+            daddr,
+            daddr,
+            daddr,
+            daddr,
+            daddr,
+            timestamp(),
+        );
         (node, gossip_socket)
     }
 }
@@ -1289,6 +1299,7 @@ pub struct Sockets {
     pub gossip: UdpSocket,
     pub tvu: Vec<UdpSocket>,
     pub tpu: Vec<UdpSocket>,
+    pub forwarder: Vec<UdpSocket>,
     pub broadcast: UdpSocket,
     pub repair: UdpSocket,
     pub retransmit: UdpSocket,
@@ -1309,6 +1320,7 @@ impl Node {
         let tpu = UdpSocket::bind("127.0.0.1:0").unwrap();
         let gossip = UdpSocket::bind("127.0.0.1:0").unwrap();
         let tvu = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let forwarder = UdpSocket::bind("127.0.0.1:0").unwrap();
         let repair = UdpSocket::bind("127.0.0.1:0").unwrap();
         let rpc_port = find_available_port_in_range((1024, 65535)).unwrap();
         let rpc_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), rpc_port);
@@ -1324,6 +1336,7 @@ impl Node {
             gossip.local_addr().unwrap(),
             tvu.local_addr().unwrap(),
             tpu.local_addr().unwrap(),
+            forwarder.local_addr().unwrap(),
             storage.local_addr().unwrap(),
             rpc_addr,
             rpc_pubsub_addr,
@@ -1335,6 +1348,7 @@ impl Node {
                 gossip,
                 tvu: vec![tvu],
                 tpu: vec![tpu],
+                forwarder: vec![forwarder],
                 broadcast,
                 repair,
                 retransmit,
@@ -1363,6 +1377,9 @@ impl Node {
         let (tpu_port, tpu_sockets) =
             multi_bind_in_range(FULLNODE_PORT_RANGE, 32).expect("tpu multi_bind");
 
+        let (forwarder_port, forwarder_sockets) =
+            multi_bind_in_range(FULLNODE_PORT_RANGE, 8).expect("tpu multi_bind");
+
         let (_, repair) = bind();
         let (_, broadcast) = bind();
         let (_, retransmit) = bind();
@@ -1373,6 +1390,7 @@ impl Node {
             SocketAddr::new(gossip_addr.ip(), gossip_port),
             SocketAddr::new(gossip_addr.ip(), tvu_port),
             SocketAddr::new(gossip_addr.ip(), tpu_port),
+            SocketAddr::new(gossip_addr.ip(), forwarder_port),
             SocketAddr::new(gossip_addr.ip(), storage_port),
             SocketAddr::new(gossip_addr.ip(), RPC_PORT),
             SocketAddr::new(gossip_addr.ip(), RPC_PORT + 1),
@@ -1386,6 +1404,7 @@ impl Node {
                 gossip,
                 tvu: tvu_sockets,
                 tpu: tpu_sockets,
+                forwarder: forwarder_sockets,
                 broadcast,
                 repair,
                 retransmit,
@@ -1473,6 +1492,7 @@ mod tests {
             socketaddr!([127, 0, 0, 1], 1237),
             socketaddr!([127, 0, 0, 1], 1238),
             socketaddr!([127, 0, 0, 1], 1239),
+            socketaddr!([127, 0, 0, 1], 1240),
             0,
         );
         cluster_info.insert_info(nxt.clone());
@@ -1489,6 +1509,7 @@ mod tests {
             socketaddr!([127, 0, 0, 1], 1237),
             socketaddr!([127, 0, 0, 1], 1238),
             socketaddr!([127, 0, 0, 1], 1239),
+            socketaddr!([127, 0, 0, 1], 1240),
             0,
         );
         cluster_info.insert_info(nxt);

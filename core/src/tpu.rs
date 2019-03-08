@@ -33,6 +33,7 @@ impl Tpu {
         poh_recorder: &Arc<Mutex<PohRecorder>>,
         entry_receiver: Receiver<WorkingBankEntries>,
         transactions_sockets: Vec<UdpSocket>,
+        forwarder_sockets: Vec<UdpSocket>,
         broadcast_socket: UdpSocket,
         sigverify_disabled: bool,
         blocktree: &Arc<Blocktree>,
@@ -41,8 +42,12 @@ impl Tpu {
         cluster_info.write().unwrap().set_leader(id);
 
         let (packet_sender, packet_receiver) = channel();
-        let fetch_stage =
-            FetchStage::new_with_sender(transactions_sockets, &exit, &packet_sender.clone());
+        let fetch_stage = FetchStage::new_with_sender(
+            transactions_sockets,
+            forwarder_sockets,
+            &exit,
+            &packet_sender.clone(),
+        );
         let cluster_info_vote_listener =
             ClusterInfoVoteListener::new(&exit, cluster_info.clone(), packet_sender);
 
