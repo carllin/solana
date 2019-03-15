@@ -287,15 +287,24 @@ impl BankingStage {
         poh: &Arc<Mutex<PohRecorder>>,
     ) -> Result<(usize)> {
         let mut chunk_start = 0;
+        let mut total_will_fit_time = Duration::new(0, 0);
+        let mut total_process_and_record_time = Duration::new(0, 0);
+        let mut num_chunks = 0;
         while chunk_start != transactions.len() {
+            num_chunks += 1;
+            let start = Instant::now();
             let chunk_end = chunk_start + Entry::num_will_fit(&transactions[chunk_start..]);
+            total_will_fit_time += start.elapsed();
 
+            let start = Instant::now();
             let result = Self::process_and_record_transactions(
                 bank,
                 &transactions[chunk_start..chunk_end],
                 poh,
             );
-            trace!("process_transcations: {:?}", result);
+            total_process_and_record_time += start.elapsed();
+
+            trace!("process_transactions: {:?}", result);
             if let Err(Error::PohRecorderError(PohRecorderError::MaxHeightReached)) = result {
                 info!(
                     "process transactions: max height reached slot: {} height: {}",
@@ -304,9 +313,45 @@ impl BankingStage {
                 );
                 break;
             }
+            if result.is_err() {
+                inc_new_counter_info!(
+                    "banking_stage-total_will_fit-time_us",
+                    timing::duration_as_us(&total_will_fit_time) as usize
+                );
+
+                inc_new_counter_info!(
+                    "banking_stage-total_process_and_record-time_us",
+                    timing::duration_as_us(&total_process_and_record_time) as usize
+                );
+
+                inc_new_counter_info!(
+                    "banking_stage-process_transaction-count",
+                    transactions.len()
+                );
+
+                inc_new_counter_info!("banking_stage-process_transaction-num_chunks", num_chunks);
+            }
             result?;
             chunk_start = chunk_end;
         }
+
+        inc_new_counter_info!(
+            "banking_stage-total_will_fit-time_us",
+            timing::duration_as_us(&total_will_fit_time) as usize
+        );
+
+        inc_new_counter_info!(
+            "banking_stage-total_process_and_record-time_us",
+            timing::duration_as_us(&total_process_and_record_time) as usize
+        );
+
+        inc_new_counter_info!(
+            "banking_stage-process_transaction-count",
+            transactions.len()
+        );
+
+        inc_new_counter_info!("banking_stage-process_transaction-num_chunks", num_chunks);
+
         Ok(chunk_start)
     }
 
@@ -336,12 +381,18 @@ impl BankingStage {
 
         let mut unprocessed_packets = vec![];
         let mut bank_shutdown = false;
+
+        let mut verify_refs_time = Duration::new(0, 0);
+        let mut during_process_time = Duration::new(0, 0);
+        let mut before_process_time = Duration::new(0, 0);
         for (msgs, vers) in mms {
             if bank_shutdown {
                 unprocessed_packets.push((msgs, 0));
                 continue;
             }
 
+            //
+            let before_process_start = Instant::now();
             let bank = poh.lock().unwrap().bank();
             if bank.is_none() {
                 unprocessed_packets.push((msgs, 0));
@@ -352,12 +403,16 @@ impl BankingStage {
 
             let transactions = Self::deserialize_transactions(&msgs.read().unwrap());
             reqs_len += transactions.len();
+            before_process_time += before_process_start.elapsed();
 
             debug!(
                 "bank: {} transactions received {}",
                 bank.slot(),
                 transactions.len()
             );
+
+            //
+            let verify_refs_start = Instant::now();
             let (verified_transactions, verified_transaction_index): (Vec<_>, Vec<_>) =
                 transactions
                     .into_iter()
@@ -374,6 +429,7 @@ impl BankingStage {
                         }
                     })
                     .unzip();
+            verify_refs_time += verify_refs_start.elapsed();
 
             debug!(
                 "bank: {} verified transactions {}",
@@ -381,19 +437,35 @@ impl BankingStage {
                 verified_transactions.len()
             );
 
+            //
+            let during_process_start = Instant::now();
             let processed = Self::process_transactions(&bank, &verified_transactions, poh)?;
             if processed < verified_transactions.len() {
                 bank_shutdown = true;
                 // Collect any unprocessed transactions in this batch for forwarding
                 unprocessed_packets.push((msgs, verified_transaction_index[processed]));
             }
+            during_process_time += during_process_start.elapsed();
             new_tx_count += processed;
         }
 
         inc_new_counter_info!(
             "banking_stage-time_ms",
-            timing::duration_as_ms(&proc_start.elapsed()) as usize
+            timing::duration_as_us(&proc_start.elapsed()) as usize
         );
+        inc_new_counter_info!(
+            "banking_stage-before_process_time",
+            timing::duration_as_us(&before_process_time) as usize
+        );
+        inc_new_counter_info!(
+            "banking_stage-during_process_time",
+            timing::duration_as_us(&during_process_time) as usize
+        );
+        inc_new_counter_info!(
+            "banking_stage-verify_refs_time",
+            timing::duration_as_us(&verify_refs_time) as usize
+        );
+
         let total_time_s = timing::duration_as_s(&proc_start.elapsed());
         let total_time_ms = timing::duration_as_ms(&proc_start.elapsed());
         info!(
