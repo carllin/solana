@@ -1,4 +1,4 @@
-use crate::entry::Entry;
+use crate::entry::{Entry, EntrySlice};
 use crate::packet::{Blob, BLOB_HEADER_SIZE};
 use crate::result::{Error, Result};
 
@@ -14,6 +14,7 @@ use rocksdb::{
 use solana_sdk::hash::Hash;
 use solana_sdk::timing::DEFAULT_TICKS_PER_SLOT;
 
+use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -65,6 +66,7 @@ pub struct EntryIterator {
     //   you have to hold the database open in order to iterate over it, and in order
     //   for db_iterator to be able to run Drop
     //    _blocktree: Blocktree,
+    entries: VecDeque<Entry>,
 }
 
 impl Blocktree {
@@ -130,6 +132,7 @@ impl Blocktree {
 
         db_iterator.seek_to_first();
         Ok(EntryIterator {
+            entries: VecDeque::new(),
             db_iterator,
             blockhash: None,
         })
@@ -381,15 +384,24 @@ impl Iterator for EntryIterator {
     type Item = Entry;
 
     fn next(&mut self) -> Option<Entry> {
+        if !self.entries.is_empty() {
+            return Some(self.entries.pop_front().unwrap());
+        }
+
         if self.db_iterator.valid() {
             if let Some(value) = self.db_iterator.value() {
-                if let Ok(entry) = deserialize::<Entry>(&value[BLOB_HEADER_SIZE..]) {
+                if let Ok(next_entries) = deserialize::<Vec<Entry>>(&value[BLOB_HEADER_SIZE..]) {
                     if let Some(blockhash) = self.blockhash {
-                        if !entry.verify(&blockhash) {
+                        if !next_entries.verify(&blockhash) {
                             return None;
                         }
                     }
                     self.db_iterator.next();
+                    if next_entries.is_empty() {
+                        return None;
+                    }
+                    self.entries = VecDeque::from(next_entries);
+                    let entry = self.entries.pop_front().unwrap();
                     self.blockhash = Some(entry.hash);
                     return Some(entry);
                 }
