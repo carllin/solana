@@ -17,7 +17,7 @@ use solana_sdk::timing::DEFAULT_TICKS_PER_SLOT;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use super::db::{
     Cursor, Database, IDataCf, IDetachedHeadsCf, IErasureCf, IMetaCf, IWriteBatch,
@@ -125,6 +125,7 @@ impl Blocktree {
             detached_heads_cf,
             new_blobs_signals: vec![],
             ticks_per_slot,
+            slots_of_interest: RwLock::new(vec![]),
         })
     }
 
