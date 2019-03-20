@@ -16,7 +16,7 @@ use solana_sdk::hash::Hash;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use super::db::{
     Cursor, Database, IWriteBatch, IndexColumn, LedgerColumnFamily, LedgerColumnFamilyRaw,
@@ -122,6 +122,7 @@ impl Blocktree {
             erasure_cf,
             detached_heads_cf,
             new_blobs_signals: vec![],
+            slots_of_interest: RwLock::new(vec![]),
         })
     }
 
