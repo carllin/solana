@@ -259,13 +259,18 @@ impl PohRecorder {
         }
 
         let tick = self.generate_tick();
-        trace!("tick {}", tick.1);
+        warn!(
+            "Poh recorder last tick: {}, tick height: {}",
+            tick.1, self.tick_height()
+        );
         self.tick_cache.push(tick);
+        warn!("Flushing from tick");
         let _ = self.flush_cache(true);
     }
 
     pub fn record(&mut self, bank_slot: u64, mixin: Hash, txs: Vec<Transaction>) -> Result<()> {
         self.flush_cache(false)?;
+        warn!("Flushing from record");
         self.record_and_send_txs(bank_slot, mixin, txs)
     }
 
