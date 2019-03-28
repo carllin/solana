@@ -260,7 +260,8 @@ impl PohRecorder {
         let tick = self.generate_tick();
         warn!(
             "Poh recorder last tick: {}, tick height: {}",
-            tick.1, self.tick_height()
+            tick.1,
+            self.tick_height()
         );
         self.tick_cache.push(tick);
         warn!("Flushing from tick");

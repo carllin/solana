@@ -171,7 +171,7 @@ impl ReplayStage {
                             next_leader_slot,
                             ticks_per_slot,
                         );
-                        debug!(
+                        warn!(
                             "{:?} voted and reset poh at {}. next leader slot {:?}",
                             my_id,
                             bank.tick_height(),
