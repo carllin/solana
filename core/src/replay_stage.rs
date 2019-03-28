@@ -154,6 +154,7 @@ impl ReplayStage {
                             &poh_recorder,
                             ticks_per_slot,
                         );
+                        println!("voted on {}", bank.slot());
 
                         is_tpu_bank_active = false;
                     }
