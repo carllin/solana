@@ -4,6 +4,8 @@ use hashbrown::{HashMap, HashSet};
 use solana_runtime::bank::Bank;
 use std::ops::Index;
 use std::sync::Arc;
+use std::time::Instant;
+use solana_sdk::timing::{self, duration_as_ms};
 
 pub struct BankForks {
     banks: HashMap<u64, Arc<Bank>>,
@@ -103,7 +105,10 @@ impl BankForks {
             .banks
             .get(&root)
             .expect("root bank didn't exist in bank_forks");
+        let squash_start = Instant::now();
         root_bank.squash();
+        let ms = timing::duration_as_ms(&squash_start.elapsed());
+        println!("squash duration: {}", ms);
         self.prune_non_root(root);
     }
 
