@@ -20,8 +20,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::db::{
-    Cursor, Database, IDataCf, IErasureCf, IMetaCf, IWriteBatch, LedgerColumnFamily,
-    LedgerColumnFamilyRaw,
+    Cursor, Database, IDataCf, IDetachedHeadsCf, IErasureCf, IMetaCf, IWriteBatch,
+    LedgerColumnFamily, LedgerColumnFamilyRaw,
 };
 use super::{Blocktree, BlocktreeError};
 
@@ -47,6 +47,12 @@ pub struct DataCf {
 /// The erasure column family
 #[derive(Debug)]
 pub struct ErasureCf {
+    db: Arc<Rocks>,
+}
+
+/// The detached heads column family
+#[derive(Debug)]
+pub struct DetachedHeadsCf {
     db: Arc<Rocks>,
 }
 
@@ -83,10 +89,13 @@ impl Blocktree {
             ColumnFamilyDescriptor::new(super::DATA_CF, Blocktree::get_cf_options());
         let erasure_cf_descriptor =
             ColumnFamilyDescriptor::new(super::ERASURE_CF, Blocktree::get_cf_options());
+        let detached_heads_descriptor =
+            ColumnFamilyDescriptor::new(super::DETACHED_HEADS_CF, Blocktree::get_cf_options());
         let cfs = vec![
             meta_cf_descriptor,
             data_cf_descriptor,
             erasure_cf_descriptor,
+            detached_heads_descriptor,
         ];
 
         // Open the database
@@ -106,11 +115,14 @@ impl Blocktree {
         let erasure_cf = ErasureCf::new(db.clone());
 
         let ticks_per_slot = DEFAULT_TICKS_PER_SLOT;
+        let detached_heads_cf = DetachedHeadsCf { db: db.clone() };
+
         Ok(Blocktree {
             db,
             meta_cf,
             data_cf,
             erasure_cf,
+            detached_heads_cf,
             new_blobs_signals: vec![],
             ticks_per_slot,
         })
@@ -338,6 +350,24 @@ impl IMetaCf<Rocks> for MetaCf {
     }
 }
 
+impl IDetachedHeadsCf<Rocks> for DetachedHeadsCf {
+    fn new(db: Arc<Rocks>) -> Self {
+        DetachedHeadsCf { db }
+    }
+
+    fn key(slot: u64) -> Vec<u8> {
+        let mut key = vec![0u8; 8];
+        BigEndian::write_u64(&mut key[0..8], slot);
+        key
+    }
+
+    fn index_from_key(key: &[u8]) -> Result<u64> {
+        let mut rdr = io::Cursor::new(&key[..]);
+        let index = rdr.read_u64::<BigEndian>()?;
+        Ok(index)
+    }
+}
+
 impl LedgerColumnFamilyRaw<Rocks> for DataCf {
     fn db(&self) -> &Arc<Rocks> {
         &self.db
@@ -367,6 +397,17 @@ impl LedgerColumnFamily<Rocks> for MetaCf {
 
     fn handle(&self) -> ColumnFamily {
         self.db.cf_handle(super::META_CF).unwrap()
+    }
+}
+
+impl LedgerColumnFamily<Rocks> for DetachedHeadsCf {
+    type ValueType = bool;
+    fn db(&self) -> &Arc<Rocks> {
+        &self.db
+    }
+
+    fn handle(&self) -> ColumnFamily {
+        self.db.cf_handle(super::DETACHED_HEADS_CF).unwrap()
     }
 }
 

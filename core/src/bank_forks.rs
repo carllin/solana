@@ -2,10 +2,10 @@
 
 use hashbrown::{HashMap, HashSet};
 use solana_runtime::bank::Bank;
+use solana_sdk::timing::{self, duration_as_ms};
 use std::ops::Index;
 use std::sync::Arc;
 use std::time::Instant;
-use solana_sdk::timing::{self, duration_as_ms};
 
 pub struct BankForks {
     banks: HashMap<u64, Arc<Bank>>,

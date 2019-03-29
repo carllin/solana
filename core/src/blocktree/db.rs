@@ -119,6 +119,14 @@ pub trait IMetaCf<D: Database>: LedgerColumnFamily<D, ValueType = super::SlotMet
     fn index_from_key(key: &D::KeyRef) -> Result<u64>;
 }
 
+pub trait IDetachedHeadsCf<D: Database>: LedgerColumnFamily<D, ValueType = bool> {
+    fn new(db: Arc<D>) -> Self;
+
+    fn key(slot: u64) -> D::Key;
+
+    fn index_from_key(key: &D::KeyRef) -> Result<u64>;
+}
+
 pub trait LedgerColumnFamily<D: Database> {
     type ValueType: DeserializeOwned + Serialize;
 
@@ -162,6 +170,12 @@ pub trait LedgerColumnFamily<D: Database> {
     fn db(&self) -> &Arc<D>;
 
     fn handle(&self) -> D::ColumnFamily;
+
+    fn is_empty(&self) -> Result<bool> {
+        let mut db_iterator = self.db().raw_iterator_cf(self.handle())?;
+        db_iterator.seek_to_first();
+        Ok(!db_iterator.valid())
+    }
 }
 
 pub trait LedgerColumnFamilyRaw<D: Database> {

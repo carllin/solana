@@ -32,6 +32,12 @@ pub struct ErasureCf {
     db: Arc<Kvs>,
 }
 
+/// The detached heads column family
+#[derive(Debug)]
+pub struct DetachedHeadsCf {
+    db: Arc<Kvs>,
+}
+
 /// Dummy struct to get things compiling
 /// TODO: all this goes away with Blocktree
 pub struct EntryIterator(i32);
@@ -247,6 +253,20 @@ impl LedgerColumnFamily<Kvs> for MetaCf {
     fn handle(&self) -> ColumnFamily {
         self.db.cf_handle(super::META_CF).unwrap()
     }
+}
+
+impl LedgerColumnFamilyRaw<Kvs> for DetachedHeadsCf {
+    fn db(&self) -> &Arc<Kvs> {
+        &self.db
+    }
+
+    fn handle(&self) -> ColumnFamily {
+        self.db.cf_handle(super::DETACHED_HEADS_CF).unwrap()
+    }
+}
+
+impl LedgerColumnFamily<Kvs> for DetachedHeadsCf {
+    type ValueType = bool;
 }
 
 impl std::convert::From<kvstore::Error> for Error {
