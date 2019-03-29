@@ -156,7 +156,7 @@ impl PohRecorder {
     ) {
         self.clear_bank();
         let mut cache = vec![];
-        info!(
+        warn!(
             "reset poh from: {},{} to: {},{}",
             self.poh.hash, self.poh.tick_height, blockhash, tick_height,
         );
@@ -216,7 +216,7 @@ impl PohRecorder {
             .take_while(|x| x.1 <= working_bank.max_tick_height)
             .count();
         let e = if cnt > 0 {
-            debug!(
+            warn!(
                 "flush_cache: bank_slot: {} tick_height: {} max: {} sending: {}",
                 working_bank.bank.slot(),
                 working_bank.bank.tick_height(),
@@ -233,7 +233,7 @@ impl PohRecorder {
             Ok(())
         };
         if self.poh.tick_height >= working_bank.max_tick_height {
-            info!(
+            warn!(
                 "poh_record: max_tick_height reached, setting working bank {} to None",
                 working_bank.bank.slot()
             );

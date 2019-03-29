@@ -229,7 +229,7 @@ impl ReplayStage {
                     );
                     cluster_info.write().unwrap().set_leader(&next_leader);
                     if next_leader == *my_id && reached_leader_tick {
-                        println!("{} starting tpu for slot {}, parent_slot: {}", my_id, poh_slot, parent_slot);
+                        println!("{} starting tpu for slot {}", my_id, poh_slot);
                         solana_metrics::submit(
                             influxdb::Point::new("counter-replay_stage-new_leader")
                                 .add_field(
@@ -242,6 +242,7 @@ impl ReplayStage {
                                 )
                                 .to_owned(),);
                         let tpu_bank = Bank::new_from_parent(&parent, my_id, poh_slot);
+                        Self::print_parents(&tpu_bank);
                         bank_forks.write().unwrap().insert(tpu_bank);
                         if let Some(tpu_bank) = bank_forks.read().unwrap().get(poh_slot).cloned() {
                             assert_eq!(
@@ -558,9 +559,17 @@ impl ReplayStage {
                 }
                 let leader = leader_schedule_utils::slot_leader_at(child_id, &parent_bank).unwrap();
                 println!("new fork:{} parent:{}", child_id, parent_id);
-                forks.insert(Bank::new_from_parent(&parent_bank, &leader, child_id));
+                let new_bank = Bank::new_from_parent(&parent_bank, &leader, child_id);
+                Self::print_parents(&new_bank);
+                forks.insert(new_bank);
             }
         }
+    }
+
+    fn print_parents(bank: &Bank) {
+        let parents = bank.parents();
+        let ids: Vec<_> = parents.into_iter().rev().map(|b| b.slot()).collect();
+        println!("parents: {:?}", ids);
     }
 }
 
@@ -572,7 +581,7 @@ impl Service for ReplayStage {
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod test {
     use super::*;
     use crate::banking_stage::create_test_recorder;
@@ -769,4 +778,4 @@ mod test {
         ReplayStage::handle_new_root(&bank_forks, &mut progress);
         assert!(progress.is_empty());
     }
-}
+}*/
