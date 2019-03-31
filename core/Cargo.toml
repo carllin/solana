@@ -62,6 +62,10 @@ sys-info = "0.5.6"
 tokio = "0.1"
 tokio-codec = "0.1"
 untrusted = "0.6.2"
+netsim = { path = "../../netsim", version = "0.2.5" }
+tokio-core = "0.1.12"
+futures = "0.1.18"
+bytes = "0.4.8"
 
 [dev-dependencies]
 hex-literal = "0.1.4"

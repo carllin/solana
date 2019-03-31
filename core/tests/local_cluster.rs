@@ -1,5 +1,8 @@
 extern crate solana;
 
+use futures::sync::oneshot;
+use futures::Future;
+use netsim::{node, spawn, Ipv4Range, Network};
 use solana::cluster::Cluster;
 use solana::cluster_tests;
 use solana::fullnode::FullnodeConfig;
@@ -7,7 +10,9 @@ use solana::gossip_service::discover;
 use solana::local_cluster::LocalCluster;
 use solana::poh_service::PohServiceConfig;
 use solana_sdk::timing;
+use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
 use std::time::Duration;
+use tokio_core::reactor::Core;
 
 #[test]
 fn test_spend_and_verify_all_nodes_1() {
@@ -153,4 +158,22 @@ fn test_restart_node() {
         slots_per_epoch,
     );
     cluster_tests::send_many_transactions(&cluster.entry_point_info, &cluster.funding_keypair, 1);
+}
+
+#[test]
+fn test_net_sim() {
+    let mut evloop = Core::new().unwrap();
+    let network = Network::new(&evloop.handle());
+
+    let (server_addr_tx, server_addr_rx) = oneshot::channel();
+    let server_recipe = node::ipv4::machine(|ip| {
+        solana_logger::setup();
+        let num_nodes = 2;
+        let local = LocalCluster::new(num_nodes, 10_000, 100);
+        cluster_tests::spend_and_verify_all_nodes(
+            &local.entry_point_info,
+            &local.funding_keypair,
+            num_nodes,
+        );
+    });
 }
