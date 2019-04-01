@@ -88,7 +88,7 @@ impl Blocktree {
             ColumnFamilyDescriptor::new(super::DATA_CF, Blocktree::get_cf_options());
         let erasure_cf_descriptor =
             ColumnFamilyDescriptor::new(super::ERASURE_CF, Blocktree::get_cf_options());
-        let detached_heads_descriptor = 
+        let detached_heads_descriptor =
             ColumnFamilyDescriptor::new(super::DETACHED_HEADS_CF, Blocktree::get_cf_options());
         let cfs = vec![
             meta_cf_descriptor,
@@ -122,7 +122,7 @@ impl Blocktree {
             erasure_cf,
             detached_heads_cf,
             new_blobs_signals: vec![],
-            slots_of_interest: RwLock::new(vec![]),
+            root_slot: RwLock::new(0),
         })
     }
 

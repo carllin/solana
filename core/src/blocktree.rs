@@ -131,7 +131,7 @@ pub struct Blocktree {
     erasure_cf: ErasureCf,
     detached_heads_cf: DetachedHeadsCf,
     pub new_blobs_signals: Vec<SyncSender<bool>>,
-    pub slots_of_interest: RwLock<Vec<(u128, u64)>>,
+    pub root_slot: RwLock<u64>,
 }
 
 // Column family for metadata about a leader slot
@@ -609,8 +609,8 @@ impl Blocktree {
         Ok(entries)
     }
 
-    pub fn set_slots_of_interest(&self, slots_of_interest: Vec<(u128, u64)>) {
-        *self.slots_of_interest.write().unwrap() = slots_of_interest;
+    pub fn set_root(&self, root: u64) {
+        *self.root_slot.write().unwrap() = root;
     }
 
     pub fn get_detached_heads(&self, max: Option<usize>) -> Vec<u64> {
