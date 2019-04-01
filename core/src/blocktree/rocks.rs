@@ -124,8 +124,7 @@ impl Blocktree {
             erasure_cf,
             detached_heads_cf,
             new_blobs_signals: vec![],
-            ticks_per_slot,
-            slots_of_interest: RwLock::new(vec![]),
+            root_slot: RwLock::new(0),
         })
     }
 
