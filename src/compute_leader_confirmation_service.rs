@@ -71,6 +71,13 @@ impl ComputeLeaderConfirmationService {
 
         let super_majority_stake = (2 * total_stake) / 3;
 
+        println!(
+            "{} ticks_and_stakes: {:?}, supermajority stake: {}",
+            timing::timestamp(),
+            ticks_and_stakes,
+            super_majority_stake
+        );
+
         if let Some(last_valid_validator_timestamp) =
             bank.get_confirmation_timestamp(&mut ticks_and_stakes, super_majority_stake)
         {

@@ -192,6 +192,7 @@ impl<T: Clone> StatusDeque<T> {
         // Sort by tick height
         ticks_and_stakes.sort_by(|a, b| b.0.cmp(&a.0));
         let current_tick_height = self.tick_height;
+        println!("current_tick_height: {}", current_tick_height);
         let mut total = 0;
         for (tick_height, stake) in ticks_and_stakes.iter() {
             if ((current_tick_height - tick_height) as usize) < MAX_ENTRY_IDS {
