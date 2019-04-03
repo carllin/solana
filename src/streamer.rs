@@ -98,7 +98,7 @@ pub fn responder(name: &'static str, sock: Arc<UdpSocket>, r: BlobReceiver) -> J
                 match e {
                     Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
                     Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
-                    _ => warn!("{} responder error: {:?}", name, e),
+                    _ => println!("{} responder error: {:?}", name, e),
                 }
             }
         })

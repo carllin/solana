@@ -3,6 +3,7 @@
 use crate::bank::Bank;
 use crate::cluster_info::ClusterInfo;
 use crate::counter::Counter;
+use crate::leader_scheduler;
 use crate::packet::SharedBlob;
 use crate::result::{Error, Result};
 use crate::streamer::BlobSender;
@@ -73,7 +74,11 @@ pub fn send_validator_vote(
     vote_blob_sender: &BlobSender,
 ) -> Result<()> {
     let last_id = bank.last_id();
-
+    println!(
+        "Sending vote for bank: {}, last_id: {}",
+        bank.tick_height() / leader_scheduler::DEFAULT_LEADER_ROTATION_INTERVAL,
+        last_id,
+    );
     if let Ok(shared_blob) = create_new_signed_vote_blob(&last_id, vote_account, bank, cluster_info)
     {
         inc_new_counter_info!("validator-vote_sent", 1);

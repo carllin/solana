@@ -120,7 +120,7 @@ impl ReplayStage {
             if 0 == num_ticks_to_next_vote || (i + 1) == entries.len() {
                 res = bank.process_entries(&entries[start_entry_index..=i]);
 
-                if res.is_err() {
+                if let Err(ref e) = res {
                     // TODO: This will return early from the first entry that has an erroneous
                     // transaction, instead of processing the rest of the entries in the vector
                     // of received entries. This is in line with previous behavior when
@@ -132,6 +132,7 @@ impl ReplayStage {
                         (i - start_entry_index)
                     );
 
+                    println!("process entries err: {:?}", e);
                     break;
                 }
 
