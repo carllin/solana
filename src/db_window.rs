@@ -92,6 +92,7 @@ pub fn repair(
         MAX_REPAIR_LENGTH,
     );
 
+    println!("missing idxs: {:?}", idxs);
     let reqs: Vec<_> = idxs
         .into_iter()
         .filter_map(|pix| rcluster_info.window_index_request(pix).ok())

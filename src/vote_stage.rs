@@ -74,9 +74,11 @@ pub fn send_validator_vote(
     vote_blob_sender: &BlobSender,
 ) -> Result<()> {
     let last_id = bank.last_id();
+    let tick_height = bank.tick_height();
     println!(
-        "Sending vote for bank: {}, last_id: {}",
-        bank.tick_height() / leader_scheduler::DEFAULT_LEADER_ROTATION_INTERVAL,
+        "Sending vote for bank tick height: {}, slot: {}, last_id: {}",
+        tick_height,
+        tick_height / leader_scheduler::DEFAULT_LEADER_ROTATION_INTERVAL,
         last_id,
     );
     if let Ok(shared_blob) = create_new_signed_vote_blob(&last_id, vote_account, bank, cluster_info)

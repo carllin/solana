@@ -10,6 +10,7 @@ use solana_sdk::account::Account;
 use solana_sdk::hash::{hash, Hash};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::transaction::Transaction;
+use solana_sdk::vote_program::{self, Vote, VoteInstruction};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicUsize;
@@ -144,6 +145,11 @@ impl AccountsDB {
         } else {
             if !last_ids.check_entry_id_age(tx.last_id, max_age) {
                 error_counters.last_id_not_found += 1;
+                if let Some(id) = tx.program_ids.first() {
+                    if vote_program::check_id(id) {
+                        println!("Last id not found for vote tx from: {:?}", tx.account_keys);
+                    }
+                }
                 return Err(BankError::LastIdNotFound);
             }
 

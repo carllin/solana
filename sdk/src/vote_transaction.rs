@@ -3,6 +3,7 @@
 use crate::hash::Hash;
 use crate::pubkey::Pubkey;
 use crate::signature::Keypair;
+use crate::signature::KeypairUtil;
 use crate::system_instruction::SystemInstruction;
 use crate::system_program;
 use crate::transaction::{Instruction, Transaction};
@@ -24,6 +25,7 @@ pub trait VoteTransaction {
 
 impl VoteTransaction for Transaction {
     fn vote_new(vote_account: &Keypair, vote: Vote, last_id: Hash, fee: u64) -> Self {
+        println!("Constructing vote from: {}", vote_account.pubkey());
         let instruction = VoteInstruction::NewVote(vote);
         Transaction::new(
             vote_account,
