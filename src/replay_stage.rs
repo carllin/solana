@@ -140,6 +140,8 @@ impl ReplayStage {
                     if let Some(sender) = vote_blob_sender {
                         send_validator_vote(bank, vote_account_keypair, &cluster_info, sender)
                             .unwrap();
+
+                        println!("SEND VALIDATOR VOTE SUCCESS");
                     }
                 }
                 let (scheduled_leader, _) = bank

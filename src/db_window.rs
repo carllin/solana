@@ -92,29 +92,28 @@ pub fn repair(
         MAX_REPAIR_LENGTH,
     );
 
-    println!("missing idxs: {:?}", idxs);
+    println!("missing idxs len: {}, {:?}", idxs.len(), idxs);
     let reqs: Vec<_> = idxs
         .into_iter()
         .filter_map(|pix| rcluster_info.window_index_request(pix).ok())
         .collect();
 
+    println!("num requests: {}", reqs.len());
     drop(rcluster_info);
 
     inc_new_counter_info!("streamer-repair_window-repair", reqs.len());
 
-    if log_enabled!(Level::Trace) {
-        trace!(
-            "{}: repair_window counter times: {} consumed: {} received: {} max_repair_entry_height: {} missing: {}",
-            id,
-            times,
-            consumed,
-            received,
-            max_repair_entry_height,
-            reqs.len()
-        );
-        for (to, _) in &reqs {
-            trace!("{}: repair_window request to {}", id, to);
-        }
+    println!(
+        "{}: repair_window counter times: {} consumed: {} received: {} max_repair_entry_height: {} missing: {}",
+        id,
+        times,
+        consumed,
+        received,
+        max_repair_entry_height,
+        reqs.len()
+    );
+    for (to, _) in &reqs {
+        println!("{}: repair_window request to {}", id, to);
     }
 
     Ok(reqs)

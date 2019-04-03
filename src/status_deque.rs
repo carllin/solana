@@ -82,27 +82,6 @@ impl<T> Default for StatusDeque<T> {
     }
 }
 
-impl<T: Clone> Checkpoint for StatusDeque<T> {
-    fn checkpoint(&mut self) {
-        self.checkpoints
-            .push_front((self.tick_height, self.last_id, self.entries.clone()));
-    }
-    fn rollback(&mut self) {
-        let (tick_height, last_id, entries) = self.checkpoints.pop_front().unwrap();
-        self.tick_height = tick_height;
-        self.last_id = last_id;
-        self.entries = entries;
-    }
-    fn purge(&mut self, depth: usize) {
-        while self.depth() > depth {
-            self.checkpoints.pop_back().unwrap();
-        }
-    }
-    fn depth(&self) -> usize {
-        self.checkpoints.len()
-    }
-}
-
 impl<T: Clone> StatusDeque<T> {
     pub fn update_signature_status_with_last_id(
         &mut self,

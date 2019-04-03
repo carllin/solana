@@ -537,6 +537,7 @@ impl ClusterInfo {
         //  by a valid tvu port location
         let valid: Vec<_> = self.repair_peers();
         if valid.is_empty() {
+            println!("No valid peers");
             Err(ClusterInfoError::NoPeers)?;
         }
         let n = thread_rng().gen::<usize>() % valid.len();

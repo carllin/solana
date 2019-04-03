@@ -145,31 +145,6 @@ impl Bank {
         bank
     }
 
-    pub fn checkpoint(&self) {
-        self.accounts.checkpoint();
-        self.last_ids.write().unwrap().checkpoint();
-    }
-    pub fn purge(&self, depth: usize) {
-        self.accounts.purge(depth);
-        self.last_ids.write().unwrap().purge(depth);
-    }
-
-    pub fn rollback(&self) {
-        let rolled_back_pubkeys: Vec<Pubkey> = self.accounts.keys();
-        self.accounts.rollback();
-
-        rolled_back_pubkeys.iter().for_each(|pubkey| {
-            if let Some(account) = self.accounts.load_slow(&pubkey) {
-                self.check_account_subscriptions(&pubkey, &account)
-            }
-        });
-
-        self.last_ids.write().unwrap().rollback();
-    }
-    pub fn checkpoint_depth(&self) -> usize {
-        self.accounts.depth()
-    }
-
     /// Create an Bank with only a Mint. Typically used by unit tests.
     pub fn new(mint: &Mint) -> Self {
         let mint_tokens = if mint.bootstrap_leader_id != Pubkey::default() {

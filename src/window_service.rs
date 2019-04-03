@@ -180,10 +180,10 @@ pub fn window_service(
 
                     //exponential backoff
                     if !repair_backoff(&mut last, &mut times, consumed) {
-                        trace!("{} !repair_backoff() times = {}", id, times);
+                        println!("{} !repair_backoff() times = {}", id, times);
                         continue;
                     }
-                    trace!("{} let's repair! times = {}", id, times);
+                    println!("{} let's repair! times = {}", id, times);
 
                     let reqs = repair(
                         &db_ledger,
