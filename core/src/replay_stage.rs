@@ -88,7 +88,7 @@ impl ReplayStage {
         T: 'static + KeypairUtil + Send + Sync,
     {
         let (slot_full_sender, slot_full_receiver) = channel();
-        trace!("replay stage");
+        println!("replay stage");
         let exit_ = exit.clone();
         let subscriptions = subscriptions.clone();
         let bank_forks = bank_forks.clone();
@@ -193,7 +193,7 @@ impl ReplayStage {
                     match result {
                         Err(RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
-                        Ok(_) => trace!("blocktree signal"),
+                        Ok(_) => println!("blocktree signal"),
                     };
                 }
                 Ok(())
@@ -210,7 +210,7 @@ impl ReplayStage {
         reached_leader_tick: bool,
         grace_ticks: u64,
     ) {
-        trace!("{} checking poh slot {}", my_id, poh_slot);
+        println!("{} checking poh slot {}", my_id, poh_slot);
         if bank_forks.read().unwrap().get(poh_slot).is_none() {
             let parent_slot = poh_recorder.lock().unwrap().start_slot();
             let parent = {
@@ -223,13 +223,13 @@ impl ReplayStage {
 
             leader_schedule_utils::slot_leader_at(poh_slot, &parent)
                 .map(|next_leader| {
-                    debug!(
+                    println!(
                         "me: {} leader {} at poh slot {}",
                         my_id, next_leader, poh_slot
                     );
                     cluster_info.write().unwrap().set_leader(&next_leader);
                     if next_leader == *my_id && reached_leader_tick {
-                        debug!("{} starting tpu for slot {}", my_id, poh_slot);
+                        println!("{} starting tpu for slot {}, parent_slot: {}", my_id, poh_slot, parent_slot);
                         solana_metrics::submit(
                             influxdb::Point::new("counter-replay_stage-new_leader")
                                 .add_field(
@@ -248,7 +248,7 @@ impl ReplayStage {
                                 bank_forks.read().unwrap().working_bank().slot(),
                                 tpu_bank.slot()
                             );
-                            debug!(
+                            println!(
                                 "poh_recorder new working bank: me: {} next_slot: {} next_leader: {}",
                                 my_id,
                                 tpu_bank.slot(),
@@ -259,7 +259,7 @@ impl ReplayStage {
                     }
                 })
                 .or_else(|| {
-                    warn!("{} No next leader found", my_id);
+                    println!("{} No next leader found", my_id);
                     None
                 });
         }
@@ -275,10 +275,10 @@ impl ReplayStage {
         let result =
             Self::replay_entries_into_bank(bank, entries, progress, forward_entry_sender, num);
         if result.is_ok() {
-            trace!("verified entries {}", len);
+            println!("verified entries {}", len);
             inc_new_counter_info!("replicate-stage_process_entries", len);
         } else {
-            info!("debug to verify entries {}", len);
+            println!("debug to verify entries {}", len);
             //TODO: mark this fork as failed
             inc_new_counter_info!("replicate-stage_failed_process_entries", len);
         }
@@ -328,7 +328,7 @@ impl ReplayStage {
             next_leader_slot,
             ticks_per_slot,
         );
-        debug!(
+        println!(
             "{:?} voted and reset poh at {}. next leader slot {:?}",
             my_id,
             bank.tick_height(),
@@ -346,7 +346,7 @@ impl ReplayStage {
         slot_full_sender: &Sender<(u64, Pubkey)>,
     ) -> result::Result<()> {
         let active_banks = bank_forks.read().unwrap().active_banks();
-        trace!("active banks {:?}", active_banks);
+        println!("active banks {:?}", active_banks);
 
         for bank_slot in &active_banks {
             let bank = bank_forks.read().unwrap().get(*bank_slot).unwrap().clone();
@@ -378,27 +378,27 @@ impl ReplayStage {
         let ancestors = bank_forks.read().unwrap().ancestors();
         let frozen_banks = bank_forks.read().unwrap().frozen_banks();
 
-        trace!("frozen_banks {}", frozen_banks.len());
+        println!("frozen_banks {}", frozen_banks.len());
         let mut votable: Vec<(u128, Arc<Bank>)> = frozen_banks
             .values()
             .filter(|b| {
                 let is_votable = b.is_votable();
-                trace!("bank is votable: {} {}", b.slot(), is_votable);
+                println!("bank is votable: {} {}", b.slot(), is_votable);
                 is_votable
             })
             .filter(|b| {
                 let is_recent_epoch = locktower.is_recent_epoch(b);
-                trace!("bank is is_recent_epoch: {} {}", b.slot(), is_recent_epoch);
+                println!("bank is is_recent_epoch: {} {}", b.slot(), is_recent_epoch);
                 is_recent_epoch
             })
             .filter(|b| {
                 let has_voted = locktower.has_voted(b.slot());
-                trace!("bank is has_voted: {} {}", b.slot(), has_voted);
+                println!("bank is has_voted: {} {}", b.slot(), has_voted);
                 !has_voted
             })
             .filter(|b| {
                 let is_locked_out = locktower.is_locked_out(b.slot(), &descendants);
-                trace!("bank is is_locked_out: {} {}", b.slot(), is_locked_out);
+                println!("bank is is_locked_out: {} {}", b.slot(), is_locked_out);
                 !is_locked_out
             })
             .map(|bank| {
@@ -411,7 +411,7 @@ impl ReplayStage {
                 let vote_threshold =
                     locktower.check_vote_stake_threshold(b.slot(), &stake_lockouts);
                 Self::confirm_forks(locktower, stake_lockouts, progress);
-                debug!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
+                println!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
                 vote_threshold
             })
             .map(|(b, stake_lockouts)| (locktower.calculate_weight(&stake_lockouts), b.clone()))
@@ -420,10 +420,10 @@ impl ReplayStage {
         votable.sort_by_key(|b| b.0);
         let ms = timing::duration_as_ms(&locktower_start.elapsed());
 
-        trace!("votable_banks {}", votable.len());
+        println!("votable_banks {}", votable.len());
         if !votable.is_empty() {
             let weights: Vec<u128> = votable.iter().map(|x| x.0).collect();
-            info!(
+            println!(
                 "@{:?} locktower duration: {:?} len: {} weights: {:?}",
                 timing::timestamp(),
                 ms,
@@ -444,7 +444,7 @@ impl ReplayStage {
         progress.retain(|slot, prog| {
             let duration = timing::timestamp() - prog.started_ms;
             if locktower.is_slot_confirmed(*slot, stake_lockouts) {
-                info!("validator fork confirmed {} {}", *slot, duration);
+                println!("validator fork confirmed {} {}", *slot, duration);
                 solana_metrics::submit(
                     influxdb::Point::new(&"validator-confirmation")
                         .add_field("duration_ms", influxdb::Value::Integer(duration as i64))
@@ -452,7 +452,7 @@ impl ReplayStage {
                 );
                 false
             } else {
-                debug!(
+                println!(
                     "validator fork not confirmed {} {} {:?}",
                     *slot,
                     duration,
@@ -502,7 +502,7 @@ impl ReplayStage {
         last_entry: &Hash,
     ) -> result::Result<()> {
         if !entries.verify(last_entry) {
-            trace!(
+            println!(
                 "entry verification failed {} {} {} {}",
                 entries.len(),
                 bank.tick_height(),
@@ -530,9 +530,9 @@ impl ReplayStage {
         slot_full_sender: &Sender<(u64, Pubkey)>,
     ) {
         bank.freeze();
-        info!("bank frozen {}", bank.slot());
+        println!("bank frozen {}", bank.slot());
         if let Err(e) = slot_full_sender.send((bank.slot(), bank.collector_id())) {
-            trace!("{} slot_full alert failed: {:?}", my_id, e);
+            println!("{} slot_full alert failed: {:?}", my_id, e);
         }
     }
 
@@ -540,12 +540,12 @@ impl ReplayStage {
         // Find the next slot that chains to the old slot
         let frozen_banks = forks.frozen_banks();
         let frozen_bank_slots: Vec<u64> = frozen_banks.keys().cloned().collect();
-        trace!("frozen_banks {:?}", frozen_bank_slots);
+        println!("frozen_banks {:?}", frozen_bank_slots);
         let next_slots = blocktree
             .get_slots_since(&frozen_bank_slots)
             .expect("Db error");
         // Filter out what we've already seen
-        trace!("generate new forks {:?}", next_slots);
+        println!("generate new forks {:?}", next_slots);
         for (parent_id, children) in next_slots {
             let parent_bank = frozen_banks
                 .get(&parent_id)
@@ -553,11 +553,11 @@ impl ReplayStage {
                 .clone();
             for child_id in children {
                 if forks.get(child_id).is_some() {
-                    trace!("child already active or frozen {}", child_id);
+                    println!("child already active or frozen {}", child_id);
                     continue;
                 }
                 let leader = leader_schedule_utils::slot_leader_at(child_id, &parent_bank).unwrap();
-                info!("new fork:{} parent:{}", child_id, parent_id);
+                println!("new fork:{} parent:{}", child_id, parent_id);
                 forks.insert(Bank::new_from_parent(&parent_bank, &leader, child_id));
             }
         }
@@ -644,7 +644,7 @@ mod test {
             );
             cluster_info_me.write().unwrap().push_vote(vote_tx);
 
-            info!("Send ReplayStage an entry, should see it on the ledger writer receiver");
+            println!("Send ReplayStage an entry, should see it on the ledger writer receiver");
             let next_tick = create_ticks(1, bank.last_blockhash());
             blocktree
                 .write_entries(1, 0, 0, genesis_block.ticks_per_slot, next_tick.clone())
