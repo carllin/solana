@@ -332,6 +332,7 @@ impl Blocktree {
 
                     (Rc::new(RefCell::new(meta)), backup)
                 } else {
+                    println!("Blocktree new slot: {}, parent_slot: {}", blob_slot, parent_slot);
                     (
                         Rc::new(RefCell::new(SlotMeta::new(blob_slot, parent_slot))),
                         None,
