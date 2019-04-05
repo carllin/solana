@@ -116,6 +116,11 @@ impl Locktower {
             let mut vote_state: VoteState = VoteState::deserialize(&account.data)
                 .expect("bank should always have valid VoteState data");
 
+            let vote_slots: Vec<_> = vote_state.votes.iter().map(|x| x.slot).collect();
+            println!(
+                "Evaluating bank: {}, id: {}, vote_state: {:?}",
+                bank_slot, key, vote_slots
+            );
             if key == self.epoch_stakes.delegate_id
                 || vote_state.delegate_id == self.epoch_stakes.delegate_id
             {
