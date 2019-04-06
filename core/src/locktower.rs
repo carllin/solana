@@ -108,14 +108,25 @@ impl Locktower {
         F: Iterator<Item = (Pubkey, Account)>,
     {
         let mut stake_lockouts = HashMap::new();
+        println!("epoch stake: {}", self.epoch_stakes.total_staked);
         for (key, account) in vote_accounts {
             let lamports: u64 = *self.epoch_stakes.stakes.get(&key).unwrap_or(&0);
+            println!("stake for: {} is {}", key, lamports);
             if lamports == 0 {
                 continue;
             }
             let mut vote_state: VoteState = VoteState::deserialize(&account.data)
                 .expect("bank should always have valid VoteState data");
 
+            let vote_slots: Vec<_> = vote_state
+                .votes
+                .iter()
+                .map(|x| (x.slot, x.lockout()))
+                .collect();
+            println!(
+                "Evaluating bank: {}, id: {}, vote_state: {:?}",
+                bank_slot, key, vote_slots
+            );
             if key == self.epoch_stakes.delegate_id
                 || vote_state.node_id == self.epoch_stakes.delegate_id
             {
@@ -310,7 +321,12 @@ impl Locktower {
         stake_lockouts: &HashMap<u64, StakeLockout>,
     ) -> bool {
         let mut lockouts = self.lockouts.clone();
+        println!(
+            "Check vote threshold before simulating {}: {:#?}",
+            slot, lockouts
+        );
         lockouts.process_vote(&Vote { slot });
+        println!("Check vote threshold after: {:#?}", lockouts);
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
         if let Some(vote) = vote {
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {
