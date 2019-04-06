@@ -90,7 +90,7 @@ impl Fullnode {
         T: 'static + KeypairUtil + Sync + Send,
     {
         info!("creating bank...");
-
+        println!("vote_account: {}", vote_account);
         let id = keypair.pubkey();
         assert_eq!(id, node.info.id);
 
