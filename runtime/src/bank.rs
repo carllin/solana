@@ -614,7 +614,10 @@ impl Bank {
                 .iter_mut()
                 .zip(txs.iter())
                 .map(|(accs, tx)| match accs {
-                    Err(e) => Err(e.clone()),
+                    Err(e) => {
+                        println!("Error on bank {}, error: {:?}, sigs: {:?}", self.slot(), e, tx.signatures);
+                        Err(e.clone())
+                    }
                     Ok((ref mut accounts, ref mut loaders)) => self
                         .message_processor
                         .process_message(tx.message(), loaders, accounts, tick_height),
@@ -734,6 +737,10 @@ impl Bank {
             warn!("=========== FIXME: commit_transactions() working on a frozen bank! ================");
         }
 
+        if !self.is_delta.load(Ordering::Relaxed) {
+            let sigs: Vec<_> = txs.iter().map(|t| &t.signatures).collect();
+            println!("{:?}", sigs);
+        }
         self.is_delta.store(true, Ordering::Relaxed);
 
         // TODO: put this assert back in
