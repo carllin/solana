@@ -615,7 +615,12 @@ impl Bank {
                 .zip(txs.iter())
                 .map(|(accs, tx)| match accs {
                     Err(e) => {
-                        println!("Error on bank {}, error: {:?}, sigs: {:?}", self.slot(), e, tx.signatures);
+                        println!(
+                            "Error on bank {}, error: {:?}, sigs: {:?}",
+                            self.slot(),
+                            e,
+                            tx.signatures
+                        );
                         Err(e.clone())
                     }
                     Ok((ref mut accounts, ref mut loaders)) => self

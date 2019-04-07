@@ -131,7 +131,9 @@ impl RepairService {
         slot_meta: &SlotMeta,
         max_repairs: usize,
     ) -> Vec<RepairType> {
+        println!("repairing slot: {}", slot);
         if slot_meta.is_full() {
+            println!("slot {} is full", slot);
             vec![]
         } else if slot_meta.consumed == slot_meta.received {
             vec![RepairType::HighestBlob(slot, slot_meta.received)]
@@ -175,6 +177,7 @@ impl RepairService {
         max_repairs: usize,
         slot: u64,
     ) {
+        println!("GENERATING REPAIRS");
         let mut pending_slots = vec![slot];
         while repairs.len() < max_repairs && !pending_slots.is_empty() {
             let slot = pending_slots.pop().unwrap();

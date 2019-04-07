@@ -801,7 +801,10 @@ impl ClusterInfo {
                                 "repair-highest-slot",
                                 influxdb::Value::Integer(*slot as i64),
                             )
-                            .add_field("repair-highest-ix", influxdb::Value::Integer(*blob_index as i64))
+                            .add_field(
+                                "repair-highest-ix",
+                                influxdb::Value::Integer(*blob_index as i64),
+                            )
                             .to_owned(),
                     );
                     self.window_highest_index_request_bytes(*slot, *blob_index)?
