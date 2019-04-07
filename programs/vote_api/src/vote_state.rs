@@ -264,6 +264,7 @@ pub fn process_vote(
         Err(InstructionError::InvalidArgument)?;
     }
 
+    println!("processing vote: {}", vote.slot);
     vote_state.process_vote(vote);
     vote_state.serialize(&mut keyed_accounts[0].account.data)?;
     Ok(())

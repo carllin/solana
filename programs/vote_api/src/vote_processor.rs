@@ -29,7 +29,11 @@ pub fn process_instruction(
             vote_state::authorize_voter(keyed_accounts, &voter_id)
         }
         VoteInstruction::Vote(vote) => {
-            debug!("{:?} by {}", vote, keyed_accounts[0].signer_key().unwrap());
+            println!(
+                "Got vote from {:?} by {}",
+                vote,
+                keyed_accounts[0].signer_key().unwrap()
+            );
             solana_metrics::submit(
                 solana_metrics::influxdb::Point::new("vote-native")
                     .add_field("count", solana_metrics::influxdb::Value::Integer(1))
