@@ -475,9 +475,11 @@ impl ReplayStage {
         progress: &mut HashMap<u64, ForkProgress>,
     ) -> result::Result<(Vec<Entry>, usize)> {
         let bank_slot = bank.slot();
+        let p: Vec<_> = progress.iter().map(|(k, v)| (*k, v.num_blobs)).collect();
         let bank_progress = &mut progress
             .entry(bank_slot)
             .or_insert(ForkProgress::new(bank.last_blockhash()));
+        println!("progress: {:?}", p);
         blocktree.get_slot_entries_with_blob_count(bank_slot, bank_progress.num_blobs as u64, None)
     }
 
