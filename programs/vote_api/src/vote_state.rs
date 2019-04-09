@@ -178,6 +178,12 @@ pub fn delegate_stake(
         Err(InstructionError::InvalidAccountData)?;
     }
 
+    println!(
+        "Delegate_Stake: delegate: {}, vote_account:{:?}, balance: {}",
+        node_id,
+        keyed_accounts[0].signer_key(),
+        keyed_accounts[0].account.lamports
+    );
     Ok(())
 }
 
@@ -215,7 +221,7 @@ pub fn authorize_voter(
 /// that the transaction must be signed by the staker's keys
 pub fn initialize_account(keyed_accounts: &mut [KeyedAccount]) -> Result<(), InstructionError> {
     if !check_id(&keyed_accounts[0].account.owner) {
-        error!("account[0] is not assigned to the VOTE_PROGRAM");
+        println!("account[0] is not assigned to the VOTE_PROGRAM");
         Err(InstructionError::InvalidArgument)?;
     }
 
@@ -226,13 +232,18 @@ pub fn initialize_account(keyed_accounts: &mut [KeyedAccount]) -> Result<(), Ins
             let vote_state = VoteState::new(staker_id);
             vote_state.serialize(&mut keyed_accounts[0].account.data)?;
         } else {
-            error!("account[0] data already initialized");
+            println!("account[0] data already initialized");
             Err(InstructionError::InvalidAccountData)?;
         }
     } else {
-        error!("account[0] does not have valid data");
+        println!("account[0] does not have valid data");
         Err(InstructionError::InvalidAccountData)?;
     }
+
+    println!(
+        "Created account: {}, balance: {}",
+        keyed_accounts[0].unsigned_key(), keyed_accounts[0].account.lamports
+    );
 
     Ok(())
 }
