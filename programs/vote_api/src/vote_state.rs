@@ -242,7 +242,8 @@ pub fn initialize_account(keyed_accounts: &mut [KeyedAccount]) -> Result<(), Ins
 
     println!(
         "Created account: {}, balance: {}",
-        keyed_accounts[0].unsigned_key(), keyed_accounts[0].account.lamports
+        keyed_accounts[0].unsigned_key(),
+        keyed_accounts[0].account.lamports
     );
 
     Ok(())
