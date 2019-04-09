@@ -38,26 +38,25 @@ fn par_execute_entries(bank: &Bank, entries: &[(&Entry, LockedAccountsResults)])
                 locked_accounts,
                 MAX_RECENT_BLOCKHASHES,
             );
-            let mut first_err = None;
-            for r in results {
-                if let Err(ref e) = r {
-                    if first_err.is_none() {
-                        first_err = Some(r.clone());
-                    }
-                    if is_unexpected_validator_error(&r) {
-                        warn!("Unexpected validator error: {:?}", e);
-                        solana_metrics::submit(
-                            solana_metrics::influxdb::Point::new("validator_process_entry_error")
-                                .add_field(
-                                    "error",
-                                    solana_metrics::influxdb::Value::String(format!("{:?}", e)),
-                                )
-                                .to_owned(),
-                        )
-                    }
+            for (i, r) in results.iter().enumerate() {
+                if is_unexpected_validator_error(&r) {
+                    let program_type = e.transactions[i].message.program_ids();
+                    warn!(
+                        "Unexpected validator error: {:?}, program_type: {:?}",
+                        r, program_type
+                    );
+
+                    solana_metrics::submit(
+                        solana_metrics::influxdb::Point::new("validator_process_entry_error")
+                            .add_field(
+                                "error",
+                                solana_metrics::influxdb::Value::String(format!("{:?}", e)),
+                            )
+                            .to_owned(),
+                    )
                 }
             }
-            first_err.unwrap_or(Ok(()))
+            first_err(&results)
         })
         .collect();
 
