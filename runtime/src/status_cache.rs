@@ -67,12 +67,12 @@ impl<T: Clone> StatusCache<T> {
     /// After MAX_CACHE_ENTRIES, roots are removed, and any old signatures are cleared.
     pub fn add_root(&mut self, fork: ForkId) {
         self.roots.insert(fork);
-        if self.roots.len() > MAX_CACHE_ENTRIES {
+        /*if self.roots.len() > MAX_CACHE_ENTRIES {
             if let Some(min) = self.roots.iter().min().cloned() {
                 self.roots.remove(&min);
                 self.cache.retain(|_, (fork, _)| *fork > min);
             }
-        }
+        }*/
     }
 
     /// Insert a new signature for a specific fork.
