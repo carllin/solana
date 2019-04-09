@@ -323,6 +323,7 @@ impl Locktower {
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
         if let Some(vote) = vote {
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {
+                println!("fork stake for {}: {}", slot, fork_stake.stake);
                 (fork_stake.stake as f64 / self.epoch_stakes.total_staked as f64)
                     > self.threshold_size
             } else {
