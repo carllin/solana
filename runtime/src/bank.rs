@@ -386,6 +386,8 @@ impl Bank {
             match &res[i] {
                 Ok(_) => {
                     if !tx.signatures.is_empty() {
+                        let sigs: Vec<_> = txs.iter().flat_map(|t| t.signatures.clone()).collect();
+                        println!("Transaction ok, inserting sigs: {:?}", sigs);
                         status_cache.insert(
                             &tx.message().recent_blockhash,
                             &tx.signatures[0],
@@ -399,6 +401,8 @@ impl Bank {
                 Err(TransactionError::AccountNotFound) => (),
                 Err(e) => {
                     if !tx.signatures.is_empty() {
+                        let sigs: Vec<_> = txs.iter().flat_map(|t| t.signatures.clone()).collect();
+                        println!("Transaction errors, but inserting sigs: {:?}", sigs);
                         status_cache.insert(
                             &tx.message().recent_blockhash,
                             &tx.signatures[0],
@@ -581,6 +585,7 @@ impl Bank {
                         .is_some()
                 {
                     error_counters.duplicate_signature += 1;
+                    println!("duplicate signature: {}", tx.signatures[0]);
                     Err(TransactionError::DuplicateSignature)
                 } else {
                     lock_res
