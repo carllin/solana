@@ -7,6 +7,7 @@ use solana_metrics::counter::Counter;
 use solana_runtime::bank::{Bank, Result};
 use solana_runtime::locked_accounts_results::LockedAccountsResults;
 use solana_sdk::genesis_block::GenesisBlock;
+use solana_sdk::instruction::InstructionError;
 use solana_sdk::timing::duration_as_ms;
 use solana_sdk::timing::MAX_RECENT_BLOCKHASHES;
 use solana_sdk::transaction::TransactionError;
@@ -852,5 +853,87 @@ mod tests {
             process_entries(&bank, &[entry_3]),
             Err(TransactionError::AccountNotFound)
         );
+    }
+
+    #[test]
+    fn test_update_transaction_statuses() {
+        // Make sure instruction errors still update the signature cache
+        let (genesis_block, mint_keypair) = GenesisBlock::new(11_000);
+        let bank = Bank::new(&genesis_block);
+        let pubkey = Pubkey::new_rand();
+        bank.transfer(1_000, &mint_keypair, &pubkey).unwrap();
+        assert_eq!(bank.transaction_count(), 1);
+        assert_eq!(bank.get_balance(&pubkey), 1_000);
+        assert_eq!(
+            bank.transfer(10_001, &mint_keypair, &pubkey),
+            Err(TransactionError::InstructionError(
+                0,
+                InstructionError::new_result_with_negative_lamports(),
+            ))
+        );
+        assert_eq!(
+            bank.transfer(10_001, &mint_keypair, &pubkey),
+            Err(TransactionError::DuplicateSignature)
+        );
+
+        // Make sure other errors don't update the signature cache
+        let tx = system_transaction::create_user_account(
+            &mint_keypair,
+            &pubkey,
+            1000,
+            Hash::default(),
+            0,
+        );
+        let signature = tx.signatures[0];
+
+        // Should fail with blockhash not found
+        assert_eq!(
+            bank.process_transaction(&tx).map(|_| signature),
+            Err(TransactionError::BlockhashNotFound)
+        );
+
+        // Should fail again with blockhash not found
+        assert_eq!(
+            bank.process_transaction(&tx).map(|_| signature),
+            Err(TransactionError::BlockhashNotFound)
+        );
+    }
+
+    #[test]
+    fn test_update_transaction_statuses_fail() {
+        let (genesis_block, mint_keypair) = GenesisBlock::new(11_000);
+        let bank = Bank::new(&genesis_block);
+        let keypair1 = Keypair::new();
+        let keypair2 = Keypair::new();
+        let success_tx = system_transaction::create_user_account(
+            &mint_keypair,
+            &keypair1.pubkey(),
+            1,
+            bank.last_blockhash(),
+            0,
+        );
+        let fail_tx = system_transaction::create_user_account(
+            &mint_keypair,
+            &keypair2.pubkey(),
+            2,
+            bank.last_blockhash(),
+            0,
+        );
+
+        let entry_1_to_mint = next_entry(
+            &bank.last_blockhash(),
+            1,
+            vec![
+                success_tx, fail_tx.clone(), // will collide
+            ],
+        );
+
+        assert_eq!(
+            process_entries(&bank, &[entry_1_to_mint]),
+            Err(TransactionError::AccountInUse)
+        );
+
+        // Should not see duplicate signature error
+        assert_eq!(bank.process_transaction(&fail_tx), Ok(()));
     }
 }

@@ -396,10 +396,7 @@ impl Bank {
                         );
                     }
                 }
-                Err(TransactionError::BlockhashNotFound) => (),
-                Err(TransactionError::DuplicateSignature) => (),
-                Err(TransactionError::AccountNotFound) => (),
-                Err(e) => {
+                Err(TransactionError::InstructionError(b, e)) => {
                     if !tx.signatures.is_empty() {
                         let sigs: Vec<_> = txs.iter().flat_map(|t| t.signatures.clone()).collect();
                         println!("Transaction errors, but inserting sigs: {:?}", sigs);
@@ -407,10 +404,11 @@ impl Bank {
                             &tx.message().recent_blockhash,
                             &tx.signatures[0],
                             self.slot(),
-                            Err(e.clone()),
+                            Err(TransactionError::InstructionError(*b, e.clone())),
                         );
                     }
                 }
+                Err(_) => (),
             }
         }
     }
