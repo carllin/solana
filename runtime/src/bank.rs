@@ -387,7 +387,7 @@ impl Bank {
                 Ok(_) => {
                     if !tx.signatures.is_empty() {
                         let sigs: Vec<_> = txs.iter().flat_map(|t| t.signatures.clone()).collect();
-                        println!("Transaction ok, inserting sigs: {:?}", sigs);
+                        println!("Transaction ok, inserting sigs: {:?}, bank: {}", sigs, self.slot());
                         status_cache.insert(
                             &tx.message().recent_blockhash,
                             &tx.signatures[0],
@@ -399,7 +399,7 @@ impl Bank {
                 Err(TransactionError::InstructionError(b, e)) => {
                     if !tx.signatures.is_empty() {
                         let sigs: Vec<_> = txs.iter().flat_map(|t| t.signatures.clone()).collect();
-                        println!("Transaction errors, but inserting sigs: {:?}", sigs);
+                        println!("Transaction errors, but inserting sigs: {:?}, bank: {}", sigs, self.slot());
                         status_cache.insert(
                             &tx.message().recent_blockhash,
                             &tx.signatures[0],
