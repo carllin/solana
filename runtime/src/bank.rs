@@ -162,6 +162,10 @@ pub struct Bank {
 
     /// The Message processor
     message_processor: MessageProcessor,
+
+    /// Protects bank from being frozen while there are banking threads still working
+    /// on the bank
+    pub is_frozen: Arc<RwLock<bool>>,
 }
 
 impl Default for BlockhashQueue {
@@ -242,10 +246,12 @@ impl Bank {
     }
 
     pub fn is_frozen(&self) -> bool {
-        *self.hash.read().unwrap() != Hash::default()
+        *self.is_frozen.read().unwrap()
     }
 
     pub fn freeze(&self) {
+        let mut is_frozen_guard = self.is_frozen.write().unwrap();
+        *is_frozen_guard = true;
         let mut hash = self.hash.write().unwrap();
 
         if *hash == Hash::default() {
@@ -448,12 +454,7 @@ impl Bank {
     /// the oldest ones once its internal cache is full. Once boot, the
     /// bank will reject transactions using that `hash`.
     pub fn register_tick(&self, hash: &Hash) {
-        if self.is_frozen() {
-            warn!("=========== FIXME: register_tick() working on a frozen bank! ================");
-        }
-
-        // TODO: put this assert back in
-        // assert!(!self.is_frozen());
+        assert!(!self.is_frozen());
 
         let current_tick_height = {
             self.tick_height.fetch_add(1, Ordering::SeqCst);
@@ -480,11 +481,7 @@ impl Bank {
         &'a self,
         txs: &'b [Transaction],
     ) -> LockedAccountsResults<'a, 'b> {
-        if self.is_frozen() {
-            warn!("=========== FIXME: lock_accounts() working on a frozen bank! ================");
-        }
-        // TODO: put this assert back in
-        // assert!(!self.is_frozen());
+        assert!(!self.is_frozen());
         let results = self.accounts.lock_accounts(self.accounts_id, txs);
         LockedAccountsResults::new(results, &self, txs)
     }

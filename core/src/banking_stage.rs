@@ -122,15 +122,17 @@ impl BankingStage {
                 continue;
             }
 
-            let bank = poh_recorder.lock().unwrap().bank();
-            if bank.is_none() {
+            let bank_result = poh_recorder.lock().unwrap().bank();
+            if bank_result.is_none() {
                 unprocessed_packets.push((msgs.to_owned(), *offset, vers.to_owned()));
                 continue;
             }
-            let bank = bank.unwrap();
+
+            let bank_result = bank_result.unwrap();
+            let (bank, _freeze_guard) = bank_result.get_bank();
 
             let (processed, verified_txs, verified_indexes) =
-                Self::process_received_packets(&bank, &poh_recorder, &msgs, &vers, *offset)?;
+                Self::process_received_packets(bank, &poh_recorder, &msgs, &vers, *offset)?;
 
             if processed < verified_txs.len() {
                 bank_shutdown = true;
@@ -192,8 +194,9 @@ impl BankingStage {
         // Buffer the packets if I am the next leader
         // or, if it was getting sent to me
         let leader_id = match poh_recorder.lock().unwrap().bank() {
-            Some(bank) => {
-                leader_schedule_utils::slot_leader_at(bank.slot() + 1, &bank).unwrap_or_default()
+            Some(bank_result) => {
+                let (bank, _freeze_guard) = bank_result.get_bank();
+                leader_schedule_utils::slot_leader_at(bank.slot() + 1, bank).unwrap_or_default()
             }
             None => rcluster_info
                 .leader_data()
@@ -475,15 +478,17 @@ impl BankingStage {
                 continue;
             }
 
-            let bank = poh.lock().unwrap().bank();
-            if bank.is_none() {
+            let bank_result = poh.lock().unwrap().bank();
+
+            if bank_result.is_none() {
                 unprocessed_packets.push((msgs, 0, vers));
                 continue;
             }
-            let bank = bank.unwrap();
+            let bank_result = bank_result.unwrap();
+            let (bank, _freeze_guard) = bank_result.get_bank();
 
             let (processed, verified_txs, verified_indexes) =
-                Self::process_received_packets(&bank, &poh, &msgs, &vers, 0)?;
+                Self::process_received_packets(bank, &poh, &msgs, &vers, 0)?;
 
             if processed < verified_txs.len() {
                 bank_shutdown = true;

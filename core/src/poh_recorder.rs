@@ -21,6 +21,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::transaction::Transaction;
 use std::sync::mpsc::{channel, Receiver, Sender, SyncSender};
 use std::sync::Arc;
+use std::sync::RwLockReadGuard;
 
 const MAX_LAST_LEADER_GRACE_TICKS_FACTOR: u64 = 2;
 
@@ -38,6 +39,22 @@ pub struct WorkingBank {
     pub bank: Arc<Bank>,
     pub min_tick_height: u64,
     pub max_tick_height: u64,
+}
+
+pub struct WorkingBankResult {
+    bank: Arc<Bank>,
+}
+
+impl WorkingBankResult {
+    pub fn new(working_bank: &WorkingBank) -> Self {
+        let bank = working_bank.bank.clone();
+        Self { bank }
+    }
+
+    pub fn get_bank(&self) -> (&Arc<Bank>, RwLockReadGuard<bool>) {
+        let is_frozen_guard = self.bank.is_frozen.read().unwrap();
+        (&self.bank, is_frozen_guard)
+    }
 }
 
 pub struct PohRecorder {
@@ -88,8 +105,12 @@ impl PohRecorder {
         self.start_slot
     }
 
-    pub fn bank(&self) -> Option<Arc<Bank>> {
-        self.working_bank.clone().map(|w| w.bank)
+    pub fn bank(&self) -> Option<WorkingBankResult> {
+        if let Some(ref bank) = self.working_bank {
+            Some(WorkingBankResult::new(bank))
+        } else {
+            None
+        }
     }
 
     pub fn tick_height(&self) -> u64 {
