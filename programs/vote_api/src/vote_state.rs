@@ -1,15 +1,15 @@
 //! Vote state, vote program
 //! Receive and processes votes from validators
-use rand::{thread_rng, Rng};
 use crate::id;
 use bincode::{deserialize, serialize_into, serialized_size, ErrorKind};
+use log::*;
+use rand::{thread_rng, Rng};
 use serde_derive::{Deserialize, Serialize};
 use solana_sdk::account::{Account, KeyedAccount};
 use solana_sdk::instruction::InstructionError;
 use solana_sdk::instruction_processor_utils::State;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::VecDeque;
-use log::*;
 
 // Maximum number of votes to keep around
 pub const MAX_LOCKOUT_HISTORY: usize = 31;
@@ -54,7 +54,10 @@ impl Lockout {
     }
     pub fn is_expired(&self, slot: u64) -> bool {
         let exp = self.expiration_slot();
-        info!("expiration slot: {} self.slot: {} slot: {}", exp, self.slot, slot);
+        info!(
+            "expiration slot: {} self.slot: {} slot: {}",
+            exp, self.slot, slot
+        );
         exp < slot
     }
 }
@@ -81,7 +84,7 @@ impl Default for VoteState {
             commission: 0,
             root_slot: None,
             credits: 0,
-            id: thread_rng().gen_range(0, 500)
+            id: thread_rng().gen_range(0, 500),
         }
     }
 }
@@ -155,13 +158,33 @@ impl VoteState {
         let tid = thread_rng().gen_range(500, 1000);
         if let Some(last_vote) = self.votes.back() {
             if last_vote.slot >= vote.slot {
-                info!("ignoring old vote slot: {} last: {} vote.len: {} tid: {} id: {}", vote.slot, last_vote.slot, self.votes.len(), tid, self.id);
+                info!(
+                    "ignoring old vote slot: {} last: {} vote.len: {} tid: {} id: {}",
+                    vote.slot,
+                    last_vote.slot,
+                    self.votes.len(),
+                    tid,
+                    self.id
+                );
                 return;
             } else {
-                info!("new slot! {} old: {} votes.len: {} tid: {} id: {}", vote.slot, last_vote.slot, self.votes.len(), tid, self.id);
+                info!(
+                    "new slot! {} old: {} votes.len: {} tid: {} id: {}",
+                    vote.slot,
+                    last_vote.slot,
+                    self.votes.len(),
+                    tid,
+                    self.id
+                );
             }
         } else {
-            info!("no back! {} votes.len: {} tid: {} id: {}", vote.slot, self.votes.len(), tid, self.id);
+            info!(
+                "no back! {} votes.len: {} tid: {} id: {}",
+                vote.slot,
+                self.votes.len(),
+                tid,
+                self.id
+            );
         }
 
         let vote = Lockout::new(&vote);
@@ -205,7 +228,14 @@ impl VoteState {
         };
 
         self.double_lockouts();
-        info!("end vote: slot: {} votes.len: {} first: {} last: {} tid: {}", vote_slot, self.votes.len(), front, back, tid);
+        info!(
+            "end vote: slot: {} votes.len: {} first: {} last: {} tid: {}",
+            vote_slot,
+            self.votes.len(),
+            front,
+            back,
+            tid
+        );
     }
 
     pub fn nth_recent_vote(&self, position: usize) -> Option<&Lockout> {

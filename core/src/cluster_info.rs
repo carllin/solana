@@ -40,6 +40,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, KeypairUtil, Signable, Signature};
 use solana_sdk::timing::{duration_as_ms, timestamp};
 use solana_sdk::transaction::Transaction;
+use solana_vote_api::vote_instruction::VoteInstruction;
 use std::cmp::min;
 use std::fmt;
 use std::io;
@@ -318,6 +319,20 @@ impl ClusterInfo {
             .collect();
         let max_ts = votes.iter().map(|x| x.0).max().unwrap_or(since);
         let txs: Vec<Transaction> = votes.into_iter().map(|x| x.1).collect();
+        let vote_indexes: Vec<_> = txs
+            .iter()
+            .filter_map(|v| {
+                let vote = &v.message.instructions[0];
+                match deserialize(&vote.data[..]) {
+                    Ok(VoteInstruction::Vote(votes)) => Some(votes),
+                    _ => {
+                        println!("error deserializing gossiped vote");
+                        None
+                    }
+                }
+            })
+            .collect();
+        println!("vote_indexes: {:?}", vote_indexes);
         (txs, max_ts)
     }
 

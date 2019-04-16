@@ -55,6 +55,7 @@ impl ClusterInfoVoteListener {
             }
             let (votes, new_ts) = cluster_info.read().unwrap().get_votes(last_ts);
             if poh_recorder.lock().unwrap().bank().is_some() {
+                println!("Sending votes to bank");
                 last_ts = new_ts;
                 inc_new_counter_info!("cluster_info_vote_listener-recv_count", votes.len());
                 let msgs = packet::to_packets(&votes);
