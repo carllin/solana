@@ -9,7 +9,6 @@ use crate::entry::create_ticks;
 use crate::entry::next_entry_mut;
 use crate::entry::Entry;
 use crate::gossip_service::GossipService;
-use crate::leader_schedule_utils;
 use crate::poh_recorder::PohRecorder;
 use crate::poh_service::{PohService, PohServiceConfig};
 use crate::rpc::JsonRpcConfig;
@@ -115,11 +114,12 @@ impl Fullnode {
             bank.tick_height(),
             bank.last_blockhash(),
             bank.slot(),
-            leader_schedule_utils::next_leader_slot(&id, bank.slot(), &bank, Some(&blocktree)),
+            leader_schedule_cache.next_leader_slot(&id, bank.slot(), &bank, Some(&blocktree)),
             bank.ticks_per_slot(),
             &id,
             &blocktree,
             blocktree.new_blobs_signals.first().cloned(),
+            &leader_schedule_cache,
         );
         let poh_recorder = Arc::new(Mutex::new(poh_recorder));
         let poh_service = PohService::new(poh_recorder.clone(), &config.tick_config, &exit);
