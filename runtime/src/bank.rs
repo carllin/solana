@@ -442,6 +442,13 @@ impl Bank {
                     res[i].clone(),
                 );
             }
+
+            println!(
+                "Transaction response: {:?}, sigs: {:?}, bank: {}",
+                &res[i],
+                &tx.signatures[0],
+                self.slot()
+            );
         }
     }
 
@@ -669,7 +676,12 @@ impl Bank {
             }
         }
         if err_count > 0 {
-            info!("bank {} {} errors of {} txs", self.slot(), err_count, err_count + tx_count);
+            info!(
+                "bank {} {} errors of {} txs",
+                self.slot(),
+                err_count,
+                err_count + tx_count
+            );
             inc_new_counter_info!(
                 "bank-process_transactions-account_not_found",
                 error_counters.account_not_found
