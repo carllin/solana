@@ -243,7 +243,7 @@ impl ReplayStage {
                     );
                     cluster_info.write().unwrap().set_leader(&next_leader);
                     if next_leader == *my_id && reached_leader_tick {
-                        debug!("{} starting tpu for slot {}", my_id, poh_slot);
+                        println!("{} starting tpu for slot {}", my_id, poh_slot);
                         solana_metrics::submit(
                             influxdb::Point::new("counter-replay_stage-new_leader")
                                 .add_field(
@@ -348,7 +348,7 @@ impl ReplayStage {
             next_leader_slot,
             ticks_per_slot,
         );
-        debug!(
+        println!(
             "{:?} voted and reset poh at {}. next leader slot {:?}",
             my_id,
             bank.tick_height(),
@@ -435,7 +435,7 @@ impl ReplayStage {
                 let vote_threshold =
                     locktower.check_vote_stake_threshold(b.slot(), &stake_lockouts);
                 Self::confirm_forks(locktower, stake_lockouts, progress, bank_forks);
-                debug!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
+                println!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
                 vote_threshold
             })
             .map(|(b, stake_lockouts)| (locktower.calculate_weight(&stake_lockouts), b.clone()))
@@ -444,7 +444,7 @@ impl ReplayStage {
         votable.sort_by_key(|b| b.0);
         let ms = timing::duration_as_ms(&locktower_start.elapsed());
 
-        trace!("votable_banks {}", votable.len());
+        println!("votable_banks {}", votable.len());
         if !votable.is_empty() {
             let weights: Vec<u128> = votable.iter().map(|x| x.0).collect();
             info!(
