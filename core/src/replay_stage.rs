@@ -405,22 +405,22 @@ impl ReplayStage {
             .values()
             .filter(|b| {
                 let is_votable = b.is_votable();
-                trace!("bank is votable: {} {}", b.slot(), is_votable);
+                println!("bank is votable: {} {}", b.slot(), is_votable);
                 is_votable
             })
             .filter(|b| {
                 let is_recent_epoch = locktower.is_recent_epoch(b);
-                trace!("bank is is_recent_epoch: {} {}", b.slot(), is_recent_epoch);
+                println!("bank is is_recent_epoch: {} {}", b.slot(), is_recent_epoch);
                 is_recent_epoch
             })
             .filter(|b| {
                 let has_voted = locktower.has_voted(b.slot());
-                trace!("bank is has_voted: {} {}", b.slot(), has_voted);
+                println!("bank is has_voted: {} {}", b.slot(), has_voted);
                 !has_voted
             })
             .filter(|b| {
                 let is_locked_out = locktower.is_locked_out(b.slot(), &descendants);
-                trace!("bank is is_locked_out: {} {}", b.slot(), is_locked_out);
+                println!("bank is is_locked_out: {} {}", b.slot(), is_locked_out);
                 !is_locked_out
             })
             .map(|bank| {
