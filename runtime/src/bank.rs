@@ -663,13 +663,13 @@ impl Bank {
                 tx_count += 1;
             } else {
                 if err_count == 0 {
-                    info!("tx error: {:?} {:?}", r, tx);
+                    info!("tx error on bank {}: {:?} {:?}", self.slot(), r, tx);
                 }
                 err_count += 1;
             }
         }
         if err_count > 0 {
-            info!("{} errors of {} txs", err_count, err_count + tx_count);
+            info!("bank {} {} errors of {} txs", self.slot(), err_count, err_count + tx_count);
             inc_new_counter_info!(
                 "bank-process_transactions-account_not_found",
                 error_counters.account_not_found
