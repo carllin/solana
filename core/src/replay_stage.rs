@@ -256,6 +256,7 @@ impl ReplayStage {
                                 )
                                 .to_owned(),);
                         let tpu_bank = Bank::new_from_parent(&parent, my_id, poh_slot);
+                        Self::print_parents(&tpu_bank);
                         bank_forks.write().unwrap().insert(tpu_bank);
                         if let Some(tpu_bank) = bank_forks.read().unwrap().get(poh_slot).cloned() {
                             assert_eq!(
@@ -349,8 +350,9 @@ impl ReplayStage {
             ticks_per_slot,
         );
         println!(
-            "{:?} voted and reset poh at {}. next leader slot {:?}",
+            "{:?} voted for slot {} and reset poh at {}. next leader slot {:?}",
             my_id,
+            bank.slot(),
             bank.tick_height(),
             next_leader_slot
         );
@@ -495,6 +497,12 @@ impl ReplayStage {
         });
     }
 
+    fn print_parents(bank: &Bank) {
+        let parents = bank.parents();
+        let ids: Vec<_> = parents.into_iter().rev().map(|b| b.slot()).collect();
+        println!("parents of bank {}: {:?}", bank.slot(), ids);
+    }
+
     fn load_blocktree_entries(
         bank: &Bank,
         blocktree: &Blocktree,
@@ -595,8 +603,11 @@ impl ReplayStage {
                 let leader = leader_schedule_cache
                     .slot_leader_at_else_compute(child_id, &parent_bank)
                     .unwrap();
-                info!("new fork:{} parent:{}", child_id, parent_id);
-                forks.insert(Bank::new_from_parent(&parent_bank, &leader, child_id));
+
+                println!("new fork: {}", child_id);
+                let new_bank = Bank::new_from_parent(&parent_bank, &leader, child_id);
+                Self::print_parents(&new_bank);
+                forks.insert(new_bank);
             }
         }
     }
