@@ -26,6 +26,34 @@ fn par_execute_entries(bank: &Bank, entries: &[(&Entry, LockedAccountsResults)])
     let results: Vec<Result<()>> = entries
         .into_par_iter()
         .map(|(e, locked_accounts)| {
+            assert_eq!(
+                locked_accounts.locked_accounts_results().len(),
+                e.transactions.len()
+            );
+            for (res, tx) in locked_accounts
+                .locked_accounts_results()
+                .iter()
+                .zip(&e.transactions)
+            {
+                if res.is_err() {
+                    println!(
+                        "Unexpected validator lock accounts error on bank: {}, error: {:?}",
+                        bank.slot(),
+                        e
+                    );
+                    solana_metrics::submit(
+                        solana_metrics::influxdb::Point::new("validator_process_entry_error")
+                            .add_field(
+                                "error",
+                                solana_metrics::influxdb::Value::String(format!(
+                                    "Lock accounts error: {:?}, tx: {:?}",
+                                    e, tx
+                                )),
+                            )
+                            .to_owned(),
+                    )
+                }
+            }
             let results = bank.load_execute_and_commit_transactions(
                 &e.transactions,
                 locked_accounts,
@@ -38,7 +66,11 @@ fn par_execute_entries(bank: &Bank, entries: &[(&Entry, LockedAccountsResults)])
                         first_err = Some(r.clone());
                     }
                     if !Bank::can_commit(&r) {
-                        warn!("Unexpected validator error: {:?}", e);
+                        println!(
+                            "Unexpected validator error on bank: {}: {:?}",
+                            bank.slot(),
+                            e
+                        );
                         solana_metrics::submit(
                             solana_metrics::influxdb::Point::new("validator_process_entry_error")
                                 .add_field(
@@ -74,7 +106,7 @@ pub fn process_entries(bank: &Bank, entries: &[Entry]) -> Result<()> {
             continue;
         }
         // try to lock the accounts
-        let lock_results = bank.lock_accounts(&entry.transactions);
+        let lock_results = bank.lock_accounts(bank.slot(), &entry.transactions);
         // if any of the locks error out
         // execute the current group
         if first_err(lock_results.locked_accounts_results()).is_err() {
@@ -83,7 +115,7 @@ pub fn process_entries(bank: &Bank, entries: &[Entry]) -> Result<()> {
             // mt_group
             mt_group = vec![];
             drop(lock_results);
-            let lock_results = bank.lock_accounts(&entry.transactions);
+            let lock_results = bank.lock_accounts(bank.slot(), &entry.transactions);
             mt_group.push((entry, lock_results));
         } else {
             // push the entry to the mt_group

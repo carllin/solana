@@ -236,6 +236,9 @@ impl AccountsDB {
         pubkey: &Pubkey,
     ) -> Option<Account> {
         let info = accounts_index.get(pubkey, ancestors)?;
+        /*let info = accounts_index.get(pubkey, ancestors);
+        println!("load of: {}, resulting info: {:?}", pubkey, info.is_some());
+        let info = info?;*/
         //TODO: thread this as a ref
         storage
             .get(&info.id)

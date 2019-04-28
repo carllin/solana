@@ -167,6 +167,11 @@ impl Accounts {
                 );
             }
             if called_accounts.is_empty() || called_accounts[0].lamports == 0 {
+                println!(
+                    "Account not found: {:?}, len: {}",
+                    message.account_keys,
+                    called_accounts.len()
+                );
                 error_counters.account_not_found += 1;
                 Err(TransactionError::AccountNotFound)
             } else if called_accounts[0].lamports < fee {
@@ -322,6 +327,7 @@ impl Accounts {
     }
 
     fn lock_account(
+        bank_id: u64,
         (fork_locks, parent_locks): &mut AccountLocks,
         keys: &[Pubkey],
         error_counters: &mut ErrorCounters,
@@ -340,6 +346,10 @@ impl Accounts {
                     parent_locks.retain(|p| {
                         let p = p.lock().unwrap();
                         if p.contains(k) {
+                            println!(
+                                "bank {}, parent locks contains lock for: {}, set of keys: {:?}",
+                                bank_id, k, keys
+                            );
                             is_locked = true;
                         }
 
@@ -406,13 +416,14 @@ impl Accounts {
     /// This function will prevent multiple threads from modifying the same account state at the
     /// same time
     #[must_use]
-    pub fn lock_accounts(&self, txs: &[Transaction]) -> Vec<Result<()>> {
+    pub fn lock_accounts(&self, bank_id: u64, txs: &[Transaction]) -> Vec<Result<()>> {
         let mut account_locks = self.account_locks.lock().unwrap();
         let mut error_counters = ErrorCounters::default();
         let rv = txs
             .iter()
             .map(|tx| {
                 Self::lock_account(
+                    bank_id,
                     &mut account_locks,
                     &tx.message().account_keys,
                     &mut error_counters,

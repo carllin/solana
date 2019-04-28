@@ -440,7 +440,7 @@ impl BankingStage {
         let now = Instant::now();
         // Once accounts are locked, other threads cannot encode transactions that will modify the
         // same account state
-        let lock_results = bank.lock_accounts(txs);
+        let lock_results = bank.lock_accounts(bank.slot(), txs);
         let lock_time = now.elapsed();
 
         let results = Self::process_and_record_transactions_locked(bank, txs, poh, &lock_results);

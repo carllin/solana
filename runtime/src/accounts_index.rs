@@ -16,20 +16,37 @@ impl<T: Clone> AccountsIndex<T> {
     /// Get an account
     /// The latest account that appears in `ancestors` or `roots` is returned.
     pub fn get(&self, pubkey: &Pubkey, ancestors: &HashMap<Fork, usize>) -> Option<&T> {
+        /*println!("Looking for pubkey: {}", pubkey);*/
         let list = self.account_maps.get(pubkey)?;
         let mut max = 0;
         let mut rv = None;
         for e in list.iter().rev() {
+            /*println!("pubkey: {}, fork: {}", pubkey, e.0);
+            println!(
+                "is_root: {}, is_ancestor: {}",
+                self.is_root(e.0),
+                ancestors.get(&e.0).is_some()
+            );*/
             if e.0 >= max && (ancestors.get(&e.0).is_some() || self.is_root(e.0)) {
-                trace!("GET {} {:?}", e.0, ancestors);
                 rv = Some(&e.1);
                 max = e.0;
             }
         }
+        /*if rv.is_none() {
+            println!("Failed to get pubkey: {}, list_len: {}", pubkey, list.len());
+            for e in list.iter().rev() {
+                println!(
+                    "fork: {}, is_root: {}, is_ancestor: {}",
+                    e.0,
+                    self.is_root(e.0),
+                    ancestors.get(&e.0).is_some()
+                );
+            }
+        }*/
         rv
     }
 
-    /// Insert a new fork.  
+    /// Insert a new fork.
     /// @retval - The return value contains any squashed accounts that can freed from storage.
     pub fn insert(&mut self, fork: Fork, pubkey: &Pubkey, account_info: T) -> Vec<(Fork, T)> {
         let mut rv = vec![];
@@ -42,6 +59,10 @@ impl<T: Clone> AccountsIndex<T> {
         // filter out old entries
         rv.extend(fork_vec.iter().filter(|(f, _)| *f == fork).cloned());
         fork_vec.retain(|(f, _)| *f != fork);
+
+        if rv.is_empty() {
+            println!("Inserting first time fork: {} pubkey: {}", fork, pubkey);
+        }
 
         // add the new entry
         fork_vec.push((fork, account_info));
@@ -57,6 +78,7 @@ impl<T: Clone> AccountsIndex<T> {
             let entry = self.account_maps.entry(*pubkey).or_insert(vec![]);
             std::mem::swap(entry, &mut fork_vec);
         };
+
         rv
     }
     pub fn is_purged(&self, fork: Fork) -> bool {
@@ -66,16 +88,31 @@ impl<T: Clone> AccountsIndex<T> {
         self.roots.contains(&fork)
     }
     pub fn add_root(&mut self, fork: Fork) {
+        if !((self.last_root == 0 && fork == 0) || (fork > self.last_root)) {
+            solana_metrics::submit(
+                solana_metrics::influxdb::Point::new("validator_process_entry_error")
+                    .add_field(
+                        "error",
+                        solana_metrics::influxdb::Value::String(format!(
+                            "new root: {} <= old root:{}",
+                            fork, self.last_root
+                        )),
+                    )
+                    .to_owned(),
+            )
+        }
         assert!(
             (self.last_root == 0 && fork == 0) || (fork > self.last_root),
             "new roots must be increasing"
         );
+        println!("Adding root {}", fork);
         self.last_root = fork;
         self.roots.insert(fork);
     }
     /// Remove the fork when the storage for the fork is freed
     /// Accounts no longer reference this fork.
     pub fn cleanup_dead_fork(&mut self, fork: Fork) {
+        println!("Removing dead fork: {}", fork);
         self.roots.remove(&fork);
     }
 }

@@ -516,6 +516,7 @@ impl Bank {
 
     pub fn lock_accounts<'a, 'b>(
         &'a self,
+        bank_id: u64,
         txs: &'b [Transaction],
     ) -> LockedAccountsResults<'a, 'b> {
         if self.is_frozen() {
@@ -523,7 +524,7 @@ impl Bank {
         }
         // TODO: put this assert back in
         // assert!(!self.is_frozen());
-        let results = self.accounts.lock_accounts(txs);
+        let results = self.accounts.lock_accounts(bank_id, txs);
         LockedAccountsResults::new(results, &self, txs)
     }
 
@@ -807,7 +808,7 @@ impl Bank {
 
     #[must_use]
     pub fn process_transactions(&self, txs: &[Transaction]) -> Vec<Result<()>> {
-        let lock_results = self.lock_accounts(txs);
+        let lock_results = self.lock_accounts(self.slot(), txs);
         self.load_execute_and_commit_transactions(txs, &lock_results, MAX_RECENT_BLOCKHASHES)
     }
 
