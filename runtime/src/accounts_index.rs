@@ -15,7 +15,12 @@ pub struct AccountsIndex<T> {
 impl<T: Clone> AccountsIndex<T> {
     /// Get an account
     /// The latest account that appears in `ancestors` or `roots` is returned.
-    pub fn get(&self, pubkey: &Pubkey, ancestors: &HashMap<Fork, usize>) -> Option<&T> {
+    pub fn get(
+        &self,
+        pubkey: &Pubkey,
+        ancestors: &HashMap<Fork, usize>,
+        is_validator: bool,
+    ) -> Option<&T> {
         /*println!("Looking for pubkey: {}", pubkey);*/
         let list = self.account_maps.get(pubkey)?;
         let mut max = 0;
@@ -32,7 +37,7 @@ impl<T: Clone> AccountsIndex<T> {
                 max = e.0;
             }
         }
-        /*if rv.is_none() {
+        if rv.is_none() && is_validator {
             println!("Failed to get pubkey: {}, list_len: {}", pubkey, list.len());
             for e in list.iter().rev() {
                 println!(
@@ -42,13 +47,19 @@ impl<T: Clone> AccountsIndex<T> {
                     ancestors.get(&e.0).is_some()
                 );
             }
-        }*/
+        }
         rv
     }
 
     /// Insert a new fork.
     /// @retval - The return value contains any squashed accounts that can freed from storage.
-    pub fn insert(&mut self, fork: Fork, pubkey: &Pubkey, account_info: T) -> Vec<(Fork, T)> {
+    pub fn insert(
+        &mut self,
+        fork: Fork,
+        pubkey: &Pubkey,
+        account_info: T,
+        is_validator: bool,
+    ) -> Vec<(Fork, T)> {
         let mut rv = vec![];
         let mut fork_vec: Vec<(Fork, T)> = vec![];
         {
@@ -60,7 +71,7 @@ impl<T: Clone> AccountsIndex<T> {
         rv.extend(fork_vec.iter().filter(|(f, _)| *f == fork).cloned());
         fork_vec.retain(|(f, _)| *f != fork);
 
-        if rv.is_empty() {
+        if rv.is_empty() && is_validator {
             println!("Inserting first time fork: {} pubkey: {}", fork, pubkey);
         }
 

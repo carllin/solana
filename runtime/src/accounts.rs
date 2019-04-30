@@ -146,6 +146,7 @@ impl Accounts {
         tx: &Transaction,
         fee: u64,
         error_counters: &mut ErrorCounters,
+        is_validator: bool,
     ) -> Result<Vec<Account>> {
         // Copy all the accounts
         let message = tx.message();
@@ -163,7 +164,8 @@ impl Accounts {
             let mut called_accounts: Vec<Account> = vec![];
             for key in &message.account_keys {
                 called_accounts.push(
-                    AccountsDB::load(storage, ancestors, accounts_index, key).unwrap_or_default(),
+                    AccountsDB::load(storage, ancestors, accounts_index, key, is_validator)
+                        .unwrap_or_default(),
                 );
             }
             if called_accounts.is_empty() || called_accounts[0].lamports == 0 {
@@ -206,13 +208,14 @@ impl Accounts {
             }
             depth += 1;
 
-            let program = match AccountsDB::load(storage, ancestors, accounts_index, &program_id) {
-                Some(program) => program,
-                None => {
-                    error_counters.account_not_found += 1;
-                    return Err(TransactionError::AccountNotFound);
-                }
-            };
+            let program =
+                match AccountsDB::load(storage, ancestors, accounts_index, &program_id, false) {
+                    Some(program) => program,
+                    None => {
+                        error_counters.account_not_found += 1;
+                        return Err(TransactionError::AccountNotFound);
+                    }
+                };
             if !program.executable || program.owner == Pubkey::default() {
                 error_counters.account_not_found += 1;
                 return Err(TransactionError::AccountNotFound);
@@ -261,6 +264,7 @@ impl Accounts {
         lock_results: Vec<Result<()>>,
         fee_calculator: &FeeCalculator,
         error_counters: &mut ErrorCounters,
+        is_validator: bool,
     ) -> Vec<Result<(InstructionAccounts, InstructionLoaders)>> {
         //PERF: hold the lock to scan for the references, but not to clone the accounts
         //TODO: two locks usually leads to deadlocks, should this be one structure?
@@ -278,6 +282,7 @@ impl Accounts {
                         tx,
                         fee,
                         error_counters,
+                        is_validator,
                     )?;
                     let loaders = Self::load_loaders(
                         &storage,
@@ -322,8 +327,9 @@ impl Accounts {
     }
 
     /// Slow because lock is held for 1 operation instead of many
-    pub fn store_slow(&self, fork: Fork, pubkey: &Pubkey, account: &Account) {
-        self.accounts_db.store(fork, &[(pubkey, account)]);
+    pub fn store_slow(&self, fork: Fork, pubkey: &Pubkey, account: &Account, is_validator: bool) {
+        self.accounts_db
+            .store(fork, &[(pubkey, account)], is_validator);
     }
 
     fn lock_account(
@@ -459,8 +465,16 @@ impl Accounts {
         results: Vec<Result<()>>,
         fee_calculator: &FeeCalculator,
         error_counters: &mut ErrorCounters,
+        is_validator: bool,
     ) -> Vec<Result<(InstructionAccounts, InstructionLoaders)>> {
-        self.load_accounts_internal(ancestors, txs, results, fee_calculator, error_counters)
+        self.load_accounts_internal(
+            ancestors,
+            txs,
+            results,
+            fee_calculator,
+            error_counters,
+            is_validator,
+        )
     }
 
     /// Store the accounts into the DB
@@ -470,6 +484,7 @@ impl Accounts {
         txs: &[Transaction],
         res: &[Result<()>],
         loaded: &[Result<(InstructionAccounts, InstructionLoaders)>],
+        is_validator: bool,
     ) {
         let mut accounts: Vec<(&Pubkey, &Account)> = vec![];
         for (i, raccs) in loaded.iter().enumerate() {
@@ -483,7 +498,7 @@ impl Accounts {
                 accounts.push((key, account));
             }
         }
-        self.accounts_db.store(fork, &accounts);
+        self.accounts_db.store(fork, &accounts, is_validator);
     }
 
     /// Purge a fork if it is not a root
@@ -516,7 +531,7 @@ mod tests {
     ) -> Vec<Result<(InstructionAccounts, InstructionLoaders)>> {
         let accounts = Accounts::new(None);
         for ka in ka.iter() {
-            accounts.store_slow(0, &ka.0, &ka.1);
+            accounts.store_slow(0, &ka.0, &ka.1, false);
         }
 
         let ancestors = vec![(0, 0)].into_iter().collect();

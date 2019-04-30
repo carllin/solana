@@ -364,6 +364,7 @@ impl Bank {
         self.store(
             &genesis_block.bootstrap_leader_vote_account_id,
             &bootstrap_leader_vote_account,
+            false,
         );
 
         self.blockhash_queue
@@ -403,7 +404,7 @@ impl Bank {
     pub fn register_native_instruction_processor(&self, name: &str, program_id: &Pubkey) {
         debug!("Adding native program {} under {:?}", name, program_id);
         let account = native_loader::create_loadable_account(name);
-        self.store(program_id, &account);
+        self.store(program_id, &account, false);
     }
 
     /// Return the last block hash registered.
@@ -543,6 +544,7 @@ impl Bank {
         txs: &[Transaction],
         results: Vec<Result<()>>,
         error_counters: &mut ErrorCounters,
+        is_validator: bool,
     ) -> Vec<Result<(InstructionAccounts, InstructionLoaders)>> {
         self.accounts.load_accounts(
             &self.ancestors,
@@ -550,6 +552,7 @@ impl Bank {
             results,
             &self.fee_calculator,
             error_counters,
+            is_validator,
         )
     }
     fn check_refs(
@@ -628,6 +631,7 @@ impl Bank {
         txs: &[Transaction],
         lock_results: &LockedAccountsResults,
         max_age: usize,
+        is_validator: bool,
     ) -> (
         Vec<Result<(InstructionAccounts, InstructionLoaders)>>,
         Vec<Result<()>>,
@@ -638,7 +642,8 @@ impl Bank {
         let refs_results = self.check_refs(txs, lock_results, &mut error_counters);
         let age_results = self.check_age(txs, refs_results, max_age, &mut error_counters);
         let sig_results = self.check_signatures(txs, age_results, &mut error_counters);
-        let mut loaded_accounts = self.load_accounts(txs, sig_results, &mut error_counters);
+        let mut loaded_accounts =
+            self.load_accounts(txs, sig_results, &mut error_counters, is_validator);
         let tick_height = self.tick_height();
 
         let load_elapsed = now.elapsed();
@@ -764,6 +769,7 @@ impl Bank {
         txs: &[Transaction],
         loaded_accounts: &[Result<(InstructionAccounts, InstructionLoaders)>],
         executed: &[Result<()>],
+        is_validator: bool,
     ) -> Vec<Result<()>> {
         if self.is_frozen() {
             warn!("=========== FIXME: commit_transactions() working on a frozen bank! ================");
@@ -777,7 +783,7 @@ impl Bank {
         // assert!(!self.is_frozen());
         let now = Instant::now();
         self.accounts
-            .store_accounts(self.slot(), txs, executed, loaded_accounts);
+            .store_accounts(self.slot(), txs, executed, loaded_accounts, is_validator);
 
         self.store_vote_accounts(txs, executed, loaded_accounts);
 
@@ -799,17 +805,18 @@ impl Bank {
         txs: &[Transaction],
         lock_results: &LockedAccountsResults,
         max_age: usize,
+        is_validator: bool,
     ) -> Vec<Result<()>> {
         let (loaded_accounts, executed) =
-            self.load_and_execute_transactions(txs, lock_results, max_age);
+            self.load_and_execute_transactions(txs, lock_results, max_age, is_validator);
 
-        self.commit_transactions(txs, &loaded_accounts, &executed)
+        self.commit_transactions(txs, &loaded_accounts, &executed, is_validator)
     }
 
     #[must_use]
     pub fn process_transactions(&self, txs: &[Transaction]) -> Vec<Result<()>> {
         let lock_results = self.lock_accounts(self.slot(), txs);
-        self.load_execute_and_commit_transactions(txs, &lock_results, MAX_RECENT_BLOCKHASHES)
+        self.load_execute_and_commit_transactions(txs, &lock_results, MAX_RECENT_BLOCKHASHES, false)
     }
 
     /// Create, sign, and process a Transaction from `keypair` to `to` of
@@ -843,8 +850,9 @@ impl Bank {
         parents
     }
 
-    fn store(&self, pubkey: &Pubkey, account: &Account) {
-        self.accounts.store_slow(self.slot(), pubkey, account);
+    fn store(&self, pubkey: &Pubkey, account: &Account, is_validator: bool) {
+        self.accounts
+            .store_slow(self.slot(), pubkey, account, is_validator);
         if solana_vote_api::check_id(&account.owner) {
             let mut vote_accounts = self.vote_accounts.write().unwrap();
             if account.lamports != 0 {
@@ -863,7 +871,7 @@ impl Bank {
                 }
 
                 account.lamports -= lamports;
-                self.store(pubkey, &account);
+                self.store(pubkey, &account, false);
 
                 Ok(())
             }
@@ -874,7 +882,7 @@ impl Bank {
     pub fn deposit(&self, pubkey: &Pubkey, lamports: u64) {
         let mut account = self.get_account(pubkey).unwrap_or_default();
         account.lamports += lamports;
-        self.store(pubkey, &account);
+        self.store(pubkey, &account, false);
     }
 
     pub fn get_account(&self, pubkey: &Pubkey) -> Option<Account> {

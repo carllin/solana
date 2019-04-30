@@ -234,21 +234,26 @@ impl AccountsDB {
         ancestors: &HashMap<Fork, usize>,
         accounts_index: &AccountsIndex<AccountInfo>,
         pubkey: &Pubkey,
+        is_validator: bool,
     ) -> Option<Account> {
-        let info = accounts_index.get(pubkey, ancestors)?;
+        let info = accounts_index.get(pubkey, ancestors, is_validator)?;
         /*let info = accounts_index.get(pubkey, ancestors);
         println!("load of: {}, resulting info: {:?}", pubkey, info.is_some());
         let info = info?;*/
         //TODO: thread this as a ref
-        storage
-            .get(&info.id)
-            .and_then(|store| Some(store.accounts.get_account(info.offset)?.0.clone_account()))
+        let s = storage.get(&info.id);
+
+        if is_validator && s.is_none() {
+            println!("Storage for pubkey: {} is none", pubkey);
+        }
+
+        s.and_then(|store| Some(store.accounts.get_account(info.offset)?.0.clone_account()))
     }
 
     pub fn load_slow(&self, ancestors: &HashMap<Fork, usize>, pubkey: &Pubkey) -> Option<Account> {
         let accounts_index = self.accounts_index.read().unwrap();
         let storage = self.storage.read().unwrap();
-        Self::load(&storage, ancestors, &accounts_index, pubkey)
+        Self::load(&storage, ancestors, &accounts_index, pubkey, false)
     }
 
     fn fork_storage(&self, fork_id: Fork) -> Arc<AccountStorageEntry> {
@@ -332,12 +337,13 @@ impl AccountsDB {
         fork_id: Fork,
         infos: Vec<AccountInfo>,
         accounts: &[(&Pubkey, &Account)],
+        is_validator: bool,
     ) -> Vec<(Fork, AccountInfo)> {
         let mut index = self.accounts_index.write().unwrap();
         let mut reclaims = vec![];
         for (i, info) in infos.into_iter().enumerate() {
             let key = &accounts[i].0;
-            reclaims.extend(index.insert(fork_id, key, info).into_iter())
+            reclaims.extend(index.insert(fork_id, key, info, is_validator).into_iter())
         }
         reclaims
     }
@@ -386,9 +392,9 @@ impl AccountsDB {
     }
 
     /// Store the account update.
-    pub fn store(&self, fork_id: Fork, accounts: &[(&Pubkey, &Account)]) {
+    pub fn store(&self, fork_id: Fork, accounts: &[(&Pubkey, &Account)], is_validator: bool) {
         let infos = self.store_accounts(fork_id, accounts);
-        let reclaims = self.update_index(fork_id, infos, accounts);
+        let reclaims = self.update_index(fork_id, infos, accounts, is_validator);
         trace!("reclaim: {}", reclaims.len());
         let mut dead_forks = self.remove_dead_accounts(reclaims);
         trace!("dead_forks: {}", dead_forks.len());

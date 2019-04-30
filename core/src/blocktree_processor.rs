@@ -58,6 +58,7 @@ fn par_execute_entries(bank: &Bank, entries: &[(&Entry, LockedAccountsResults)])
                 &e.transactions,
                 locked_accounts,
                 MAX_RECENT_BLOCKHASHES,
+                true,
             );
             let mut first_err = None;
             for r in results {
