@@ -247,7 +247,26 @@ impl AccountsDB {
             println!("Storage for pubkey: {} is none", pubkey);
         }
 
-        s.and_then(|store| Some(store.accounts.get_account(info.offset)?.0.clone_account()))
+        let res = s.and_then(|store| {
+            let account = store
+                .accounts
+                .get_account(pubkey, info.offset, is_validator)?
+                .0;
+
+            if account.balance.lamports == 0 && is_validator {
+                println!("balance for pubkey {} is 0", pubkey);
+            }
+            Some(account.clone_account())
+        });
+
+        if res.is_none() && is_validator {
+            if let Some(st) = s {
+                println!("None for pubkey, but latest fork: {}", st.fork_id);
+            }
+            println!("Returned none for pubkey: {}", pubkey);
+        }
+
+        res
     }
 
     pub fn load_slow(&self, ancestors: &HashMap<Fork, usize>, pubkey: &Pubkey) -> Option<Account> {
@@ -295,10 +314,18 @@ impl AccountsDB {
         }
     }
 
-    fn store_accounts(&self, fork_id: Fork, accounts: &[(&Pubkey, &Account)]) -> Vec<AccountInfo> {
+    fn store_accounts(
+        &self,
+        fork_id: Fork,
+        accounts: &[(&Pubkey, &Account)],
+        is_validator: bool,
+    ) -> Vec<AccountInfo> {
         let with_meta: Vec<(StorageMeta, &Account)> = accounts
             .iter()
             .map(|(pubkey, account)| {
+                if is_validator && account.lamports == 0 {
+                    println!("Storing zero-balance account: {}", pubkey);
+                }
                 let write_version = self.write_version.fetch_add(1, Ordering::Relaxed) as u64;
                 let data_len = if account.lamports == 0 {
                     0
@@ -393,7 +420,7 @@ impl AccountsDB {
 
     /// Store the account update.
     pub fn store(&self, fork_id: Fork, accounts: &[(&Pubkey, &Account)], is_validator: bool) {
-        let infos = self.store_accounts(fork_id, accounts);
+        let infos = self.store_accounts(fork_id, accounts, is_validator);
         let reclaims = self.update_index(fork_id, infos, accounts, is_validator);
         trace!("reclaim: {}", reclaims.len());
         let mut dead_forks = self.remove_dead_accounts(reclaims);

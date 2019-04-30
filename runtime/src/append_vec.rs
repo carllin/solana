@@ -112,9 +112,12 @@ impl AppendVec {
         self.file_size
     }
 
-    fn get_slice(&self, offset: usize, size: usize) -> Option<(&[u8], usize)> {
+    fn get_slice(&self, offset: usize, size: usize, is_validator: bool) -> Option<(&[u8], usize)> {
         let len = self.len();
         if len < offset + size {
+            if is_validator {
+                println!("len: {}, offset: {}, size: {}", len, offset, size);
+            }
             return None;
         }
         let data = &self.map[offset..offset + size];
@@ -167,18 +170,36 @@ impl AppendVec {
         Some(pos)
     }
 
-    fn get_type<'a, T>(&self, offset: usize) -> Option<(&'a T, usize)> {
-        let (data, next) = self.get_slice(offset, mem::size_of::<T>())?;
+    fn get_type<'a, T>(&self, offset: usize, is_validator: bool) -> Option<(&'a T, usize)> {
+        let (data, next) = self.get_slice(offset, mem::size_of::<T>(), is_validator)?;
         let ptr: *const T = data.as_ptr() as *const T;
         //UNSAFE: The cast is safe because the slice is aligned and fits into the memory
         //and the lifetime of he &T is tied to self, which holds the underlying memory map
         Some((unsafe { &*ptr }, next))
     }
 
-    pub fn get_account<'a>(&'a self, offset: usize) -> Option<(StoredAccount<'a>, usize)> {
-        let (meta, next): (&'a StorageMeta, _) = self.get_type(offset)?;
-        let (balance, next): (&'a AccountBalance, _) = self.get_type(next)?;
-        let (data, next) = self.get_slice(next, meta.data_len as usize)?;
+    pub fn get_account<'a>(
+        &'a self,
+        pubkey: &Pubkey,
+        offset: usize,
+        is_validator: bool,
+    ) -> Option<(StoredAccount<'a>, usize)> {
+        let typed = self.get_type(offset, is_validator);
+        if typed.is_none() && is_validator {
+            println!("Typed for offset: {} is none", pubkey);
+        }
+        let (meta, next): (&'a StorageMeta, _) = typed?;
+
+        let typed = self.get_type(next, is_validator);
+        if typed.is_none() && is_validator {
+            println!("Typed for next: {} is none", pubkey);
+        }
+        let (balance, next): (&'a AccountBalance, _) = typed?;
+        let sliced = self.get_slice(next, meta.data_len as usize, is_validator);
+        if sliced.is_none() && is_validator {
+            println!("Slice for: {} is none", pubkey);
+        }
+        let (data, next) = sliced?;
         Some((
             StoredAccount {
                 meta,
@@ -189,14 +210,14 @@ impl AppendVec {
         ))
     }
     pub fn get_account_test(&self, offset: usize) -> Option<(StorageMeta, Account)> {
-        let stored = self.get_account(offset)?;
+        let stored = self.get_account(&Pubkey::default(), offset, false)?;
         let meta = stored.0.meta.clone();
         Some((meta, stored.0.clone_account()))
     }
 
     pub fn accounts<'a>(&'a self, mut start: usize) -> Vec<StoredAccount<'a>> {
         let mut accounts = vec![];
-        while let Some((account, next)) = self.get_account(start) {
+        while let Some((account, next)) = self.get_account(&Pubkey::default(), start, false) {
             accounts.push(account);
             start = next;
         }

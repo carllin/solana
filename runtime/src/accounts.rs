@@ -192,6 +192,7 @@ impl Accounts {
         accounts_index: &AccountsIndex<AccountInfo>,
         program_id: &Pubkey,
         error_counters: &mut ErrorCounters,
+        is_validator: bool,
     ) -> Result<Vec<(Pubkey, Account)>> {
         let mut accounts = Vec::new();
         let mut depth = 0;
@@ -208,14 +209,19 @@ impl Accounts {
             }
             depth += 1;
 
-            let program =
-                match AccountsDB::load(storage, ancestors, accounts_index, &program_id, false) {
-                    Some(program) => program,
-                    None => {
-                        error_counters.account_not_found += 1;
-                        return Err(TransactionError::AccountNotFound);
-                    }
-                };
+            let program = match AccountsDB::load(
+                storage,
+                ancestors,
+                accounts_index,
+                &program_id,
+                is_validator,
+            ) {
+                Some(program) => program,
+                None => {
+                    error_counters.account_not_found += 1;
+                    return Err(TransactionError::AccountNotFound);
+                }
+            };
             if !program.executable || program.owner == Pubkey::default() {
                 error_counters.account_not_found += 1;
                 return Err(TransactionError::AccountNotFound);
@@ -235,6 +241,7 @@ impl Accounts {
         accounts_index: &AccountsIndex<AccountInfo>,
         tx: &Transaction,
         error_counters: &mut ErrorCounters,
+        is_validator: bool,
     ) -> Result<Vec<Vec<(Pubkey, Account)>>> {
         let message = tx.message();
         message
@@ -252,6 +259,7 @@ impl Accounts {
                     accounts_index,
                     &program_id,
                     error_counters,
+                    is_validator,
                 )
             })
             .collect()
@@ -290,6 +298,7 @@ impl Accounts {
                         &accounts_index,
                         tx,
                         error_counters,
+                        is_validator,
                     )?;
                     Ok((accounts, loaders))
                 }

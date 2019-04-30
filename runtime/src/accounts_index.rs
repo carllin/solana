@@ -22,7 +22,11 @@ impl<T: Clone> AccountsIndex<T> {
         is_validator: bool,
     ) -> Option<&T> {
         /*println!("Looking for pubkey: {}", pubkey);*/
-        let list = self.account_maps.get(pubkey)?;
+        let list = self.account_maps.get(pubkey);
+        if is_validator && list.is_none() {
+            println!("pubkey: {} didn't exist in account maps", pubkey);
+        }
+        let list = list?;
         let mut max = 0;
         let mut rv = None;
         for e in list.iter().rev() {
@@ -71,7 +75,7 @@ impl<T: Clone> AccountsIndex<T> {
         rv.extend(fork_vec.iter().filter(|(f, _)| *f == fork).cloned());
         fork_vec.retain(|(f, _)| *f != fork);
 
-        if rv.is_empty() && is_validator {
+        if rv.is_empty() {
             println!("Inserting first time fork: {} pubkey: {}", fork, pubkey);
         }
 
