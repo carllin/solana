@@ -49,7 +49,7 @@ pub struct ErrorCounters {
     pub missing_signature_for_fee: usize,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct AccountInfo {
     /// index identifying the append storage
     id: AppendVecId,
@@ -236,10 +236,9 @@ impl AccountsDB {
         pubkey: &Pubkey,
         is_validator: bool,
     ) -> Option<Account> {
-        let info = accounts_index.get(pubkey, ancestors, is_validator)?;
-        /*let info = accounts_index.get(pubkey, ancestors);
-        println!("load of: {}, resulting info: {:?}", pubkey, info.is_some());
-        let info = info?;*/
+        let info = accounts_index.get(pubkey, ancestors, is_validator);
+        println!("load account for pubkey: {} result: {:?}", pubkey, info);
+        let info = info?;
         //TODO: thread this as a ref
         let s = storage.get(&info.id);
 
@@ -347,13 +346,17 @@ impl AccountsDB {
             if rvs.is_empty() {
                 storage.set_status(AccountStorageStatus::StorageFull);
             }
-            for (offset, (_, account)) in rvs.iter().zip(&with_meta[infos.len()..]) {
+            for (offset, (meta, account)) in rvs.iter().zip(&with_meta[infos.len()..]) {
                 storage.add_account();
                 infos.push(AccountInfo {
                     id: storage.id,
                     offset: *offset,
                     lamports: account.lamports,
                 });
+                println!(
+                    "store_accounts result for meta: {:?}, offset: {}, lamports: {}, id: {}",
+                    meta, *offset, account.lamports, storage.id
+                );
             }
         }
         infos
