@@ -57,8 +57,13 @@ impl EpochSchedule {
             // until we get to normal slots, behave as if stakers_slot_offset == slots_per_epoch
             self.get_epoch_and_slot_index(slot).0 + 1
         } else {
-            self.first_normal_epoch
-                + (slot - self.first_normal_slot + self.stakers_slot_offset) / self.slots_per_epoch
+            let res = self.first_normal_epoch
+                + (slot - self.first_normal_slot + self.stakers_slot_offset) / self.slots_per_epoch;
+            error!(
+                "slot: {}, fne: {}, sso: {}, spe: {}, res: {}",
+                slot, self.first_normal_epoch, self.stakers_slot_offset, self.slots_per_epoch, res
+            );
+            res
         }
     }
 

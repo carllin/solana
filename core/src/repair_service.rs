@@ -359,6 +359,10 @@ impl RepairService {
                 // If the newly completed slot > root, and the set did not contain this value
                 // before, we should update gossip.
                 if slot > latest_known_root {
+                    error!(
+                        "{} Updating epoch slots due to newly completed slot: {}",
+                        id, slot
+                    );
                     should_update |= slots_in_gossip.insert(slot);
                 }
             }
@@ -367,6 +371,10 @@ impl RepairService {
         if should_update {
             // Filter out everything <= root
             if latest_known_root != *prev_root {
+                error!(
+                    "{} Updating epoch slots due to new root: {}, old_root: {}",
+                    id, latest_known_root, prev_root
+                );
                 *prev_root = latest_known_root;
                 Self::retain_slots_greater_than_root(slots_in_gossip, latest_known_root);
             }

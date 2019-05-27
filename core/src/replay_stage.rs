@@ -143,6 +143,7 @@ impl ReplayStage {
                         subscriptions.notify_subscribers(bank.slot(), &bank_forks);
 
                         Self::handle_votable_bank(
+                            &my_pubkey,
                             &bank,
                             &bank_forks,
                             &mut locktower,
@@ -239,7 +240,7 @@ impl ReplayStage {
                     );
                     cluster_info.write().unwrap().set_leader(&next_leader);
                     if next_leader == *my_pubkey && reached_leader_tick {
-                        debug!("{} starting tpu for slot {}", my_pubkey, poh_slot);
+                        error!("{} starting tpu for slot {}", my_pubkey, poh_slot);
                         datapoint_warn!(
                             "replay_stage-new_leader",
                             ("count", poh_slot, i64),
@@ -288,6 +289,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn handle_votable_bank<T>(
+        my_pubkey: &Pubkey,
         bank: &Arc<Bank>,
         bank_forks: &Arc<RwLock<BankForks>>,
         locktower: &mut Locktower,
@@ -303,6 +305,7 @@ impl ReplayStage {
         T: 'static + KeypairUtil + Send + Sync,
     {
         if let Some(new_root) = locktower.record_vote(bank.slot(), bank.hash()) {
+            error!("voting for slot: {}", bank.slot());
             // get the root bank before squash
             let root_bank = bank_forks
                 .read()
@@ -323,6 +326,7 @@ impl ReplayStage {
             // Set root first in leader schedule_cache before bank_forks because bank_forks.root
             // is consumed by repair_service to update gossip, so we don't want to get blobs for
             // repair on gossip before we update leader schedule, otherwise they may get dropped.
+            error!("{} setting root {}", my_pubkey, new_root);
             leader_schedule_cache.set_root(new_root);
             bank_forks.write().unwrap().set_root(new_root);
             Self::handle_new_root(&bank_forks, progress);
@@ -447,7 +451,7 @@ impl ReplayStage {
                 let vote_threshold =
                     locktower.check_vote_stake_threshold(b.slot(), &stake_lockouts);
                 Self::confirm_forks(locktower, stake_lockouts, progress, bank_forks);
-                debug!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
+                trace!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
                 vote_threshold
             })
             .map(|(b, stake_lockouts)| (locktower.calculate_weight(&stake_lockouts), b.clone()))

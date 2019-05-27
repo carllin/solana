@@ -166,12 +166,15 @@ impl ClusterInfoRepairListener {
         let my_root = Self::read_my_gossiped_root(&my_pubkey, cluster_info, my_gossiped_root);
         {
             let r_cluster_info = cluster_info.read().unwrap();
-
             // Update our local map with the updated peers' information
             if let Some((peer_epoch_slots, updated_ts)) =
                 r_cluster_info.get_epoch_state_for_node(&peer_pubkey, last_cached_repair_ts)
             {
                 let peer_entry = peer_roots.entry(*peer_pubkey).or_default();
+                error!(
+                    "new root for peer: {} is {}",
+                    peer_pubkey, peer_epoch_slots.root
+                );
                 let peer_root = cmp::max(peer_epoch_slots.root, peer_entry.1);
                 let mut result = None;
                 let last_repair_ts = {
@@ -179,9 +182,14 @@ impl ClusterInfoRepairListener {
                     // preventing updates on gossip
                     if Self::should_repair_peer(my_root, peer_epoch_slots.root, NUM_BUFFER_SLOTS) {
                         // Clone out EpochSlots structure to avoid holding lock on gossip
+                        error!(
+                            "{} should repair peer {} for peer root {}",
+                            my_pubkey, peer_pubkey, peer_epoch_slots.root
+                        );
                         result = Some(peer_epoch_slots.clone());
                         updated_ts
                     } else {
+                        error!("{} peer {} no need for update", my_pubkey, peer_pubkey);
                         // No repairs were sent, don't need to update the timestamp
                         peer_entry.0
                     }
@@ -190,6 +198,7 @@ impl ClusterInfoRepairListener {
                 *peer_entry = (last_repair_ts, peer_root);
                 result
             } else {
+                error!("{} peer not found: {}", my_pubkey, peer_pubkey);
                 None
             }
         }
@@ -233,6 +242,7 @@ impl ClusterInfoRepairListener {
                     Self::read_my_gossiped_root(my_pubkey, cluster_info, my_gossiped_root);
 
                 let _ = Self::serve_repairs_to_repairee(
+                    repairee_pubkey,
                     my_pubkey,
                     my_root,
                     blocktree,
@@ -250,6 +260,7 @@ impl ClusterInfoRepairListener {
     }
 
     fn serve_repairs_to_repairee(
+        repairee_id: &Pubkey,
         my_pubkey: &Pubkey,
         my_root: u64,
         blocktree: &Blocktree,
@@ -263,7 +274,7 @@ impl ClusterInfoRepairListener {
         let slot_iter = blocktree.rooted_slot_iterator(repairee_epoch_slots.root + 1);
 
         if slot_iter.is_err() {
-            warn!("Root for repairee is on different fork OR replay_stage hasn't marked this slot as root yet");
+            error!("Root for repairee {} is on different fork OR replay_stage hasn't marked this slot as root yet", repairee_id);
             return Ok(());
         }
 
@@ -276,6 +287,11 @@ impl ClusterInfoRepairListener {
             epoch_schedule.get_stakers_epoch(repairee_epoch_slots.root);
         let max_confirmed_repairee_slot =
             epoch_schedule.get_last_slot_in_epoch(max_confirmed_repairee_epoch);
+
+        error!(
+            "{} repairee {}, repairee_root: {}, max_confirmed_repairee_slot: {}",
+            my_pubkey, repairee_id, repairee_epoch_slots.root, max_confirmed_repairee_slot
+        );
         for (slot, slot_meta) in slot_iter {
             if slot > my_root
                 || num_slots_repaired >= num_slots_to_repair
@@ -309,6 +325,7 @@ impl ClusterInfoRepairListener {
                             .get_data_blob_bytes(slot, blob_index as u64)
                             .expect("Failed to read data blob from blocktree")
                         {
+                            error!("{} Sending slot {}, index: {}", my_pubkey, slot, blob_index);
                             socket.send_to(&blob_data[..], repairee_tvu)?;
                             total_data_blobs_sent += 1;
                         }
@@ -323,6 +340,8 @@ impl ClusterInfoRepairListener {
                     }
 
                     num_slots_repaired += 1;
+                } else {
+                    error!("{} No responsibility for slot {}", my_pubkey, slot);
                 }
             }
         }
@@ -649,6 +668,7 @@ mod tests {
         let num_missing_slots = num_slots / 2;
         for repairman_pubkey in &eligible_repairmen {
             ClusterInfoRepairListener::serve_repairs_to_repairee(
+                &Pubkey::default(),
                 &repairman_pubkey,
                 num_slots - 1,
                 &blocktree,
@@ -718,6 +738,7 @@ mod tests {
             EpochSlots::new(mock_repairee.id, repairee_root, repairee_slots.clone(), 1);
 
         ClusterInfoRepairListener::serve_repairs_to_repairee(
+            &Pubkey::default(),
             &my_pubkey,
             total_slots - 1,
             &blocktree,
@@ -739,6 +760,7 @@ mod tests {
         let repairee_epoch_slots =
             EpochSlots::new(mock_repairee.id, stakers_slot_offset, repairee_slots, 1);
         ClusterInfoRepairListener::serve_repairs_to_repairee(
+            &Pubkey::default(),
             &my_pubkey,
             total_slots - 1,
             &blocktree,
