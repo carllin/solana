@@ -518,6 +518,7 @@ impl Bank {
     pub fn freeze(&self) {
         if self.set_hash() {
             self.update_slot_hashes();
+            self.update_tick_height();
         }
     }
 
@@ -726,8 +727,6 @@ impl Bank {
             self.tick_height.load(Ordering::Relaxed) as u64
         };
         inc_new_counter_debug!("bank-register_tick-registered", 1);
-
-        self.update_tick_height();
 
         // Register a new block hash if at the last tick in the slot
         if current_tick_height % self.ticks_per_slot == self.ticks_per_slot - 1 {
