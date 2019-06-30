@@ -35,7 +35,6 @@ use solana_sdk::signature::{Keypair, Signature};
 use solana_sdk::syscall::{
     current, fees, rewards,
     slot_hashes::{self, SlotHashes},
-    tick_height,
 };
 use solana_sdk::system_transaction;
 use solana_sdk::timing::{duration_as_ms, duration_as_ns, duration_as_us, MAX_RECENT_BLOCKHASHES};
@@ -429,13 +428,6 @@ impl Bank {
         self.store_account(&fees::id(), &fees::create_account(1, &self.fee_calculator));
     }
 
-    fn update_tick_height(&self) {
-        self.store_account(
-            &tick_height::id(),
-            &tick_height::create_account(1, self.tick_height()),
-        );
-    }
-
     // update reward for previous epoch
     fn update_rewards(&mut self, epoch: u64) {
         if epoch == self.epoch() {
@@ -518,7 +510,6 @@ impl Bank {
     pub fn freeze(&self) {
         if self.set_hash() {
             self.update_slot_hashes();
-            self.update_tick_height();
         }
     }
 
@@ -1442,7 +1433,7 @@ mod tests {
     use solana_sdk::instruction::InstructionError;
     use solana_sdk::poh_config::PohConfig;
     use solana_sdk::signature::{Keypair, KeypairUtil};
-    use solana_sdk::syscall::{fees::Fees, rewards::Rewards, tick_height::TickHeight};
+    use solana_sdk::syscall::{fees::Fees, rewards::Rewards};
     use solana_sdk::system_instruction;
     use solana_sdk::system_transaction;
     use solana_sdk::timing::DEFAULT_TICKS_PER_SLOT;
@@ -2636,21 +2627,6 @@ mod tests {
             fees.fee_calculator.lamports_per_signature
         );
         assert_eq!(fees.fee_calculator.lamports_per_signature, 12345);
-    }
-
-    #[test]
-    fn test_bank_tick_height_account() {
-        let (genesis_block, _) = create_genesis_block(1);
-        let bank = Bank::new(&genesis_block);
-
-        for i in 0..10 {
-            bank.register_tick(&hash::hash(format!("hashing {}", i).as_bytes()));
-        }
-
-        let tick_account = bank.get_account(&tick_height::id()).unwrap();
-        let tick_height = TickHeight::from(&tick_account).unwrap().0;
-        assert_eq!(bank.tick_height(), tick_height);
-        assert_eq!(tick_height, 10);
     }
 
     #[test]
