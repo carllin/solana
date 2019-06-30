@@ -259,9 +259,22 @@ impl PohRecorder {
                 entry_count,
             );
             let cache = &self.tick_cache[..entry_count];
+            let now = Instant::now();
+            let cache_len = cache.len();
             for t in cache {
                 working_bank.bank.register_tick(&t.0.hash);
             }
+            let register_tick_overhead = timing::duration_as_ms(&now.elapsed()) as i64;
+            datapoint_warn!(
+                "poh_recorder-register_tick_overhead",
+                ("elapsed_time", register_tick_overhead, i64),
+                ("num_ticks", cache_len, i64)
+            );
+
+            warn!(
+                "poh_recorder-register_tick_overhead: {}, count: {}",
+                register_tick_overhead, cache_len
+            );
             self.sender
                 .send((working_bank.bank.clone(), cache.to_vec()))
         } else {
@@ -274,7 +287,14 @@ impl PohRecorder {
             );
             self.start_slot = working_bank.max_tick_height / working_bank.bank.ticks_per_slot();
             self.start_tick = (self.start_slot + 1) * working_bank.bank.ticks_per_slot();
+            let now = Instant::now();
             self.clear_bank();
+            let clear_bank_overhead = timing::duration_as_ms(&now.elapsed()) as i64;
+            warn!("poh_recorder-clear_bank_overhead: {}", clear_bank_overhead);
+            datapoint_warn!(
+                "poh_recorder-clear_bank_overhead",
+                ("elapsed_time", clear_bank_overhead, i64)
+            );
         }
         if send_result.is_err() {
             info!("WorkingBank::sender disconnected {:?}", send_result);
@@ -293,9 +313,7 @@ impl PohRecorder {
         let poh_entry = self.poh.lock().unwrap().tick();
         inc_new_counter_warn!(
             "poh_recorder-tick_lock_contention",
-            timing::duration_as_ms(&now.elapsed()) as usize,
-            0,
-            1000
+            timing::duration_as_ms(&now.elapsed()) as usize
         );
         let now = Instant::now();
         if let Some(poh_entry) = poh_entry {
@@ -305,9 +323,7 @@ impl PohRecorder {
             if self.start_leader_at_tick.is_none() {
                 inc_new_counter_warn!(
                     "poh_recorder-tick_overhead",
-                    timing::duration_as_ms(&now.elapsed()) as usize,
-                    0,
-                    1000
+                    timing::duration_as_ms(&now.elapsed()) as usize
                 );
                 return;
             }
@@ -321,12 +337,10 @@ impl PohRecorder {
             self.tick_cache.push((entry, self.tick_height));
             let _ = self.flush_cache(true);
         }
-        inc_new_counter_warn!(
-            "poh_recorder-tick_overhead",
-            timing::duration_as_ms(&now.elapsed()) as usize,
-            0,
-            1000
-        );
+
+        let tick_overhead = timing::duration_as_ms(&now.elapsed()) as usize;
+        warn!("poh_recorder-tick_overhead: {}", tick_overhead);
+        inc_new_counter_warn!("poh_recorder-tick_overhead", tick_overhead);
     }
 
     pub fn record(
