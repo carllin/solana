@@ -3,6 +3,7 @@ use log::*;
 use solana_sdk::timing;
 use std::env;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 const DEFAULT_LOG_RATE: usize = 1000;
 const DEFAULT_METRICS_RATE: usize = 1;
@@ -183,7 +184,12 @@ impl Counter {
                         .or_insert(influxdb::Value::Integer(0));
                 }
                 if let Some(ref mut point) = self.point {
+                    let now = Instant::now();
                     submit(point.to_owned(), level);
+                    let elapsed = now.elapsed().as_millis();
+                    if elapsed > 50 {
+                        warn!("Metric {} took {} to send", self.name, elapsed);
+                    }
                 }
             }
         }

@@ -311,10 +311,11 @@ impl PohRecorder {
     pub fn tick(&mut self) {
         let now = Instant::now();
         let poh_entry = self.poh.lock().unwrap().tick();
-        inc_new_counter_warn!(
-            "poh_recorder-tick_lock_contention",
-            timing::duration_as_ms(&now.elapsed()) as usize
-        );
+        let tick_duration = timing::duration_as_ms(&now.elapsed()) as usize;
+        if tick_duration > 50 {
+            warn!("tick lock contention: {}", tick_duration);
+        }
+        inc_new_counter_warn!("poh_recorder-tick_lock_contention", tick_duration);
         let now = Instant::now();
         if let Some(poh_entry) = poh_entry {
             self.tick_height += 1;

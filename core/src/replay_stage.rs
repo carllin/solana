@@ -238,13 +238,13 @@ impl ReplayStage {
 
             leader_schedule_cache.slot_leader_at(poh_slot, Some(&parent))
                 .map(|next_leader| {
-                    debug!(
+                    warn!(
                         "me: {} leader {} at poh slot {}",
                         my_pubkey, next_leader, poh_slot
                     );
                     cluster_info.write().unwrap().set_leader(&next_leader);
                     if next_leader == *my_pubkey && reached_leader_tick {
-                        debug!("{} starting tpu for slot {}", my_pubkey, poh_slot);
+                        warn!("{} starting tpu for slot {}", my_pubkey, poh_slot);
                         datapoint_warn!(
                             "replay_stage-new_leader",
                             ("count", poh_slot, i64),
@@ -329,6 +329,7 @@ impl ReplayStage {
     where
         T: 'static + KeypairUtil + Send + Sync,
     {
+        warn!("voting for bank slot: {}", bank.slot());
         if let Some(new_root) = tower.record_vote(bank.slot(), bank.hash()) {
             // get the root bank before squash
             let root_bank = bank_forks
@@ -483,6 +484,9 @@ impl ReplayStage {
                 let vote_threshold = tower.check_vote_stake_threshold(b.slot(), &stake_lockouts);
                 Self::confirm_forks(tower, stake_lockouts, progress, bank_forks);
                 debug!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
+                if !vote_threshold {
+                    warn!("Bank {} failed threshold check", b.slot());
+                }
                 vote_threshold
             })
             .map(|(b, stake_lockouts)| (tower.calculate_weight(&stake_lockouts), b.clone()))
@@ -609,7 +613,7 @@ impl ReplayStage {
     ) {
         bank.freeze();
         bank.commit_credits();
-        info!("bank frozen {}", bank.slot());
+        warn!("bank frozen {}", bank.slot());
         if let Err(e) = slot_full_sender.send((bank.slot(), *bank.collector_id())) {
             trace!("{} slot_full alert failed: {:?}", my_pubkey, e);
         }
@@ -642,7 +646,7 @@ impl ReplayStage {
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_id, Some(&parent_bank))
                     .unwrap();
-                info!("new fork:{} parent:{}", child_id, parent_id);
+                warn!("new fork:{} parent:{}", child_id, parent_id);
                 forks.insert(Bank::new_from_parent(&parent_bank, &leader, child_id));
             }
         }
