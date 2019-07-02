@@ -255,6 +255,10 @@ impl ClusterInfo {
             .all_peers()
             .into_iter()
             .map(|(node, last_updated)| {
+                let seed = [0; 32];
+                let x = self.sorted_tvu_peers(None, ChaChaRng::from_seed(seed));
+                let y = x.iter().map(|i| i.id).collect_vec();
+                println!("TVU peers: {:?}", y);
                 if Self::is_spy_node(&node) {
                     spy_nodes += 1;
                 } else if Self::is_replicator(&node) {
@@ -934,6 +938,10 @@ impl ClusterInfo {
         blob_sender: &BlobSender,
     ) -> Result<()> {
         let reqs = obj.write().unwrap().gossip_request(&stakes);
+        {
+            let r = obj.read().unwrap();
+            Self::contact_info_trace(&r);
+        }
         let blobs = reqs
             .into_iter()
             .filter_map(|(remote_gossip_addr, req)| to_shared_blob(req, remote_gossip_addr).ok())

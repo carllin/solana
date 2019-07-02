@@ -162,6 +162,7 @@ impl ClusterInfoRepairListener {
         peer_roots: &mut HashMap<Pubkey, (u64, u64)>,
         my_gossiped_root: &mut u64,
     ) -> Option<EpochSlots> {
+        println!("processing potential repairee: {}", peer_pubkey);
         let last_cached_repair_ts = Self::get_last_ts(peer_pubkey, peer_roots);
         let my_root = Self::read_my_gossiped_root(&my_pubkey, cluster_info, my_gossiped_root);
         {
@@ -171,6 +172,10 @@ impl ClusterInfoRepairListener {
             if let Some((peer_epoch_slots, updated_ts)) =
                 r_cluster_info.get_epoch_state_for_node(&peer_pubkey, last_cached_repair_ts)
             {
+                println!(
+                    "got epcoh slots: {:?} for peer: {:?}",
+                    peer_epoch_slots, peer_pubkey
+                );
                 let peer_entry = peer_roots.entry(*peer_pubkey).or_default();
                 let peer_root = cmp::max(peer_epoch_slots.root, peer_entry.1);
                 let mut result = None;
