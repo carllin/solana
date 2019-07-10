@@ -172,13 +172,13 @@ impl VoteState {
             if log_enabled!(log::Level::Warn) {
                 for (slot, hash) in slot_hashes {
                     if vote.slot == *slot {
-                        warn!(
+                        panic!(
                             "dropped vote {:?} matched slot {}, but not hash {:?}",
                             vote, *slot, *hash
                         );
                     }
                     if vote.hash == *hash {
-                        warn!(
+                        panic!(
                             "dropped vote {:?} matched hash {:?}, but not slot {}",
                             vote, *hash, *slot,
                         );

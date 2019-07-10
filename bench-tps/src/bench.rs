@@ -678,10 +678,10 @@ mod tests {
     #[test]
     fn test_bench_tps_local_cluster() {
         solana_logger::setup();
-        const NUM_NODES: usize = 1;
+        const NUM_NODES: usize = 2;
         let cluster = LocalCluster::new(&ClusterConfig {
             node_stakes: vec![999_990; NUM_NODES],
-            cluster_lamports: 2_000_000,
+            cluster_lamports: 4_000_000,
             validator_configs: vec![ValidatorConfig::default(); NUM_NODES],
             ..ClusterConfig::default()
         });
@@ -695,7 +695,7 @@ mod tests {
 
         let mut config = Config::default();
         config.tx_count = 100;
-        config.duration = Duration::from_secs(5);
+        config.duration = Duration::from_secs(120);
 
         let client = create_client(
             (cluster.entry_point_info.rpc, cluster.entry_point_info.tpu),
