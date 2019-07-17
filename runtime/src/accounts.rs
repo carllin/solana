@@ -152,6 +152,12 @@ impl Accounts {
                 }
             }
             if called_accounts.is_empty() || called_accounts[0].lamports == 0 {
+                error!(
+                    "ANF load accounts for tx: {:?}, len: {}, p: {}",
+                    tx,
+                    called_accounts.len(),
+                    called_accounts[0].lamports
+                );
                 error_counters.account_not_found += 1;
                 Err(TransactionError::AccountNotFound)
             } else if called_accounts[0].owner != system_program::id() {
@@ -162,6 +168,12 @@ impl Accounts {
                 Err(TransactionError::InsufficientFundsForFee)
             } else {
                 called_accounts[0].lamports -= fee;
+                error!(
+                    "Success load accounts for tx: {:?}, len: {}, p: {}",
+                    tx,
+                    called_accounts.len(),
+                    called_accounts[0].lamports
+                );
                 Ok((called_accounts, credits))
             }
         }

@@ -543,16 +543,19 @@ impl Bank {
     }
 
     fn process_genesis_block(&mut self, genesis_block: &GenesisBlock) {
+        error!("processing genesis block");
         // Bootstrap leader collects fees until `new_from_parent` is called.
         self.fee_calculator = genesis_block.fee_calculator.clone();
         self.update_fees();
 
         for (pubkey, account) in genesis_block.accounts.iter() {
+            error!("Genesis block account: {}, account: {:?}", pubkey, account);
             self.store_account(pubkey, account);
             self.capitalization
                 .fetch_add(account.lamports as usize, Ordering::Relaxed);
         }
         for (pubkey, account) in genesis_block.rewards_pools.iter() {
+            error!("Rewards pool account: {}", pubkey);
             self.store_account(pubkey, account);
         }
 
