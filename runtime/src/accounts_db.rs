@@ -545,8 +545,9 @@ impl AccountsDB {
                 storage.set_status(AccountStorageStatus::Full);
                 continue;
             }
-            for (offset, (_, _, lamports)) in rvs.iter().zip(&with_meta[infos.len()..]) {
+            for (offset, (s, _, lamports)) in rvs.iter().zip(&with_meta[infos.len()..]) {
                 storage.add_account();
+                println!("storing account {} in storage id {}", s.pubkey, storage.id);
                 infos.push(AccountInfo {
                     id: storage.id,
                     offset: *offset,

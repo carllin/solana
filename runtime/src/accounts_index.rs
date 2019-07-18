@@ -1,6 +1,7 @@
 use log::*;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 
 pub type Fork = u64;
 
@@ -14,7 +15,7 @@ pub struct AccountsIndex<T> {
     pub last_root: Fork,
 }
 
-impl<T: Clone> AccountsIndex<T> {
+impl<T: Clone + Debug> AccountsIndex<T> {
     /// call func with every pubkey and index visible from a given set of ancestors
     pub fn scan_accounts<F>(&self, ancestors: &HashMap<Fork, usize>, mut func: F)
     where
@@ -36,6 +37,12 @@ impl<T: Clone> AccountsIndex<T> {
         let mut max = 0;
         let mut rv = None;
         for (fork, t) in list.iter().rev() {
+            println!(
+                "latest_fork {} is_ancestor: {}, is_root: {}",
+                fork,
+                ancestors.get(fork).is_some(),
+                self.is_root(*fork)
+            );
             if *fork >= max && (ancestors.get(fork).is_some() || self.is_root(*fork)) {
                 trace!("GET {} {:?}", fork, ancestors);
                 rv = Some((t, *fork));
@@ -48,9 +55,10 @@ impl<T: Clone> AccountsIndex<T> {
     /// Get an account
     /// The latest account that appears in `ancestors` or `roots` is returned.
     pub fn get(&self, pubkey: &Pubkey, ancestors: &HashMap<Fork, usize>) -> Option<(&T, Fork)> {
-        self.account_maps
-            .get(pubkey)
-            .and_then(|list| self.latest_fork(ancestors, list))
+        self.account_maps.get(pubkey).and_then(|list| {
+            println!("Account index list for {}: {:?}", pubkey, list);
+            self.latest_fork(ancestors, list)
+        })
     }
 
     pub fn get_max_root(roots: &HashSet<Fork>, fork_vec: &[(Fork, T)]) -> Fork {
@@ -122,6 +130,7 @@ impl<T: Clone> AccountsIndex<T> {
     /// Remove the fork when the storage for the fork is freed
     /// Accounts no longer reference this fork.
     pub fn cleanup_dead_fork(&mut self, fork: Fork) {
+        println!("Removing root from accounts_index: {}", fork);
         self.roots.remove(&fork);
     }
 }

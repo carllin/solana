@@ -143,11 +143,13 @@ impl Accounts {
             let mut credits: InstructionCredits = vec![];
             for key in &message.account_keys {
                 if !message.program_ids().contains(&key) {
-                    called_accounts.push(
-                        AccountsDB::load(storage, ancestors, accounts_index, key)
-                            .map(|(account, _)| account)
-                            .unwrap_or_default(),
-                    );
+                    let res = AccountsDB::load(storage, ancestors, accounts_index, key)
+                        .map(|(account, _)| account);
+                    if res.is_none() {
+                        error!("Could not find account with key: {}", key);
+                    }
+                    let res = res.unwrap_or_default();
+                    called_accounts.push(res);
                     credits.push(0);
                 }
             }
