@@ -548,7 +548,9 @@ impl Bank {
         self.fee_calculator = genesis_block.fee_calculator.clone();
         self.update_fees();
 
+        let mut pubkeys = vec![];
         for (pubkey, account) in genesis_block.accounts.iter() {
+            pubkeys.push(pubkey);
             error!("Genesis block account: {}, account: {:?}", pubkey, account);
             self.store_account(pubkey, account);
             self.capitalization
@@ -557,6 +559,14 @@ impl Bank {
         for (pubkey, account) in genesis_block.rewards_pools.iter() {
             error!("Rewards pool account: {}", pubkey);
             self.store_account(pubkey, account);
+        }
+
+        for pk in pubkeys {
+            println!(
+                "Genesis block store account: {}, balance: {}",
+                pk,
+                self.get_balance(pk)
+            );
         }
 
         // highest staked node is the first collector

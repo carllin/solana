@@ -197,9 +197,23 @@ impl AppendVec {
     }
 
     pub fn get_account<'a>(&'a self, offset: usize) -> Option<(StoredAccount<'a>, usize)> {
-        let (meta, next): (&'a StorageMeta, _) = self.get_type(offset)?;
-        let (balance, next): (&'a AccountBalance, _) = self.get_type(next)?;
-        let (data, next) = self.get_slice(next, meta.data_len as usize)?;
+        let storage_meta = self.get_type(offset);
+        if storage_meta.is_none() {
+            println!("failed to get storage_meta");
+        }
+        let (meta, next): (&'a StorageMeta, _) = storage_meta?;
+
+        let account_balance = self.get_type(next);
+        if account_balance.is_none() {
+            println!("failed to get account_balance");
+        }
+        let (balance, next): (&'a AccountBalance, _) = account_balance?;
+
+        let slice = self.get_slice(next, meta.data_len as usize);
+        if slice.is_none() {
+            println!("failed to get data slice");
+        }
+        let (data, next) = slice?;
         Some((
             StoredAccount {
                 meta,

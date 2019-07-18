@@ -329,8 +329,11 @@ fn get_bank_forks(
         )
         .expect("process_blocktree failed");
     if snapshot_path.is_some() {
+        println!("adding snapshots");
         bank_forks.set_snapshot_config(snapshot_path);
         let _ = bank_forks.add_snapshot(0, 0);
+    } else {
+        println!("Not adding snapshots");
     }
     (bank_forks, bank_forks_info, leader_schedule_cache)
 }
