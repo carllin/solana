@@ -191,6 +191,7 @@ impl AccountStorageEntry {
             //          **and**
             //  the append_vec has previously been completely full
             //
+            println!("set_status resetting storage entry: {}", self.id);
             self.accounts.reset();
             status = AccountStorageStatus::Available;
         }
@@ -239,6 +240,7 @@ impl AccountStorageEntry {
             //
             // otherwise, the storage may be in flight with a store()
             //   call
+            println!("remove_account resetting storage entry: {}", self.id);
             self.accounts.reset();
             status = AccountStorageStatus::Available;
         }
@@ -450,11 +452,23 @@ impl AccountsDB {
         let (info, fork) = accounts_index.get(pubkey, ancestors)?;
         //TODO: thread this as a ref
         if let Some(fork_storage) = storage.0.get(&fork) {
-            fork_storage
-                .get(&info.id)
-                .and_then(|store| Some(store.accounts.get_account(info.offset)?.0.clone_account()))
-                .map(|account| (account, fork))
+            let res = fork_storage.get(&info.id);
+
+            if let Some(res) = res {
+                let a = res.accounts.get_account(info.offset);
+                if a.is_none() {
+                    println!("Could not get account for pubkey: {}", pubkey);
+                }
+                Some((a?.0.clone_account(), fork))
+            } else {
+                println!(
+                    "Could not find storage with storage id for pubkey: {}, storage_id: {}",
+                    pubkey, info.id
+                );
+                None
+            }
         } else {
+            println!("Could not find fork storage for pubkey: {}", pubkey);
             None
         }
     }
