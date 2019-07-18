@@ -342,11 +342,14 @@ impl AccountsDB {
             .collect();
         ids.sort();
 
+        println!("deserialized ids from snapshot: {:?}", ids);
         {
             let mut stores = self.storage.write().unwrap();
             if let Some((_, store0)) = storage.0.remove_entry(&0) {
                 let fork_storage0 = stores.0.entry(0).or_insert_with(HashMap::new);
+                println!("deserialized store len: {}, my store len: {}", fork_storage0.len(), store0.len());
                 for (id, store) in store0.iter() {
+                    println!("Overwriting for id: {}", id);
                     fork_storage0.insert(*id, store.clone());
                 }
             }

@@ -305,6 +305,10 @@ fn get_bank_forks(
     snapshot_path: Option<String>,
     verify_ledger: bool,
 ) -> (BankForks, Vec<BankForksInfo>, LeaderScheduleCache) {
+    println!(
+        "account_paths: {:?}, snapshot path: {:?}",
+        account_paths, snapshot_path
+    );
     if snapshot_path.is_some() {
         let bank_forks =
             BankForks::load_from_snapshot(&genesis_block, account_paths.clone(), &snapshot_path);
@@ -315,6 +319,7 @@ fn get_bank_forks(
                     bank_slot: bank.slot(),
                     entry_height: bank.tick_height(),
                 };
+                println!("load from snapshot success");
                 return (v, vec![fork_info], LeaderScheduleCache::new_from_bank(bank));
             }
             Err(_) => warn!("Failed to load from snapshot, fallback to load from ledger"),

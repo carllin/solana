@@ -314,6 +314,7 @@ impl BankForks {
         account_paths: Option<String>,
         snapshot_path: &Option<String>,
     ) -> Result<Self, Error> {
+        println!("loading from snapshot");
         let path = BankForks::get_snapshot_path(snapshot_path);
         let paths = fs::read_dir(path)?;
         let mut names = paths
