@@ -341,6 +341,13 @@ impl BankForks {
             &status_cache_rc,
             snapshot_path,
         );
+        for (pk, _) in genesis_block.accounts.iter() {
+            println!(
+                "create genesis account after snapshot: {}, balance: {}",
+                pk,
+                bank0.get_balance(pk)
+            );
+        }
         if bank_maps.is_empty() || bank_root.is_none() {
             BankForks::remove_snapshot(0, snapshot_path);
             return Err(Error::new(ErrorKind::Other, "no snapshots loaded"));
