@@ -605,7 +605,8 @@ impl ReplayStage {
                 )
             })
             .filter(|(b, stake_lockouts)| {
-                let vote_threshold = tower.check_vote_stake_threshold(b.slot(), &stake_lockouts);
+                let vote_threshold =
+                    tower.check_vote_stake_threshold(b.slot(), &stake_lockouts, b.epoch_schedule());
                 Self::confirm_forks(tower, stake_lockouts, progress, bank_forks);
                 debug!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
                 vote_threshold

@@ -39,7 +39,7 @@ impl StakeLockout {
 
 #[derive(Default)]
 pub struct Tower {
-    epoch_stakes: EpochStakes,
+    epoch_stakes: Vec<EpochStakes>,
     threshold_depth: usize,
     threshold_size: f64,
     lockouts: VoteState,
@@ -81,13 +81,8 @@ impl Tower {
     pub fn new_from_forks(bank_forks: &BankForks, my_pubkey: &Pubkey) -> Self {
         let mut frozen_banks: Vec<_> = bank_forks.frozen_banks().values().cloned().collect();
         frozen_banks.sort_by_key(|b| (b.parents().len(), b.slot()));
-        let epoch_stakes = {
-            if let Some(bank) = frozen_banks.last() {
-                EpochStakes::new_from_bank(bank, my_pubkey)
-            } else {
-                return Self::default();
-            }
-        };
+        let last_frozen_bank = frozen_banks.last().unwrap();
+        vec![EpochStakes::new_from_bank(last_frozen_bank, my_pubkey)];
 
         let mut tower = Self {
             epoch_stakes,
@@ -97,13 +92,14 @@ impl Tower {
             recent_votes: VecDeque::default(),
         };
 
-        let bank = tower.find_heaviest_bank(bank_forks).unwrap();
-        tower.lockouts = Self::initialize_lockouts_from_bank(&bank, tower.epoch_stakes.epoch);
+        let heaviest_bank = tower.find_heaviest_bank(bank_forks).unwrap();
+        tower.lockouts =
+            Self::initialize_lockouts_from_bank(&heaviest_bank, tower.epoch_stakes.epoch);
         tower
     }
     pub fn new(epoch_stakes: EpochStakes, threshold_depth: usize, threshold_size: f64) -> Self {
         Self {
-            epoch_stakes,
+            epoch_stakes: vec![epoch_stakes],
             threshold_depth,
             threshold_size,
             lockouts: VoteState::default(),
@@ -120,8 +116,9 @@ impl Tower {
         F: Iterator<Item = (Pubkey, (u64, Account))>,
     {
         let mut stake_lockouts = HashMap::new();
+        let epoch_stakes = self.epoch_stakes.last().unwrap();
         for (key, (_, account)) in vote_accounts {
-            let lamports: u64 = *self.epoch_stakes.stakes.get(&key).unwrap_or(&0);
+            let lamports: u64 = epoch_stakes.stakes.get(&key).unwrap_or(&0);
             if lamports == 0 {
                 continue;
             }
@@ -139,8 +136,8 @@ impl Tower {
             }
             let mut vote_state = vote_state.unwrap();
 
-            if key == self.epoch_stakes.delegate_pubkey
-                || vote_state.node_pubkey == self.epoch_stakes.delegate_pubkey
+            if key == epoch_stakes.delegate_pubkey
+                || vote_state.node_pubkey == epoch_stakes.delegate_pubkey
             {
                 debug!("vote state {:?}", vote_state);
                 debug!(
@@ -208,22 +205,24 @@ impl Tower {
         lockouts
             .get(&slot)
             .map(|lockout| {
-                (lockout.stake as f64 / self.epoch_stakes.total_staked as f64) > self.threshold_size
+                (lockout.stake as f64 / self.epoch_stakes.last().unwrap().total_staked as f64)
+                    > self.threshold_size
             })
             .unwrap_or(false)
     }
 
     pub fn is_recent_epoch(&self, bank: &Bank) -> bool {
-        bank.epoch() >= self.epoch_stakes.epoch
+        bank.epoch() >= self.epoch_stakes.last().unwrap().epoch
     }
 
     pub fn update_epoch(&mut self, bank: &Bank) {
+        let latest_epoch = self.epoch_stakes.last().unwrap().epoch;
         trace!(
             "updating bank epoch slot: {} epoch: {}",
             bank.slot(),
-            self.epoch_stakes.epoch
+            latest_epoch
         );
-        if bank.epoch() != self.epoch_stakes.epoch {
+        if bank.epoch() != latest_epoch {
             assert!(
                 self.is_recent_epoch(bank),
                 "epoch_stakes cannot move backwards"
@@ -231,15 +230,22 @@ impl Tower {
             info!(
                 "Tower updated epoch bank slot: {} epoch: {}",
                 bank.slot(),
-                self.epoch_stakes.epoch
+                latest_epoch
             );
-            self.epoch_stakes =
-                EpochStakes::new_from_bank(bank, &self.epoch_stakes.delegate_pubkey);
+
+            self.epoch_stakes.push(EpochStakes::new_from_bank(
+                bank,
+                &self.epoch_stakes.last().unwrap().delegate_pubkey,
+            ));
+
+            self.epoch_stakes.truncate(2);
+
+            let latest_epoch_stakes = self.epoch_stakes.last().unwrap();
             datapoint_info!(
                 "tower-epoch",
-                ("epoch", self.epoch_stakes.epoch, i64),
-                ("self_staked", self.epoch_stakes.self_staked, i64),
-                ("total_staked", self.epoch_stakes.total_staked, i64)
+                ("epoch", latest_epoch_stakes.epoch, i64),
+                ("self_staked", latest_epoch_stakes.self_staked, i64),
+                ("total_staked", latest_epoch_stakes.total_staked, i64)
             );
         }
     }
@@ -281,8 +287,8 @@ impl Tower {
         self.lockouts.root_slot
     }
 
-    pub fn total_epoch_stakes(&self) -> u64 {
-        self.epoch_stakes.total_staked
+    pub fn total_epoch_stakes(epoch: &u64) -> u64 {
+        self.epoch_stakes.last().unwrap().total_staked
     }
 
     pub fn calculate_weight(&self, stake_lockouts: &HashMap<u64, StakeLockout>) -> u128 {
@@ -328,13 +334,15 @@ impl Tower {
         &self,
         slot: u64,
         stake_lockouts: &HashMap<u64, StakeLockout>,
+        epoch_schedule: &EpochSchedule,
     ) -> bool {
         let mut lockouts = self.lockouts.clone();
         lockouts.process_slot_vote_unchecked(slot);
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
+        let epoch = self.epoch_schedule.get_epoch(vote);
         if let Some(vote) = vote {
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {
-                (fork_stake.stake as f64 / self.epoch_stakes.total_staked as f64)
+                (fork_stake.stake as f64 / self.get_epoch_stakes(epoch).expect("Should not be performing threshold check on an epoch older than 1 epoch ago").total_staked as f64)
                     > self.threshold_size
             } else {
                 false
@@ -363,6 +371,10 @@ impl Tower {
             }
         }
         stake_weighted_lockouts
+    }
+
+    fn get_epoch_stakes(epoch: u64) -> Option<EpochStakes> {
+        self.epoch_stakes.iter().find(|x| x.epoch == epoch)
     }
 
     /// Update lockouts for all the ancestors
@@ -437,6 +449,7 @@ impl Tower {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::epoch_schedule::EpochSchedule;
 
     fn gen_stakes(stake_votes: &[(u64, &[u64])]) -> Vec<(Pubkey, (u64, Account))> {
         let mut stakes = vec![];
@@ -561,7 +574,8 @@ mod test {
         )]
         .into_iter()
         .collect();
-        assert!(tower.check_vote_stake_threshold(0, &stakes));
+        let epoch_schedule = EpochSchedule::new(32, 16, false);
+        assert!(tower.check_vote_stake_threshold(0, &stakes), epoch_schedule);
     }
 
     #[test]
@@ -754,7 +768,11 @@ mod test {
         .into_iter()
         .collect();
         tower.record_vote(0, Hash::default());
-        assert!(!tower.check_vote_stake_threshold(1, &stakes));
+        let epoch_schedule = EpochSchedule::new(32, 16, false);
+        assert!(
+            !tower.check_vote_stake_threshold(1, &stakes),
+            epoch_schedule
+        );
     }
     #[test]
     fn test_check_vote_threshold_above_threshold() {
@@ -769,7 +787,8 @@ mod test {
         .into_iter()
         .collect();
         tower.record_vote(0, Hash::default());
-        assert!(tower.check_vote_stake_threshold(1, &stakes));
+        let epoch_schedule = EpochSchedule::new(32, 16, false);
+        assert!(tower.check_vote_stake_threshold(1, &stakes), epoch_schedule);
     }
 
     #[test]
@@ -787,7 +806,8 @@ mod test {
         tower.record_vote(0, Hash::default());
         tower.record_vote(1, Hash::default());
         tower.record_vote(2, Hash::default());
-        assert!(tower.check_vote_stake_threshold(6, &stakes));
+        let epoch_schedule = EpochSchedule::new(32, 16, false);
+        assert!(tower.check_vote_stake_threshold(6, &stakes), epoch_schedule);
     }
 
     #[test]
@@ -795,7 +815,11 @@ mod test {
         let mut tower = Tower::new(EpochStakes::new_for_tests(2), 1, 0.67);
         let stakes = HashMap::new();
         tower.record_vote(0, Hash::default());
-        assert!(!tower.check_vote_stake_threshold(1, &stakes));
+        let epoch_schedule = EpochSchedule::new(32, 16, false);
+        assert!(
+            !tower.check_vote_stake_threshold(1, &stakes),
+            epoch_schedule
+        );
     }
 
     #[test]
@@ -889,7 +913,13 @@ mod test {
         }
         let staked_lockouts =
             tower.collect_vote_lockouts(vote_to_evaluate, accounts.clone().into_iter(), &ancestors);
-        assert!(tower.check_vote_stake_threshold(vote_to_evaluate, &staked_lockouts));
+
+        let epoch_schedule = EpochSchedule::new(100, 50, false);
+        assert!(tower.check_vote_stake_threshold(
+            vote_to_evaluate,
+            &staked_lockouts,
+            &epoch_schedule
+        ));
 
         // CASE 2: Now we want to evaluate a vote for slot VOTE_THRESHOLD_DEPTH + 1. This slot
         // will expire the vote in one of the vote accounts, so we should have insufficient
@@ -897,7 +927,11 @@ mod test {
         let vote_to_evaluate = VOTE_THRESHOLD_DEPTH as u64 + 1;
         let staked_lockouts =
             tower.collect_vote_lockouts(vote_to_evaluate, accounts.into_iter(), &ancestors);
-        assert!(!tower.check_vote_stake_threshold(vote_to_evaluate, &staked_lockouts));
+        assert!(!tower.check_vote_stake_threshold(
+            vote_to_evaluate,
+            &staked_lockouts,
+            &epoch_schedule
+        ));
     }
 
     fn vote_and_check_recent(num_votes: usize) {
