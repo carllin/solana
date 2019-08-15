@@ -363,7 +363,6 @@ fn test_faulty_node(faulty_node_type: BroadcastStageType) {
 #[allow(unused_attributes)]
 #[test]
 #[serial]
-#[ignore]
 fn test_repairman_catchup() {
     solana_logger::setup();
     error!("test_repairman_catchup");

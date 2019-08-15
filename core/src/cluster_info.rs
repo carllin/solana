@@ -1393,7 +1393,7 @@ impl ClusterInfo {
         while let Ok(mut more) = requests_receiver.try_recv() {
             reqs.append(&mut more);
         }
-        let mut resps = Vec::new();
+        //let mut resps = vec![];
 
         let stakes: HashMap<_, _> = match bank_forks {
             Some(ref bank_forks) => {
@@ -1402,11 +1402,13 @@ impl ClusterInfo {
             None => HashMap::new(),
         };
 
+        println!("req length: {}", reqs.len());
         for req in reqs {
-            let mut resp = Self::handle_blob(obj, blocktree, &stakes, &req.read().unwrap());
-            resps.append(&mut resp);
+            let resp = Self::handle_blob(obj, blocktree, &stakes, &req.read().unwrap());
+            let res = response_sender.send(resp);
+            println!("send res: {:?}", res);
         }
-        response_sender.send(resps)?;
+        //response_sender.send(resps)?;
         Ok(())
     }
     pub fn listen(
