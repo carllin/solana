@@ -4,7 +4,7 @@ extern crate solana_move_loader_program;
 
 mod bench;
 mod cli;
-
+    
 use crate::bench::{
     do_bench_tps, generate_and_fund_keypairs, generate_keypairs, Config, NUM_LAMPORTS_PER_ACCOUNT,
 };
@@ -94,14 +94,14 @@ fn main() {
         let path = Path::new(&client_ids_and_stake_file);
         let file = File::open(path).unwrap();
 
-        let accounts: HashMap<String, u64> = serde_yaml::from_reader(file).unwrap();
+        let accounts: HashMap<String, PrimordialAccountDetails> = serde_yaml::from_reader(file).unwrap();
         let mut keypairs = vec![];
         let mut last_balance = 0;
 
-        accounts.into_iter().for_each(|(keypair, balance)| {
+        accounts.into_iter().for_each(|(keypair, primordial_account)| {
             let bytes: Vec<u8> = serde_json::from_str(keypair.as_str()).unwrap();
             keypairs.push(Keypair::from_bytes(&bytes).unwrap());
-            last_balance = balance;
+            last_balance = primordial_account.balance;
         });
         // Sort keypairs so that do_bench_tps() uses the same subset of accounts for each run.
         // This prevents the amount of storage needed for bench-tps accounts from creeping up
