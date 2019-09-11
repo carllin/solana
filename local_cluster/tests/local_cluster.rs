@@ -584,7 +584,6 @@ fn test_faulty_node(faulty_node_type: BroadcastStageType) {
 }
 
 #[test]
-#[ignore]
 fn test_repairman_catchup() {
     solana_logger::setup();
     error!("test_repairman_catchup");
@@ -627,6 +626,7 @@ fn run_repairman_catchup(num_repairmen: u64) {
     let repairee_stake = 3;
     let cluster_lamports = 2 * lamports_per_repairman * num_repairmen + repairee_stake;
     let node_stakes: Vec<_> = (0..num_repairmen).map(|_| lamports_per_repairman).collect();
+    println!("LocalCluster starting");
     let mut cluster = LocalCluster::new(&ClusterConfig {
         node_stakes,
         cluster_lamports,
@@ -638,6 +638,7 @@ fn run_repairman_catchup(num_repairmen: u64) {
         ..ClusterConfig::default()
     });
 
+    println!("LocalCluster started");
     let repairman_pubkeys: HashSet<_> = cluster.get_node_pubkeys().into_iter().collect();
     let epoch_schedule = EpochSchedule::new(num_slots_per_epoch, stakers_slot_offset, true);
     let num_warmup_epochs = epoch_schedule.get_stakers_epoch(0) + 1;
@@ -653,7 +654,9 @@ fn run_repairman_catchup(num_repairmen: u64) {
     // Start up a new node, wait for catchup. Backwards repair won't be sufficient because the
     // leader is sending blobs past this validator's first two confirmed epochs. Thus, the repairman
     // protocol will have to kick in for this validator to repair.
+    println!("Adding last validator");
     cluster.add_validator(&validator_config, repairee_stake);
+    println!("Last validator added");
 
     let all_pubkeys = cluster.get_node_pubkeys();
     let repairee_id = all_pubkeys

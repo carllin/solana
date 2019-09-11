@@ -151,7 +151,7 @@ impl LocalCluster {
         ));
 
         // override staking config
-        genesis_block.accounts.push((
+        /*genesis_block.accounts.push((
             stake_config::id(),
             stake_config::create_account(
                 1,
@@ -161,7 +161,7 @@ impl LocalCluster {
                     slash_penalty: std::u8::MAX,
                 },
             ),
-        ));
+        ));*/
 
         let (leader_ledger_path, _blockhash) = create_new_tmp_ledger!(&genesis_block);
         let leader_contact_info = leader_node.info.clone();

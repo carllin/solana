@@ -294,7 +294,14 @@ impl Tower {
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
         if let Some(vote) = vote {
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {
-                (fork_stake.stake as f64 / total_staked as f64) > self.threshold_size
+                let t = (fork_stake.stake as f64 / total_staked as f64) > self.threshold_size;
+                if !t {
+                    println!(
+                        "total_staked: {}, fork_stake: {}",
+                        total_staked, fork_stake.stake
+                    );
+                }
+                t
             } else {
                 false
             }

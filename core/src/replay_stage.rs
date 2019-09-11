@@ -179,6 +179,7 @@ impl ReplayStage {
                         }
 
                         Self::handle_votable_bank(
+                            &my_pubkey,
                             &bank,
                             &bank_forks,
                             &ancestors,
@@ -400,6 +401,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn handle_votable_bank<T>(
+        id: &Pubkey,
         bank: &Arc<Bank>,
         bank_forks: &Arc<RwLock<BankForks>>,
         ancestors: &Arc<HashMap<u64, HashSet<u64>>>,
@@ -419,7 +421,7 @@ impl ReplayStage {
     where
         T: 'static + KeypairUtil + Send + Sync,
     {
-        trace!("handle votable bank {}", bank.slot());
+        error!("{} handle votable bank {}", id, bank.slot());
         let vote = tower.new_vote_from_bank(bank, vote_account);
         if let Some(new_root) = tower.record_bank_vote(vote) {
             // get the root bank before squash
@@ -445,7 +447,7 @@ impl ReplayStage {
                 .unwrap()
                 .set_root(new_root, snapshot_package_sender);
             Self::handle_new_root(&bank_forks, progress);
-            trace!("new root {}", new_root);
+            println!("new root {}", new_root);
             if let Err(e) = root_bank_sender.send(rooted_banks) {
                 trace!("root_bank_sender failed: {:?}", e);
                 Err(e)?;
@@ -605,7 +607,9 @@ impl ReplayStage {
                 let vote_threshold =
                     tower.check_vote_stake_threshold(b.slot(), &stake_lockouts, *total_staked);
                 Self::confirm_forks(tower, &stake_lockouts, *total_staked, progress, bank_forks);
-                debug!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
+                if !vote_threshold {
+                    println!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
+                }
                 vote_threshold
             })
             .map(|(b, (stake_lockouts, total_staked))| {
