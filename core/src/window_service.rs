@@ -76,7 +76,6 @@ where
     }
     let now = Instant::now();
     inc_new_counter_debug!("streamer-recv_window-recv", packets.packets.len());
-
     let (shreds, packets_ix): (Vec<_>, Vec<_>) = thread_pool.install(|| {
         packets
             .packets
@@ -85,7 +84,15 @@ where
             .filter_map(|(i, packet)| {
                 if let Ok(s) = bincode::deserialize(&packet.data) {
                     let shred: Shred = s;
+                    let now = Instant::now();
                     if shred_filter(&shred, &packet.data) {
+                        error!(
+                            "{} received shred slot: {}, index: {}, elapsed: {}",
+                            my_pubkey,
+                            shred.slot(),
+                            shred.index(),
+                            now.elapsed().as_micros(),
+                        );
                         packet.meta.slot = shred.slot();
                         packet.meta.seed = shred.seed();
                         Some((shred, i))
@@ -98,6 +105,14 @@ where
             })
             .unzip()
     });
+
+    println!(
+        "{} time to verify {} shreds: {} ms",
+        my_pubkey,
+        packets.packets.len(),
+        now.elapsed().as_micros()
+    );
+    let now = Instant::now();
     // to avoid lookups into the `packets_ix` vec, this block manually tracks where we are in that vec
     // and since `packets.packets.retain` and the `packets_ix` vec are both in order,
     // we should be able to automatically drop any packets in the index gaps.
@@ -114,12 +129,11 @@ where
         retain
     });
 
-    trace!("{:?} shreds from packets", shreds.len());
-
-    trace!(
-        "{} num shreds received: {}",
+    println!(
+        "{} time to filter {} shreds: {} ms",
         my_pubkey,
-        packets.packets.len()
+        packets.packets.len(),
+        now.elapsed().as_micros()
     );
 
     if !packets.packets.is_empty() {
@@ -127,7 +141,15 @@ where
         let _ = retransmit.send(packets);
     }
 
+    let now = Instant::now();
+    let shred_len = shreds.len();
     blocktree.insert_shreds(shreds, Some(leader_schedule_cache))?;
+    println!(
+        "{} time to insert {} shreds: {} ms",
+        my_pubkey,
+        shred_len,
+        now.elapsed().as_micros()
+    );
 
     trace!(
         "Elapsed processing time in recv_window(): {}",
