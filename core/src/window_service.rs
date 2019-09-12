@@ -206,7 +206,7 @@ impl WindowService {
                 trace!("{}: RECV_WINDOW started", id);
                 let mut now = Instant::now();
                 let thread_pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(get_thread_count())
+                    .num_threads(5)
                     .build()
                     .unwrap();
                 loop {

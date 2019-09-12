@@ -23,7 +23,7 @@ use solana_rayon_threadlimit::get_thread_count;
 use std::cell::RefCell;
 
 thread_local!(static PAR_THREAD_POOL: RefCell<ThreadPool> = RefCell::new(rayon::ThreadPoolBuilder::new()
-                    .num_threads(get_thread_count())
+                    .num_threads(5)
                     .build()
                     .unwrap())
 );
