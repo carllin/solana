@@ -11,6 +11,7 @@ use solana_sdk::signature::{Keypair, KeypairUtil, Signature};
 use std::io::{Error as IOError, ErrorKind, Write};
 use std::sync::Arc;
 use std::{cmp, io};
+use std::time::Instant;
 
 #[derive(Serialize, Clone, Deserialize, PartialEq, Debug)]
 pub enum Shred {
@@ -128,8 +129,11 @@ impl Shred {
             }
         } + bincode::serialized_size(&Signature::default()).unwrap()
             as usize;
-        self.signature()
-            .verify(pubkey.as_ref(), &shred_buf[signed_payload_offset..])
+        let now = Instant::now();
+        let res = self.signature()
+            .verify(pubkey.as_ref(), &shred_buf[signed_payload_offset..]);
+        println!("verify time: {}", now.elapsed().as_micros());
+        res
     }
 }
 

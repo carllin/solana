@@ -16,6 +16,7 @@ use std::io::Write;
 use std::mem;
 use std::path::Path;
 use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 pub type Keypair = ed25519_dalek::Keypair;
 
@@ -34,10 +35,13 @@ impl Signature {
         if pubkey.is_err() || signature.is_err() {
             return false;
         }
-        pubkey
+        let now = Instant::now();
+        let res = pubkey
             .unwrap()
             .verify(message_bytes, &signature.unwrap())
-            .is_ok()
+            .is_ok();
+        //println!("In verify, took: {}", now.elapsed().as_micros());
+        res
     }
 }
 

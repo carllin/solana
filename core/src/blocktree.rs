@@ -1,7 +1,7 @@
 //! The `block_tree` module provides functions for parallel verification of the
 //! Proof of History ledger as well as iterative read, append write, and random
 //! access read to a persistent file-based ledger.
-use crate::entry::Entry;
+use crate::entry::{make_tiny_test_entries, Entry};
 use crate::erasure::ErasureConfig;
 use crate::result::{Error, Result};
 use crate::shred::{Shred, Shredder};
@@ -1699,6 +1699,64 @@ pub fn entries_to_test_shreds(
     is_full_slot: bool,
 ) -> Vec<Shred> {
     let mut shredder = Shredder::new(slot, parent_slot, 0.0, &Arc::new(Keypair::new()), 0 as u32)
+        .expect("Failed to create entry shredder");
+
+    bincode::serialize_into(&mut shredder, &entries)
+        .expect("Expect to write all entries to shreds");
+    if is_full_slot {
+        shredder.finalize_slot();
+    } else {
+        shredder.finalize_data();
+    }
+
+    let shreds: Vec<Shred> = shredder
+        .shreds
+        .iter()
+        .map(|s| bincode::deserialize(s).unwrap())
+        .collect();
+
+    shreds
+}
+
+pub fn make_slot_entries_with_keypair(
+    slot: u64,
+    parent_slot: u64,
+    num_entries: u64,
+    keypair: &Arc<Keypair>,
+) -> (Vec<Shred>, Vec<Entry>) {
+    let entries = make_tiny_test_entries(num_entries as usize);
+    let shreds =
+        entries_to_test_shreds_with_keypair(entries.clone(), slot, parent_slot, true, keypair);
+    (shreds, entries)
+}
+pub fn make_many_slot_entries_with_keypair(
+    start_slot: u64,
+    num_slots: u64,
+    entries_per_slot: u64,
+    keypair: &Arc<Keypair>,
+) -> (Vec<Shred>, Vec<Entry>) {
+    let mut shreds = vec![];
+    let mut entries = vec![];
+    for slot in start_slot..start_slot + num_slots {
+        let parent_slot = if slot == 0 { 0 } else { slot - 1 };
+
+        let (slot_shreds, slot_entries) =
+            make_slot_entries_with_keypair(slot, parent_slot, entries_per_slot, keypair);
+        shreds.extend(slot_shreds);
+        entries.extend(slot_entries);
+    }
+
+    (shreds, entries)
+}
+
+pub fn entries_to_test_shreds_with_keypair(
+    entries: Vec<Entry>,
+    slot: u64,
+    parent_slot: u64,
+    is_full_slot: bool,
+    new_keypair: &Arc<Keypair>,
+) -> Vec<Shred> {
+    let mut shredder = Shredder::new(slot, parent_slot, 0.0, new_keypair, 0 as u32)
         .expect("Failed to create entry shredder");
 
     bincode::serialize_into(&mut shredder, &entries)

@@ -34,25 +34,42 @@ pub fn should_retransmit_and_persist(
     leader_schedule_cache: &Arc<LeaderScheduleCache>,
     my_pubkey: &Pubkey,
 ) -> bool {
+    let now = Instant::now();
     let slot_leader_pubkey = match bank {
         None => leader_schedule_cache.slot_leader_at(shred.slot(), None),
         Some(bank) => leader_schedule_cache.slot_leader_at(shred.slot(), Some(&bank)),
     };
+    error!(
+        "Validate leader schedule shred slot: {}, index: {}, elapsed: {}",
+        shred.slot(),
+        shred.index(),
+        now.elapsed().as_micros(),
+    );
 
-    if let Some(leader_id) = slot_leader_pubkey {
-        if leader_id == *my_pubkey {
-            inc_new_counter_debug!("streamer-recv_window-circular_transmission", 1);
-            false
-        } else if !shred.fast_verify(&shred_buf, &leader_id) {
-            inc_new_counter_debug!("streamer-recv_window-invalid_signature", 1);
-            false
+    let now = Instant::now();
+    let x = {
+        if let Some(leader_id) = slot_leader_pubkey {
+            if leader_id == *my_pubkey {
+                inc_new_counter_debug!("streamer-recv_window-circular_transmission", 1);
+                false
+            } else if !shred.fast_verify(&shred_buf, &leader_id) {
+                inc_new_counter_debug!("streamer-recv_window-invalid_signature", 1);
+                false
+            } else {
+                true
+            }
         } else {
-            true
+            inc_new_counter_debug!("streamer-recv_window-unknown_leader", 1);
+            false
         }
-    } else {
-        inc_new_counter_debug!("streamer-recv_window-unknown_leader", 1);
-        false
-    }
+    };
+    error!(
+        "Validate received shred slot: {}, index: {}, elapsed: {}",
+        shred.slot(),
+        shred.index(),
+        now.elapsed().as_micros(),
+    );
+    x
 }
 
 fn recv_window<F>(
