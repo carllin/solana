@@ -5,13 +5,14 @@ use crate::result::Error;
 use bincode::serialized_size;
 use core::borrow::BorrowMut;
 use serde::{Deserialize, Serialize};
+use solana_sdk::hash::hash;
 use solana_sdk::packet::PACKET_DATA_SIZE;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, KeypairUtil, Signature};
 use std::io::{Error as IOError, ErrorKind, Write};
 use std::sync::Arc;
-use std::{cmp, io};
 use std::time::Instant;
+use std::{cmp, io};
 
 #[derive(Serialize, Clone, Deserialize, PartialEq, Debug)]
 pub enum Shred {
@@ -130,8 +131,10 @@ impl Shred {
         } + bincode::serialized_size(&Signature::default()).unwrap()
             as usize;
         let now = Instant::now();
-        let res = self.signature()
-            .verify(pubkey.as_ref(), &shred_buf[signed_payload_offset..]);
+        let res = self.signature().verify(
+            pubkey.as_ref(),
+            hash(&shred_buf[signed_payload_offset..]).as_ref(),
+        );
         println!("verify time: {}", now.elapsed().as_micros());
         res
     }
@@ -378,8 +381,12 @@ impl Shredder {
     fn finalize_shred(&mut self, mut shred: Vec<u8>, signature_offset: usize) {
         let data_offset =
             signature_offset + bincode::serialized_size(&Signature::default()).unwrap() as usize;
-        let signature = bincode::serialize(&self.signer.sign_message(&shred[data_offset..]))
-            .expect("Failed to generate serialized signature");
+        let signature = bincode::serialize(
+            &self
+                .signer
+                .sign_message(hash(&shred[data_offset..]).as_ref()),
+        )
+        .expect("Failed to generate serialized signature");
         shred[signature_offset..signature_offset + signature.len()].copy_from_slice(&signature);
         self.shreds.push(shred);
     }
