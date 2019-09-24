@@ -160,7 +160,10 @@ pub fn add_snapshot<P: AsRef<Path>>(
 
     // Create the snapshot
     serialize_into(&mut snapshot_stream, &*bank).map_err(|e| get_io_error(&e.to_string()))?;
+    let mut bank_rc_serialize = Measure::start("bank_rc_serialize-ms");
     serialize_into(&mut snapshot_stream, &bank.rc).map_err(|e| get_io_error(&e.to_string()))?;
+    bank_rc_serialize.stop();
+    inc_new_counter_info!("bank-rc-serialize-ms", bank_rc_serialize.as_ms() as usize);
 
     let mut status_cache_serialize = Measure::start("status_cache_serialize-ms");
     // write the status cache
