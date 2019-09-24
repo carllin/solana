@@ -141,7 +141,8 @@ impl<'a> Serialize for AccountStorageSerialize<'a> {
         let mut serialize_account_storage_timer = Measure::start("serialize_account_storage_ms");
         for (fork_id, fork_storage) in &self.account_storage.0 {
             if *fork_id <= self.slot {
-                let storage_entries: Vec<_> = fork_storage.values().collect();
+                let storage_entries: Vec<&Arc<AccountStorageEntry>> =
+                    fork_storage.values().collect();
                 map.serialize_entry(&fork_id, &storage_entries)?;
                 count += fork_storage.len();
             }
@@ -453,11 +454,11 @@ impl AccountsDB {
         local_account_paths: String,
         append_vecs_path: P,
     ) -> Result<(), IOError> {
-        let _len: usize =
-            deserialize_from(&mut stream).map_err(|e| AccountsDB::get_io_error(&e.to_string()))?;
-        let storage: AccountStorage =
-            deserialize_from(&mut stream).map_err(|e| AccountsDB::get_io_error(&e.to_string()))?;
-
+        println!("here0");
+        let _len: usize = deserialize_from(&mut stream).unwrap();
+        println!("here1");
+        let storage: AccountStorage = deserialize_from(&mut stream).unwrap();
+        println!("here2");
         // Remap the deserialized AppendVec paths to point to correct local paths
         let local_account_paths = get_paths_vec(&local_account_paths);
         let new_storage_map: Result<HashMap<Fork, ForkStores>, IOError> = storage
@@ -480,19 +481,12 @@ impl AccountsDB {
                     let mut copy_options = CopyOptions::new();
                     copy_options.overwrite = true;
                     fs_extra::move_items(&vec![&append_vec_abs_path], &local_dir, &copy_options)
-                        .map_err(|e| {
-                            AccountsDB::get_io_error(&format!(
-                                "Unable to move {:?} to {:?}: {}",
-                                append_vec_abs_path, local_dir, e
-                            ))
-                        })?;
+                        .unwrap();
 
                     // Notify the AppendVec of the new file location
                     let local_path = local_dir.join(append_vec_relative_path);
                     let mut u_storage_entry = Arc::try_unwrap(storage_entry).unwrap();
-                    u_storage_entry
-                        .set_file(local_path)
-                        .map_err(|e| AccountsDB::get_io_error(&e.to_string()))?;
+                    u_storage_entry.set_file(local_path).unwrap();
                     new_fork_storage.insert(id, Arc::new(u_storage_entry));
                 }
                 Ok((fork_id, new_fork_storage))
@@ -501,11 +495,12 @@ impl AccountsDB {
 
         let new_storage_map = new_storage_map?;
         let storage = AccountStorage(new_storage_map);
-        let version: u64 = deserialize_from(&mut stream)
-            .map_err(|_| AccountsDB::get_io_error("write version deserialize error"))?;
+        println!("here3");
+        let version: u64 = deserialize_from(&mut stream).unwrap();
+        println!("here4");
 
-        let fork_hashes: HashMap<Fork, (bool, BankHash)> = deserialize_from(&mut stream)
-            .map_err(|_| AccountsDB::get_io_error("fork hashes deserialize error"))?;
+        let fork_hashes: HashMap<Fork, (bool, BankHash)> = deserialize_from(&mut stream).unwrap();
+        println!("here5");
         *self.fork_hashes.write().unwrap() = fork_hashes;
 
         // Process deserialized data, set necessary fields in self

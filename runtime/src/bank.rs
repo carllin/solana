@@ -90,10 +90,12 @@ impl BankRc {
         local_paths: String,
         append_vecs_path: P,
     ) -> std::result::Result<(), IOError> {
-        let _len: usize =
-            deserialize_from(&mut stream).map_err(|e| BankRc::get_io_error(&e.to_string()))?;
+        println!("first");
+        let _len: usize = deserialize_from(&mut stream).unwrap();
+        println!("second");
         self.accounts
-            .accounts_from_stream(stream, local_paths, append_vecs_path)?;
+            .accounts_from_stream(stream, local_paths, append_vecs_path)
+            .unwrap();
 
         Ok(())
     }

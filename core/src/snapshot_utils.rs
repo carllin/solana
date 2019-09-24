@@ -221,7 +221,8 @@ pub fn bank_from_archive<P: AsRef<Path>>(
     let unpacked_accounts_dir = unpack_dir.as_ref().join(TAR_ACCOUNTS_DIR);
     let unpacked_snapshots_dir = unpack_dir.as_ref().join(TAR_SNAPSHOTS_DIR);
     let snapshot_paths = get_snapshot_paths(&unpacked_snapshots_dir);
-    let bank = rebuild_bank_from_snapshots(account_paths, &snapshot_paths, unpacked_accounts_dir)?;
+    let bank =
+        rebuild_bank_from_snapshots(account_paths, &snapshot_paths, unpacked_accounts_dir).unwrap();
 
     if !bank.verify_hash_internal_state() {
         warn!("Invalid snapshot hash value!");
@@ -273,22 +274,24 @@ where
     let last_root_paths = snapshot_paths
         .last()
         .ok_or_else(|| get_io_error("No snapshots found in snapshots directory"))?;
-    info!("Loading from {:?}", &last_root_paths.snapshot_file_path);
+    println!("Loading from {:?}", &last_root_paths.snapshot_file_path);
     let file = File::open(&last_root_paths.snapshot_file_path)?;
     let mut stream = BufReader::new(file);
-    let bank: Bank = deserialize_from(&mut stream).map_err(|e| get_io_error(&e.to_string()))?;
+    let bank: Bank = deserialize_from(&mut stream)
+        .map_err(|e| get_io_error(&e.to_string()))
+        .unwrap();
 
     // Rebuild accounts
     bank.rc
-        .accounts_from_stream(&mut stream, local_account_paths, append_vecs_path)?;
+        .accounts_from_stream(&mut stream, local_account_paths, append_vecs_path)
+        .unwrap();
 
     // merge the status caches from all previous banks
     for slot_paths in snapshot_paths.iter().rev() {
         let status_cache = File::open(&slot_paths.snapshot_status_cache_path)?;
         let mut stream = BufReader::new(status_cache);
-        let slot_deltas: Vec<SlotDelta<transaction::Result<()>>> = deserialize_from(&mut stream)
-            .map_err(|_| get_io_error("deserialize root error"))
-            .unwrap_or_default();
+        let slot_deltas: Vec<SlotDelta<transaction::Result<()>>> =
+            deserialize_from(&mut stream).unwrap();
 
         bank.src.append(&slot_deltas);
     }
