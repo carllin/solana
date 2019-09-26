@@ -310,25 +310,23 @@ impl ReplayStage {
             warn!("{} already have bank in forks at {}?", my_pubkey, poh_slot);
             return;
         }
-        trace!(
+        info!(
             "{} poh_slot {} parent_slot {}",
-            my_pubkey,
-            poh_slot,
-            parent_slot
+            my_pubkey, poh_slot, parent_slot
         );
 
         if let Some(next_leader) = leader_schedule_cache.slot_leader_at(poh_slot, Some(&parent)) {
-            trace!(
+            info!(
                 "{} leader {} at poh slot: {}",
-                my_pubkey,
-                next_leader,
-                poh_slot
+                my_pubkey, next_leader, poh_slot
             );
 
             // I guess I missed my slot
             if next_leader != *my_pubkey {
                 return;
             }
+
+            info!("start tpu for poh slot: {}", poh_slot);
 
             datapoint_info!(
                 "replay_stage-new_leader",
@@ -419,7 +417,7 @@ impl ReplayStage {
     where
         T: 'static + KeypairUtil + Send + Sync,
     {
-        trace!("handle votable bank {}", bank.slot());
+        info!("handle votable bank {}", bank.slot());
         let vote = tower.new_vote_from_bank(bank, vote_account);
         if let Some(new_root) = tower.record_bank_vote(vote) {
             // get the root bank before squash
@@ -490,23 +488,18 @@ impl ReplayStage {
     ) {
         let next_leader_slot =
             leader_schedule_cache.next_leader_slot(&my_pubkey, bank.slot(), &bank, Some(blocktree));
+
+        let last_blockhash = bank.last_blockhash();
         poh_recorder
             .lock()
             .unwrap()
-            .reset(bank.last_blockhash(), bank.slot(), next_leader_slot);
+            .reset(last_blockhash, bank.slot(), next_leader_slot);
 
         let next_leader_msg = if let Some(next_leader_slot) = next_leader_slot {
             format!("My next leader slot is {}", next_leader_slot.0)
         } else {
             "I am not in the leader schedule yet".to_owned()
         };
-
-        info!(
-            "{} voted and reset PoH at tick height {}. {}",
-            my_pubkey,
-            bank.tick_height(),
-            next_leader_msg,
-        );
     }
 
     fn replay_active_banks(
@@ -571,17 +564,17 @@ impl ReplayStage {
             .values()
             .filter(|b| {
                 let is_votable = b.is_votable();
-                trace!("bank is votable: {} {}", b.slot(), is_votable);
+                info!("bank is votable: {} {}", b.slot(), is_votable);
                 is_votable
             })
             .filter(|b| {
                 let has_voted = tower.has_voted(b.slot());
-                trace!("bank has_voted: {} {}", b.slot(), has_voted);
+                info!("bank has_voted: {} {}", b.slot(), has_voted);
                 !has_voted
             })
             .filter(|b| {
                 let is_locked_out = tower.is_locked_out(b.slot(), &ancestors);
-                trace!("bank is is_locked_out: {} {}", b.slot(), is_locked_out);
+                info!("bank is is_locked_out: {} {}", b.slot(), is_locked_out);
                 !is_locked_out
             })
             .map(|bank| {
@@ -598,7 +591,7 @@ impl ReplayStage {
                 let vote_threshold =
                     tower.check_vote_stake_threshold(b.slot(), &stake_lockouts, *total_staked);
                 Self::confirm_forks(tower, &stake_lockouts, *total_staked, progress, bank_forks);
-                debug!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
+                error!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
                 vote_threshold
             })
             .map(|(b, (stake_lockouts, total_staked))| {
@@ -704,8 +697,9 @@ impl ReplayStage {
         shred_index: usize,
     ) -> Result<()> {
         if !entries.verify(last_entry) {
-            warn!(
-                "entry verification failed {} {} {} {} {}",
+            info!(
+                "entry verification failed, slot: {}, entry len: {}, tick_height: {}, last entry: {}, last_blockhash: {}, shred_index: {}",
+                bank.slot(),
                 entries.len(),
                 bank.tick_height(),
                 last_entry,

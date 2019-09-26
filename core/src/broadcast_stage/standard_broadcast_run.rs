@@ -117,6 +117,7 @@ impl BroadcastRun for StandardBroadcastRun {
 
         let all_shred_bufs: Vec<Vec<u8>> = shred_infos.into_iter().map(|s| s.payload).collect();
         trace!("Broadcasting {:?} shreds", all_shred_bufs.len());
+
         cluster_info.read().unwrap().broadcast_shreds(
             sock,
             &all_shred_bufs,
@@ -125,6 +126,11 @@ impl BroadcastRun for StandardBroadcastRun {
         )?;
 
         let broadcast_elapsed = broadcast_start.elapsed();
+
+        if last_tick == bank.max_tick_height() {
+            info!("Finished broadcasting for slot: {}", bank.slot());
+        }
+
         self.update_broadcast_stats(
             duration_as_ms(&receive_elapsed),
             duration_as_ms(&to_shreds_elapsed),
