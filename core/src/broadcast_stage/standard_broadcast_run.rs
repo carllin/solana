@@ -128,7 +128,11 @@ impl BroadcastRun for StandardBroadcastRun {
         let broadcast_elapsed = broadcast_start.elapsed();
 
         if last_tick == bank.max_tick_height() {
-            info!("Finished broadcasting for slot: {}", bank.slot());
+            info!(
+                "Finished broadcasting for slot: {}, last_shred: {}",
+                bank.slot(),
+                latest_shred_index
+            );
         }
 
         self.update_broadcast_stats(

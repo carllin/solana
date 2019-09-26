@@ -431,6 +431,12 @@ impl Blocktree {
 
         shreds.into_iter().for_each(|shred| {
             if shred.is_data() {
+                println!(
+                    "inserting shred slot: {}, index: {}, parent: {}",
+                    shred.slot(),
+                    shred.index(),
+                    shred.parent()
+                );
                 self.check_insert_data_shred(
                     shred,
                     &mut index_working_set,

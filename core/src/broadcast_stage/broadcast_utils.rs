@@ -36,6 +36,7 @@ pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result
             // If the bank changed, that implies the previous slot was interrupted and we do not have to
             // broadcast its entries.
             if bank.slot() != slot {
+                info!("Abandoning bank: {}", slot);
                 entries.clear();
                 slot = bank.slot();
                 max_tick_height = bank.max_tick_height();
