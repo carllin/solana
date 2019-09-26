@@ -18,7 +18,7 @@ use std::path::Path;
 
 // A good value for this is the number of cores on the machine
 const TOTAL_THREADS: i32 = 8;
-const MAX_WRITE_BUFFER_SIZE: u64 = 256 * 1024 * 1024; // 256MB
+const MAX_WRITE_BUFFER_SIZE: u64 = 512 * 1024 * 1024; // 256MB
 const MIN_WRITE_BUFFER_SIZE: u64 = 64 * 1024; // 64KB
 
 #[derive(Debug)]
@@ -423,21 +423,22 @@ fn get_cf_options(name: &'static str) -> Options {
 
     let mut options = Options::default();
     match name {
-        ShredCode::NAME | ShredData::NAME => {
+        /*ShredCode::NAME | ShredData::NAME*/_ => {
             // 512MB * 8 = 4GB. 2 of these columns should take no more than 8GB of RAM
             options.set_max_write_buffer_number(8);
             options.set_write_buffer_size(MAX_WRITE_BUFFER_SIZE as usize);
-            options.set_target_file_size_base(MAX_WRITE_BUFFER_SIZE / 10);
-            options.set_max_bytes_for_level_base(MAX_WRITE_BUFFER_SIZE);
+            options.set_target_file_size_base((MAX_WRITE_BUFFER_SIZE * 2) / 10);
+            options.set_max_bytes_for_level_base(MAX_WRITE_BUFFER_SIZE * 2);
+            options.set_min_write_buffer_number_to_merge(2);
         }
-        _ => {
+       /* _ => {
             // We want smaller CFs to flush faster. This results in more WAL files but lowers
             // overall WAL space utilization and increases flush frequency
             options.set_write_buffer_size(MIN_WRITE_BUFFER_SIZE as usize);
             options.set_target_file_size_base(MIN_WRITE_BUFFER_SIZE);
             options.set_max_bytes_for_level_base(MIN_WRITE_BUFFER_SIZE);
             options.set_level_zero_file_num_compaction_trigger(1);
-        }
+        }*/
     }
     options
 }
