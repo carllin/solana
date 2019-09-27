@@ -34,6 +34,7 @@ use std::sync::{Arc, RwLock};
 pub use self::meta::*;
 pub use self::rooted_slot_iterator::*;
 use crate::leader_schedule_cache::LeaderScheduleCache;
+use solana_measure::measure::Measure;
 use solana_sdk::clock::Slot;
 
 mod db;
@@ -420,7 +421,14 @@ impl Blocktree {
         leader_schedule: Option<&Arc<LeaderScheduleCache>>,
     ) -> Result<()> {
         let db = &*self.db;
+        let mut start = Measure::start("Blocktree lock");
         let mut batch_processor = self.batch_processor.write().unwrap();
+        start.stop();
+        let elapsed = start.as_ms();
+        if elapsed > 10 {
+            println!("Blocktree lock elapsed: {}", elapsed);
+        }
+
         let mut write_batch = batch_processor.batch()?;
 
         let mut just_inserted_coding_shreds = HashMap::new();

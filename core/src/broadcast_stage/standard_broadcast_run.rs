@@ -109,6 +109,12 @@ impl BroadcastRun for StandardBroadcastRun {
             .insert_shreds(shred_infos.clone(), None)
             .expect("Failed to insert shreds in blocktree");
         let insert_shreds_elapsed = insert_shreds_start.elapsed();
+        println!(
+            "Inserting shreds for slot: {}, num_shreds: {}, elapsed: {}",
+            bank.slot(),
+            num_shreds,
+            insert_shreds_elapsed.as_millis()
+        );
 
         // 3) Start broadcast step
         let broadcast_start = Instant::now();
