@@ -12,12 +12,22 @@ struct BroadcastStats {
 
 pub(super) struct StandardBroadcastRun {
     stats: BroadcastStats,
+    current_slot: Option<u64>,
+    shredding_elapsed: u128,
+    insertion_elapsed: u128,
+    broadcast_elapsed: u128,
+    slot_broadcast_start: Option<Instant>,
 }
 
 impl StandardBroadcastRun {
     pub(super) fn new() -> Self {
         Self {
             stats: BroadcastStats::default(),
+            current_slot: None,
+            shredding_elapsed: 0,
+            insertion_elapsed: 0,
+            broadcast_elapsed: 0,
+            slot_broadcast_start: None,
         }
     }
 
@@ -76,6 +86,11 @@ impl BroadcastRun for StandardBroadcastRun {
         let last_tick = receive_results.last_tick;
         inc_new_counter_info!("broadcast_service-entries_received", num_entries);
 
+        if Some(bank.slot()) != self.current_slot {
+            self.slot_broadcast_start = Some(Instant::now());
+            self.current_slot = Some(bank.slot());
+        }
+
         // 2) Convert entries to blobs + generate coding blobs
         let keypair = &cluster_info.read().unwrap().keypair.clone();
         let latest_shred_index = blocktree
@@ -132,6 +147,29 @@ impl BroadcastRun for StandardBroadcastRun {
         )?;
 
         let broadcast_elapsed = broadcast_start.elapsed();
+
+        self.insertion_elapsed += insert_shreds_elapsed.as_millis();
+        self.shredding_elapsed += to_shreds_elapsed.as_millis();
+        self.broadcast_elapsed += broadcast_elapsed.as_millis();
+
+        if last_tick == bank.max_tick_height() {
+            datapoint_info!(
+                "broadcast-bank-stats",
+                ("slot", bank.slot() as i64, i64),
+                ("shredding_time", self.shredding_elapsed as i64, i64),
+                ("insertion_time", self.insertion_elapsed as i64, i64),
+                ("broadcast_time", self.broadcast_elapsed as i64, i64),
+                ("num_shreds", (latest_shred_index + 1) as i64, i64),
+                (
+                    "slot_broadcast_time",
+                    self.slot_broadcast_start.unwrap().elapsed().as_millis() as i64,
+                    i64
+                ),
+            );
+            self.insertion_elapsed = 0;
+            self.shredding_elapsed = 0;
+            self.broadcast_elapsed = 0;
+        }
 
         if last_tick == bank.max_tick_height() {
             info!(
