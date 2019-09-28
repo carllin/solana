@@ -1,9 +1,7 @@
 use crate::entry::Entry;
 use crate::poh_recorder::WorkingBankEntry;
 use crate::result::Result;
-use crate::shred::{Shred, Shredder, RECOMMENDED_FEC_RATE};
 use solana_runtime::bank::Bank;
-use solana_sdk::signature::Keypair;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -65,60 +63,13 @@ pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result
     })
 }
 
-pub(super) fn entries_to_shreds(
-    entries: Vec<Entry>,
-    last_tick: u64,
-    slot: u64,
-    bank_max_tick: u64,
-    keypair: &Arc<Keypair>,
-    latest_shred_index: u64,
-    parent_slot: u64,
-) -> (Vec<Shred>, u64) {
-    let mut shredder = Shredder::new(
-        slot,
-        parent_slot,
-        RECOMMENDED_FEC_RATE,
-        keypair,
-        latest_shred_index as u32,
-    )
-    .expect("Expected to create a new shredder");
-
-    let now = Instant::now();
-    bincode::serialize_into(&mut shredder, &entries)
-        .expect("Expect to write all entries to shreds");
-    let elapsed = now.elapsed().as_millis();
-
-    if last_tick == bank_max_tick {
-        shredder.finalize_slot();
-    } else {
-        shredder.finalize_data();
-    }
-
-    let shred_infos: Vec<Shred> = shredder.shreds.drain(..).collect();
-
-    datapoint_info!(
-        "shredding-stats",
-        ("slot", slot as i64, i64),
-        ("num_shreds", shred_infos.len() as i64, i64),
-        ("signing_coding", shredder.signing_coding_time as i64, i64),
-        (
-            "copying_serialzing",
-            (elapsed - shredder.signing_coding_time) as i64,
-            i64
-        ),
-    );
-
-    trace!("Inserting {:?} shreds in blocktree", shred_infos.len());
-
-    (shred_infos, u64::from(shredder.index))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::genesis_utils::{create_genesis_block, GenesisBlockInfo};
     use solana_sdk::genesis_block::GenesisBlock;
     use solana_sdk::pubkey::Pubkey;
+    use solana_sdk::signature::Keypair;
     use solana_sdk::system_transaction;
     use solana_sdk::transaction::Transaction;
     use std::sync::mpsc::channel;

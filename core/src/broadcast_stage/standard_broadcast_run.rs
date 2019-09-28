@@ -1,6 +1,6 @@
 use super::broadcast_utils;
 use super::*;
-use crate::broadcast_stage::broadcast_utils::entries_to_shreds;
+use crate::shred::{Shredder, RECOMMENDED_FEC_RATE};
 use solana_sdk::timing::duration_as_ms;
 
 #[derive(Default)]
@@ -40,7 +40,7 @@ impl StandardBroadcastRun {
         run_elapsed: u64,
         num_entries: usize,
         num_shreds: usize,
-        blob_index: u64,
+        shred_index: u32,
     ) {
         inc_new_counter_info!("broadcast_service-time_ms", broadcast_elapsed as usize);
 
@@ -65,7 +65,7 @@ impl StandardBroadcastRun {
             ("shredding_time", shredding_elapsed as i64, i64),
             ("insert_shred_time", insert_shreds_elapsed as i64, i64),
             ("broadcast_time", broadcast_elapsed as i64, i64),
-            ("transmit-index", blob_index as i64, i64),
+            ("transmit-index", shred_index as i64, i64),
         );
     }
 }
@@ -93,11 +93,11 @@ impl BroadcastRun for StandardBroadcastRun {
 
         // 2) Convert entries to blobs + generate coding blobs
         let keypair = &cluster_info.read().unwrap().keypair.clone();
-        let latest_shred_index = blocktree
+        let next_shred_index = blocktree
             .meta(bank.slot())
             .expect("Database error")
             .map(|meta| meta.consumed)
-            .unwrap_or(0);
+            .unwrap_or(0) as u32;
 
         let parent_slot = if let Some(parent_bank) = bank.parent() {
             parent_bank.slot()
@@ -105,23 +105,28 @@ impl BroadcastRun for StandardBroadcastRun {
             0
         };
 
+        // Create shreds from entries
         let to_shreds_start = Instant::now();
-        let (shred_infos, latest_shred_index) = entries_to_shreds(
-            receive_results.entries,
-            last_tick,
+        let shredder = Shredder::new(
             bank.slot(),
-            bank.max_tick_height(),
-            keypair,
-            latest_shred_index,
             parent_slot,
+            RECOMMENDED_FEC_RATE,
+            keypair.clone(),
+        )
+        .expect("Expected to create a new shredder");
+
+        let (shreds, _) = shredder.entries_to_shreds(
+            receive_results.entries,
+            last_tick == bank.max_tick_height(),
+            next_shred_index,
         );
         let to_shreds_elapsed = to_shreds_start.elapsed();
 
-        let all_seeds: Vec<[u8; 32]> = shred_infos.iter().map(|s| s.seed()).collect();
-        let num_shreds = shred_infos.len();
+        let all_seeds: Vec<[u8; 32]> = shreds.iter().map(|s| s.seed()).collect();
+        let num_shreds = shreds.len();
         let insert_shreds_start = Instant::now();
         blocktree
-            .insert_shreds(shred_infos.clone(), None)
+            .insert_shreds(shreds.clone(), None)
             .expect("Failed to insert shreds in blocktree");
         let insert_shreds_elapsed = insert_shreds_start.elapsed();
         println!(
@@ -136,7 +141,7 @@ impl BroadcastRun for StandardBroadcastRun {
         let bank_epoch = bank.get_stakers_epoch(bank.slot());
         let stakes = staking_utils::staked_nodes_at_epoch(&bank, bank_epoch);
 
-        let all_shred_bufs: Vec<Vec<u8>> = shred_infos.into_iter().map(|s| s.payload).collect();
+        let all_shred_bufs: Vec<Vec<u8>> = shreds.into_iter().map(|s| s.payload).collect();
         trace!("Broadcasting {:?} shreds", all_shred_bufs.len());
 
         cluster_info.read().unwrap().broadcast_shreds(
@@ -159,7 +164,7 @@ impl BroadcastRun for StandardBroadcastRun {
                 ("shredding_time", self.shredding_elapsed as i64, i64),
                 ("insertion_time", self.insertion_elapsed as i64, i64),
                 ("broadcast_time", self.broadcast_elapsed as i64, i64),
-                ("num_shreds", (latest_shred_index + 1) as i64, i64),
+                ("num_shreds", next_shred_index as i64, i64),
                 (
                     "slot_broadcast_time",
                     self.slot_broadcast_start.unwrap().elapsed().as_millis() as i64,
@@ -175,7 +180,7 @@ impl BroadcastRun for StandardBroadcastRun {
             info!(
                 "Finished broadcasting for slot: {}, last_shred: {}",
                 bank.slot(),
-                latest_shred_index
+                next_shred_index
             );
         }
 
@@ -189,7 +194,7 @@ impl BroadcastRun for StandardBroadcastRun {
             ),
             num_entries,
             num_shreds,
-            latest_shred_index,
+            next_shred_index,
         );
 
         Ok(())
