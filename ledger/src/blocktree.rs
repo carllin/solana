@@ -380,7 +380,7 @@ impl Blocktree {
         let mut start = Measure::start("Blocktree lock");
         let mut batch_processor = self.batch_processor.write().unwrap();
         start.stop();
-        let insert_lock_elapsed = start.as_ms();
+        let insert_lock_elapsed = start.as_us();
 
         let mut write_batch = batch_processor.batch()?;
 
@@ -411,7 +411,7 @@ impl Blocktree {
             }
         });
         start.stop();
-        let insert_shreds_elapsed = start.as_ms();
+        let insert_shreds_elapsed = start.as_us();
 
         let mut start = Measure::start("Shred recovery");
         if let Some(leader_schedule_cache) = leader_schedule {
@@ -438,13 +438,13 @@ impl Blocktree {
             });
         }
         start.stop();
-        let shred_recovery_elapsed = start.as_ms();
+        let shred_recovery_elapsed = start.as_us();
 
         let mut start = Measure::start("Shred recovery");
         // Handle chaining for the working set
         handle_chaining(&self.db, &mut write_batch, &slot_meta_working_set)?;
         start.stop();
-        let chaining_elapsed = start.as_ms();
+        let chaining_elapsed = start.as_us();
 
         let mut start = Measure::start("Commit Worknig Sets");
         let (should_signal, newly_completed_slots) = commit_slot_meta_working_set(
@@ -461,12 +461,12 @@ impl Blocktree {
             write_batch.put::<cf::Index>(slot, index)?;
         }
         start.stop();
-        let commit_working_sets_elapsed = start.as_ms();
+        let commit_working_sets_elapsed = start.as_us();
 
         let mut start = Measure::start("Write Batch");
         batch_processor.write(write_batch)?;
         start.stop();
-        let write_batch_elapsed = start.as_ms();
+        let write_batch_elapsed = start.as_us();
 
         if should_signal {
             for signal in &self.new_shreds_signals {
