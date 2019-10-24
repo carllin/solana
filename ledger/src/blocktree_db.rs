@@ -706,23 +706,11 @@ fn get_cf_options(name: &'static str) -> Options {
     use columns::{ErasureMeta, Index, ShredCode, ShredData};
 
     let mut options = Options::default();
-    match name {
-        ShredCode::NAME | ShredData::NAME | Index::NAME | ErasureMeta::NAME => {
-            // 512MB * 8 = 4GB. 2 of these columns should take no more than 8GB of RAM
-            options.set_max_write_buffer_number(8);
-            options.set_write_buffer_size(MAX_WRITE_BUFFER_SIZE as usize);
-            options.set_target_file_size_base(MAX_WRITE_BUFFER_SIZE / 10);
-            options.set_max_bytes_for_level_base(MAX_WRITE_BUFFER_SIZE);
-        }
-        _ => {
-            // We want smaller CFs to flush faster. This results in more WAL files but lowers
-            // overall WAL space utilization and increases flush frequency
-            options.set_write_buffer_size(MIN_WRITE_BUFFER_SIZE as usize);
-            options.set_target_file_size_base(MIN_WRITE_BUFFER_SIZE);
-            options.set_max_bytes_for_level_base(MIN_WRITE_BUFFER_SIZE);
-            options.set_level_zero_file_num_compaction_trigger(1);
-        }
-    }
+    // 512MB * 8 = 4GB. 2 of these columns should take no more than 8GB of RAM
+    options.set_max_write_buffer_number(8);
+    options.set_write_buffer_size(MAX_WRITE_BUFFER_SIZE as usize);
+    options.set_target_file_size_base(MAX_WRITE_BUFFER_SIZE / 10);
+    options.set_max_bytes_for_level_base(MAX_WRITE_BUFFER_SIZE);
     options
 }
 
