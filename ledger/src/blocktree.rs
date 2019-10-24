@@ -18,6 +18,7 @@ use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use rayon::ThreadPool;
 use rocksdb::DBRawIterator;
+use solana_measure::measure::Measure;
 use solana_metrics::{datapoint_debug, datapoint_error};
 use solana_rayon_threadlimit::get_thread_count;
 use solana_sdk::clock::Slot;
@@ -59,6 +60,15 @@ pub struct Blocktree {
     last_root: Arc<RwLock<u64>>,
     pub new_shreds_signals: Vec<SyncSender<bool>>,
     pub completed_slots_senders: Vec<SyncSender<Vec<u64>>>,
+}
+
+pub struct BlocktreeInsertionMetrics {
+    pub insert_lock_elapsed: u64,
+    pub insert_shreds_elapsed: u64,
+    pub shred_recovery_elapsed: u64,
+    pub chaining_elapsed: u64,
+    pub commit_working_sets_elapsed: u64,
+    pub write_batch_elapsed: u64,
 }
 
 impl Blocktree {
@@ -365,9 +375,13 @@ impl Blocktree {
         &self,
         shreds: Vec<Shred>,
         leader_schedule: Option<&Arc<LeaderScheduleCache>>,
-    ) -> Result<()> {
+    ) -> Result<BlocktreeInsertionMetrics> {
         let db = &*self.db;
+        let mut start = Measure::start("Blocktree lock");
         let mut batch_processor = self.batch_processor.write().unwrap();
+        start.stop();
+        let insert_lock_elapsed = start.as_ms();
+
         let mut write_batch = batch_processor.batch()?;
 
         let mut just_inserted_coding_shreds = HashMap::new();
@@ -376,6 +390,7 @@ impl Blocktree {
         let mut slot_meta_working_set = HashMap::new();
         let mut index_working_set = HashMap::new();
 
+        let mut start = Measure::start("Shred insertion");
         shreds.into_iter().for_each(|shred| {
             if shred.is_data() {
                 self.check_insert_data_shred(
@@ -395,7 +410,10 @@ impl Blocktree {
                 );
             }
         });
+        start.stop();
+        let insert_shreds_elapsed = start.as_ms();
 
+        let mut start = Measure::start("Shred recovery");
         if let Some(leader_schedule_cache) = leader_schedule {
             let recovered_data = Self::try_shred_recovery(
                 &db,
@@ -419,10 +437,16 @@ impl Blocktree {
                 }
             });
         }
+        start.stop();
+        let shred_recovery_elapsed = start.as_ms();
 
+        let mut start = Measure::start("Shred recovery");
         // Handle chaining for the working set
         handle_chaining(&self.db, &mut write_batch, &slot_meta_working_set)?;
+        start.stop();
+        let chaining_elapsed = start.as_ms();
 
+        let mut start = Measure::start("Commit Worknig Sets");
         let (should_signal, newly_completed_slots) = commit_slot_meta_working_set(
             &slot_meta_working_set,
             &self.completed_slots_senders,
@@ -436,8 +460,13 @@ impl Blocktree {
         for (&slot, index) in index_working_set.iter() {
             write_batch.put::<cf::Index>(slot, index)?;
         }
+        start.stop();
+        let commit_working_sets_elapsed = start.as_ms();
 
+        let mut start = Measure::start("Write Batch");
         batch_processor.write(write_batch)?;
+        start.stop();
+        let write_batch_elapsed = start.as_ms();
 
         if should_signal {
             for signal in &self.new_shreds_signals {
@@ -452,7 +481,14 @@ impl Blocktree {
             newly_completed_slots,
         )?;
 
-        Ok(())
+        Ok(BlocktreeInsertionMetrics {
+            insert_lock_elapsed,
+            insert_shreds_elapsed,
+            shred_recovery_elapsed,
+            chaining_elapsed,
+            commit_working_sets_elapsed,
+            write_batch_elapsed,
+        })
     }
 
     fn check_insert_coding_shred(
