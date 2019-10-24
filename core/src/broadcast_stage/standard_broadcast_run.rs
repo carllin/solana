@@ -185,11 +185,14 @@ impl StandardBroadcastRun {
         let clone_and_seed_elapsed = clone_and_seed_start.elapsed();
 
         // 3) Insert shreds into blocktree
+        let num_shreds = all_shreds.len();
         let insert_shreds_start = Instant::now();
-        blocktree
+        let metrics = blocktree
             .insert_shreds(all_shreds_, None)
             .expect("Failed to insert shreds in blocktree");
         let insert_shreds_elapsed = insert_shreds_start.elapsed();
+
+        metrics.report_metrics("broadcast-insert-shreds");
 
         // 4) Broadcast the shreds
         let broadcast_start = Instant::now();
