@@ -71,6 +71,8 @@ pub struct BlocktreeInsertionMetrics {
     pub commit_working_sets_elapsed: u64,
     pub write_batch_elapsed: u64,
     pub total_elapsed: u64,
+    pub num_inserted: u64,
+    pub num_recovered: usize,
 }
 
 impl BlocktreeInsertionMetrics {
@@ -97,6 +99,8 @@ impl BlocktreeInsertionMetrics {
                 i64
             ),
             ("write_batch_elapsed", self.write_batch_elapsed as i64, i64),
+            ("num_inserted", self.num_inserted as i64, i64),
+            ("num_recovered", self.num_recovered as i64, i64),
         );
     }
 }
@@ -423,29 +427,19 @@ impl Blocktree {
 
         let num_shreds = shreds.len();
         let mut start = Measure::start("Shred insertion");
-        shreds.into_iter().for_each(|shred| {
-            if shred.is_data() {
-                self.check_insert_data_shred(
-                    shred,
-                    &mut index_working_set,
-                    &mut slot_meta_working_set,
-                    &mut write_batch,
-                    &mut just_inserted_data_shreds,
-                );
-            } else if shred.is_code() {
-                self.check_insert_coding_shred(
-                    shred,
-                    &mut erasure_metas,
-                    &mut index_working_set,
-                    &mut write_batch,
-                    &mut just_inserted_coding_shreds,
-                );
-            }
-        });
+        let num_inserted = self.check_insert_shreds(
+            shreds,
+            &mut write_batch,
+            &mut erasure_metas,
+            &mut slot_meta_working_set,
+            &mut just_inserted_data_shreds,
+            &mut just_inserted_coding_shreds,
+        );
         start.stop();
         let insert_shreds_elapsed = start.as_us();
 
         let mut start = Measure::start("Shred recovery");
+        let mut num_recovered = 0;
         if let Some(leader_schedule_cache) = leader_schedule {
             let recovered_data = Self::try_shred_recovery(
                 &db,
@@ -455,6 +449,7 @@ impl Blocktree {
                 &mut just_inserted_coding_shreds,
             );
 
+            num_recovered = recovered_data.len();
             recovered_data.into_iter().for_each(|shred| {
                 if let Some(leader) = leader_schedule_cache.slot_leader_at(shred.slot(), None) {
                     if shred.verify(&leader) {
@@ -464,7 +459,7 @@ impl Blocktree {
                             &mut slot_meta_working_set,
                             &mut write_batch,
                             &mut just_inserted_coding_shreds,
-                        )
+                        );
                     }
                 }
             });
@@ -478,7 +473,7 @@ impl Blocktree {
         start.stop();
         let chaining_elapsed = start.as_us();
 
-        let mut start = Measure::start("Commit Worknig Sets");
+        let mut start = Measure::start("Commit Working Sets");
         let (should_signal, newly_completed_slots) = commit_slot_meta_working_set(
             &slot_meta_working_set,
             &self.completed_slots_senders,
@@ -524,17 +519,79 @@ impl Blocktree {
             chaining_elapsed,
             commit_working_sets_elapsed,
             write_batch_elapsed,
+            num_inserted,
+            num_recovered,
         })
+    }
+
+    fn check_insert_shreds(
+        &self,
+        mut shreds: Vec<Shred>,
+        write_batch: &mut WriteBatch,
+        slot_meta_working_set: &mut HashMap<u64, SlotMetaWorkingSetEntry>,
+        erasure_metas: &HashMap<(u64, u64), ErasureMeta>,
+        just_inserted_coding_shreds: &mut HashMap<(u64, u64), Shred>,
+        just_inserted_data_shreds: &mut HashMap<(u64, u64), Shred>,
+    ) -> u64 {
+        if shreds.is_empty() {
+            return;
+        }
+        shreds.sort_by(|s1, s2| s1.slot().partial_cmp(s2.slot()));
+
+        let mut current_slot = shreds[0].slot();
+        let mut current_index = get_index_meta_entry(&self.db, current_slot);
+        // TODO: check shred.parent == current_slot_meta.parent
+        let mut current_slot_meta = get_slot_meta_entry(
+            &self.db,
+            slot_meta_working_set,
+            current_slot,
+            shred.parent(),
+        );
+
+        let mut inserted_count = 0;
+        for s in shreds {
+            if s.slot() != current_slot {
+                current_slot = s.slot();
+                current_index = get_index_meta_entry(&self.db, current_slot);
+                // TODO: check shred.parent == current_slot_meta.parent
+                current_slot_meta =
+                    get_slot_meta_entry(&self.db, slot_meta_working_set, current_slot, s.parent());
+            }
+
+            if s.is_data() {
+                if self.check_insert_data_shred(
+                    shred,
+                    &mut current_index,
+                    &mut current_slot_meta,
+                    &mut write_batch,
+                    &mut just_inserted_data_shreds,
+                ) {
+                    inserted_count += 1;
+                }
+            } else if s.is_code() {
+                if self.check_insert_coding_shred(
+                    shred,
+                    &mut erasure_metas,
+                    &mut current_index,
+                    &mut write_batch,
+                    &mut just_inserted_coding_shreds,
+                ) {
+                    inserted_count += 1;
+                }
+            }
+        }
+
+        inserted_count
     }
 
     fn check_insert_coding_shred(
         &self,
         shred: Shred,
         erasure_metas: &mut HashMap<(u64, u64), ErasureMeta>,
-        index_working_set: &mut HashMap<u64, Index>,
+        index: &Index,
         write_batch: &mut WriteBatch,
         just_inserted_coding_shreds: &mut HashMap<(u64, u64), Shred>,
-    ) {
+    ) -> bool {
         let slot = shred.slot();
         let shred_index = u64::from(shred.index());
 
@@ -545,24 +602,27 @@ impl Blocktree {
         // This gives the index of first coding shred in this FEC block
         // So, all coding shreds in a given FEC block will have the same set index
         if Blocktree::should_insert_coding_shred(&shred, index_meta.coding(), &self.last_root) {
-            if let Ok(()) = self.insert_coding_shred(erasure_metas, index_meta, &shred, write_batch)
-            {
-                just_inserted_coding_shreds
-                    .entry((slot, shred_index))
-                    .or_insert_with(|| shred);
-                new_index_meta.map(|n| index_working_set.insert(slot, n));
-            }
+            self.insert_coding_shred(erasure_metas, index_meta, &shred, write_batch)
+                .map(|_| {
+                    just_inserted_coding_shreds
+                        .entry((slot, shred_index))
+                        .or_insert_with(|| shred);
+                    new_index_meta.map(|n| index_working_set.insert(slot, n))
+                })
+                .is_ok()
+        } else {
+            false
         }
     }
 
     fn check_insert_data_shred(
         &self,
         shred: Shred,
-        index_working_set: &mut HashMap<u64, Index>,
-        slot_meta_working_set: &mut HashMap<u64, SlotMetaWorkingSetEntry>,
+        index: &mut Index,
+        slot_meta: &mut SlotMeta,
         write_batch: &mut WriteBatch,
         just_inserted_data_shreds: &mut HashMap<(u64, u64), Shred>,
-    ) {
+    ) -> bool {
         let slot = shred.slot();
         let shred_index = u64::from(shred.index());
         let (index_meta, mut new_index_meta) =
@@ -601,6 +661,8 @@ impl Blocktree {
         if insert_success {
             new_slot_meta_entry.map(|n| slot_meta_working_set.insert(slot, n));
         }
+
+        insert_success
     }
 
     fn should_insert_coding_shred(
@@ -1298,25 +1360,12 @@ fn update_slot_meta(
     }
 }
 
-fn get_index_meta_entry<'a>(
-    db: &Database,
-    slot: u64,
-    index_working_set: &'a mut HashMap<u64, Index>,
-) -> (Option<&'a mut Index>, Option<Index>) {
+fn get_index_meta<'a>(db: &Database, slot: u64) -> Index {
     let index_cf = db.column::<cf::Index>();
-    index_working_set
-        .get_mut(&slot)
-        .map(|i| (Some(i), None))
-        .unwrap_or_else(|| {
-            let newly_inserted_meta = Some(
-                index_cf
-                    .get(slot)
-                    .unwrap()
-                    .unwrap_or_else(|| Index::new(slot)),
-            );
-
-            (None, newly_inserted_meta)
-        })
+    index_cf
+        .get(slot)
+        .unwrap()
+        .unwrap_or_else(|| Index::new(slot))
 }
 
 fn get_slot_meta_entry<'a>(
