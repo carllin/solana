@@ -10,6 +10,7 @@ use rand::Rng;
 use solana_ledger::blocktree::{entries_to_test_shreds, get_tmp_ledger_path, Blocktree};
 use solana_ledger::entry::{create_ticks, Entry};
 use solana_sdk::hash::Hash;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use test::Bencher;
 
@@ -40,6 +41,37 @@ fn setup_read_bench(
     blocktree
         .insert_shreds(shreds, None)
         .expect("Expectd successful insertion of shreds into ledger");
+}
+
+#[bench]
+fn bench_hashmap_mut(bench: &mut Bencher) {
+    let mut x = HashMap::new();
+    let y = HashSet::new();
+    let k = 10;
+    x.insert(k, y);
+    let g = x.get_mut(&k).unwrap();
+    bench.iter(move || {
+        for i in 0..50000 {
+            g.insert(i);
+        }
+        g.clear()
+    });
+}
+
+#[bench]
+fn bench_hashmap(bench: &mut Bencher) {
+    let mut x = HashMap::new();
+    let mut y = HashSet::new();
+    for i in 0..50000 {
+        y.insert(i as u64);
+    }
+    let k = 10;
+    x.insert(k, y);
+    bench.iter(move || {
+        for i in 0..50000 {
+            let a = x.get_mut(&k).unwrap();
+        }
+    });
 }
 
 // Write small shreds to the ledger
