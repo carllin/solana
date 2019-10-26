@@ -448,6 +448,7 @@ impl Blocktree {
                         &mut index_working_set,
                         &mut write_batch,
                         &mut just_inserted_coding_shreds,
+                        &mut index_meta_time,
                     )
                 } else {
                     panic!("There should be no other case");
@@ -557,12 +558,13 @@ impl Blocktree {
         index_working_set: &mut HashMap<u64, Index>,
         write_batch: &mut WriteBatch,
         just_inserted_coding_shreds: &mut HashMap<(u64, u64), Shred>,
+        index_meta_time: &mut u64,
     ) -> bool {
         let slot = shred.slot();
         let shred_index = u64::from(shred.index());
 
         let (index_meta, mut new_index_meta) =
-            get_index_meta_entry(&self.db, slot, index_working_set);
+            get_index_meta_entry(&self.db, slot, index_working_set, index_meta_time);
 
         let index_meta = index_meta.unwrap_or_else(|| new_index_meta.as_mut().unwrap());
         // This gives the index of first coding shred in this FEC block
@@ -594,17 +596,16 @@ impl Blocktree {
         let slot = shred.slot();
         let shred_index = u64::from(shred.index());
 
-        let mut index_start = Measure::start("Get index meta entry");
         let (index_meta, mut new_index_meta) =
-            get_index_meta_entry(&self.db, slot, index_working_set);
-        index_start.stop();
-        *index_meta_time += index_start.as_us();
+            get_index_meta_entry(&self.db, slot, index_working_set, index_meta_time);
 
-        let mut slot_meta_start = Measure::start("Get index meta entry");
-        let (slot_meta_entry, mut new_slot_meta_entry) =
-            get_slot_meta_entry(&self.db, slot_meta_working_set, slot, shred.parent());
-        slot_meta_start.stop();
-        *slot_meta_time += slot_meta_start.as_us();
+        let (slot_meta_entry, mut new_slot_meta_entry) = get_slot_meta_entry(
+            &self.db,
+            slot_meta_working_set,
+            slot,
+            shred.parent(),
+            slot_meta_time,
+        );
 
         let insert_success = {
             let index_meta = index_meta.unwrap_or_else(|| new_index_meta.as_mut().unwrap());
@@ -1337,19 +1338,22 @@ fn get_index_meta_entry<'a>(
     db: &Database,
     slot: u64,
     index_working_set: &'a mut HashMap<u64, Index>,
+    index_meta_time: &mut u64,
 ) -> (Option<&'a mut Index>, Option<Index>) {
     let index_cf = db.column::<cf::Index>();
     index_working_set
         .get_mut(&slot)
         .map(|i| (Some(i), None))
         .unwrap_or_else(|| {
+            let mut total_start = Measure::start("Total elapsed");
             let newly_inserted_meta = Some(
                 index_cf
                     .get(slot)
                     .unwrap()
                     .unwrap_or_else(|| Index::new(slot)),
             );
-
+            total_start.stop();
+            *index_meta_time += total_start.as_us();
             (None, newly_inserted_meta)
         })
 }
@@ -1359,6 +1363,7 @@ fn get_slot_meta_entry<'a>(
     slot_meta_working_set: &'a mut HashMap<u64, SlotMetaWorkingSetEntry>,
     slot: u64,
     parent_slot: u64,
+    slot_meta_time: &mut u64,
 ) -> (
     Option<&'a mut SlotMetaWorkingSetEntry>,
     Option<SlotMetaWorkingSetEntry>,
@@ -1370,6 +1375,7 @@ fn get_slot_meta_entry<'a>(
         .get_mut(&slot)
         .map(|s| (Some(s), None))
         .unwrap_or_else(|| {
+            let mut total_start = Measure::start("Total elapsed");
             // Store a 2-tuple of the metadata (working copy, backup copy)
             if let Some(mut meta) = meta_cf.get(slot).expect("Expect database get to succeed") {
                 let backup = Some(meta.clone());
@@ -1381,6 +1387,8 @@ fn get_slot_meta_entry<'a>(
                     meta.parent_slot = parent_slot;
                 }
 
+                total_start.stop();
+                *slot_meta_time += total_start.as_us();
                 (None, Some((Rc::new(RefCell::new(meta)), backup)))
             } else {
                 (
