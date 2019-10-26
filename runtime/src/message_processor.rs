@@ -58,7 +58,7 @@ fn get_subset_unchecked_mut<'a, T>(
         .collect())
 }
 
-fn verify_instruction(
+pub fn verify_instruction(
     is_debitable: bool,
     program_id: &Pubkey,
     pre: &Account,
@@ -66,38 +66,76 @@ fn verify_instruction(
 ) -> Result<(), InstructionError> {
     // Verify the transaction
 
-    // Make sure that program_id is still the same or this was just assigned by the system program,
-    //  but even the system program can't touch a credit-only account.
-    if pre.owner != post.owner && (!is_debitable || !system_program::check_id(&program_id)) {
+    // Only the owner of the account may change owner and
+    //   only if the account is credit-debit and
+    //   only if the data is zero-initialized or empty
+    if pre.owner != post.owner
+        && (!is_debitable // line coverage used to get branch coverage
+            || *program_id != pre.owner // line coverage used to get branch coverage
+            || !is_zeroed(&post.data))
+    {
         return Err(InstructionError::ModifiedProgramId);
     }
     // An account not assigned to the program cannot have its balance decrease.
-    if *program_id != post.owner && pre.lamports > post.lamports {
+    if *program_id != pre.owner // line coverage used to get branch coverage
+        && pre.lamports > post.lamports
+    {
         return Err(InstructionError::ExternalAccountLamportSpend);
     }
     // The balance of credit-only accounts may only increase.
-    if !is_debitable && pre.lamports > post.lamports {
+    if !is_debitable // line coverage used to get branch coverage
+        && pre.lamports > post.lamports
+    {
         return Err(InstructionError::CreditOnlyLamportSpend);
     }
-    // Only system accounts can change the size of the data.
-    if !system_program::check_id(&program_id) && pre.data.len() != post.data.len() {
+
+    // Only the system program can change the size of the data
+    //  and only if the system program owns the account
+    if pre.data.len() != post.data.len()
+        && (!system_program::check_id(program_id) // line coverage used to get branch coverage
+            || !system_program::check_id(&pre.owner))
+    {
         return Err(InstructionError::AccountDataSizeChanged);
     }
-    // For accounts unassigned to the program, the data may not change.
-    if *program_id != post.owner && !system_program::check_id(&program_id) && pre.data != post.data
+
+    enum DataChanged {
+        Unchecked,
+        Checked(bool),
+    };
+
+    // Verify data, remember answer because comparing
+    //   a megabyte costs us multiple microseconds...
+    let mut data_changed = DataChanged::Unchecked;
+    let mut data_changed = || -> bool {
+        match data_changed {
+            DataChanged::Unchecked => {
+                let changed = pre.data != post.data;
+                data_changed = DataChanged::Checked(changed);
+                changed
+            }
+            DataChanged::Checked(changed) => changed,
+        }
+    };
+
+    // For accounts not assigned to the program, the data may not change.
+    if *program_id != pre.owner // line coverage used to get branch coverage
+        && data_changed()
     {
         return Err(InstructionError::ExternalAccountDataModified);
     }
+
     // Credit-only account data may not change.
-    if !is_debitable && pre.data != post.data {
+    if !is_debitable // line coverage used to get branch coverage
+        && data_changed()
+    {
         return Err(InstructionError::CreditOnlyDataModified);
     }
     // executable is one-way (false->true) and
     //  only system or the account owner may modify.
     if pre.executable != post.executable
-        && (!is_debitable
-            || pre.executable
-            || *program_id != post.owner && !system_program::check_id(&program_id))
+        && (!is_debitable // line coverage used to get branch coverage
+            || pre.executable // line coverage used to get branch coverage
+            || *program_id != pre.owner)
     {
         return Err(InstructionError::ExecutableModified);
     }
@@ -322,6 +360,15 @@ impl MessageProcessor {
     }
 }
 
+pub const ZEROS_LEN: usize = 1024;
+static ZEROS: [u8; ZEROS_LEN] = [0; ZEROS_LEN];
+pub fn is_zeroed(buf: &[u8]) -> bool {
+    let mut chunks = buf.chunks_exact(ZEROS_LEN);
+
+    chunks.all(|chunk| chunk == &ZEROS[..])
+        && chunks.remainder() == &ZEROS[..chunks.remainder().len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,7 +521,6 @@ mod tests {
                 verify_instruction(is_debitable, &program_id, &pre, &post)
             };
 
-        let system_program_id = system_program::id();
         let mallory_program_id = Pubkey::new_rand();
 
         assert_eq!(
@@ -490,13 +536,13 @@ mod tests {
         assert_eq!(
             change_data(&mallory_program_id, true),
             Err(InstructionError::ExternalAccountDataModified),
-            "malicious Mallory should not be able to change the account data"
+            "non-owner mallory should not be able to change the account data"
         );
 
         assert_eq!(
-            change_data(&system_program_id, false),
+            change_data(&alice_program_id, false),
             Err(InstructionError::CreditOnlyDataModified),
-            "system program should not be able to change the data if credit-only"
+            "alice isn't allowed to touch a CO account"
         );
     }
 
@@ -521,7 +567,22 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_instruction_credit_only() {
+    fn test_verify_instruction_deduct_lamports_and_reassign_account() {
+        let alice_program_id = Pubkey::new_rand();
+        let bob_program_id = Pubkey::new_rand();
+        let pre = Account::new_data(42, &[42], &alice_program_id).unwrap();
+        let post = Account::new_data(1, &[0], &bob_program_id).unwrap();
+
+        // positive test of this capability
+        assert_eq!(
+            verify_instruction(true, &alice_program_id, &pre, &post),
+            Ok(()),
+            "alice should be able to deduct lamports and give the account to bob if the data is zeroed",
+        );
+    }
+
+    #[test]
+    fn test_verify_instruction_change_lamports() {
         let alice_program_id = Pubkey::new_rand();
         let pre = Account::new(42, 0, &alice_program_id);
         let post = Account::new(0, 0, &alice_program_id);
