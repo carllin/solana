@@ -72,6 +72,8 @@ pub struct BlocktreeInsertionMetrics {
     pub total_elapsed: u64,
     pub num_inserted: u64,
     pub num_recovered: usize,
+    pub index_meta_time: u64,
+    pub slot_meta_time: u64,
 }
 
 impl BlocktreeInsertionMetrics {
@@ -100,6 +102,8 @@ impl BlocktreeInsertionMetrics {
             ("write_batch_elapsed", self.write_batch_elapsed as i64, i64),
             ("num_inserted", self.num_inserted as i64, i64),
             ("num_recovered", self.num_recovered as i64, i64),
+            ("index_meta_time", self.index_meta_time as i64, i64),
+            ("slot_meta_time", self.slot_meta_time as i64, i64),
         );
     }
 }
@@ -423,6 +427,8 @@ impl Blocktree {
         let num_shreds = shreds.len();
         let mut start = Measure::start("Shred insertion");
         let mut num_inserted = 0;
+        let mut index_meta_time = 0;
+        let mut slot_meta_time = 0;
         shreds.into_iter().for_each(|shred| {
             let insert_success = {
                 if shred.is_data() {
@@ -432,6 +438,8 @@ impl Blocktree {
                         &mut slot_meta_working_set,
                         &mut write_batch,
                         &mut just_inserted_data_shreds,
+                        &mut index_meta_time,
+                        &mut slot_meta_time,
                     )
                 } else if shred.is_code() {
                     self.check_insert_coding_shred(
@@ -473,6 +481,8 @@ impl Blocktree {
                             &mut slot_meta_working_set,
                             &mut write_batch,
                             &mut just_inserted_coding_shreds,
+                            &mut index_meta_time,
+                            &mut slot_meta_time,
                         );
                     }
                 }
@@ -535,6 +545,8 @@ impl Blocktree {
             write_batch_elapsed,
             num_inserted,
             num_recovered,
+            index_meta_time,
+            slot_meta_time,
         })
     }
 
@@ -576,13 +588,23 @@ impl Blocktree {
         slot_meta_working_set: &mut HashMap<u64, SlotMetaWorkingSetEntry>,
         write_batch: &mut WriteBatch,
         just_inserted_data_shreds: &mut HashMap<(u64, u64), Shred>,
+        index_meta_time: &mut u64,
+        slot_meta_time: &mut u64,
     ) -> bool {
         let slot = shred.slot();
         let shred_index = u64::from(shred.index());
+
+        let mut index_start = Measure::start("Get index meta entry");
         let (index_meta, mut new_index_meta) =
             get_index_meta_entry(&self.db, slot, index_working_set);
+        index_start.stop();
+        *index_meta_time += index_start.as_us();
+
+        let mut slot_meta_start = Measure::start("Get index meta entry");
         let (slot_meta_entry, mut new_slot_meta_entry) =
             get_slot_meta_entry(&self.db, slot_meta_working_set, slot, shred.parent());
+        slot_meta_start.stop();
+        *slot_meta_time += slot_meta_start.as_us();
 
         let insert_success = {
             let index_meta = index_meta.unwrap_or_else(|| new_index_meta.as_mut().unwrap());
