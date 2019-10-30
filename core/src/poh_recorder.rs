@@ -363,20 +363,29 @@ impl PohRecorder {
                 return Err(Error::PohRecorderError(PohRecorderError::MaxHeightReached));
             }
 
-            let now = Instant::now();
-            if let Some(poh_entry) = self.poh.lock().unwrap().record(mixin) {
+            {
+                let now = Instant::now();
+                let mut poh_lock = self.poh.lock().unwrap();
                 inc_new_counter_warn!(
                     "poh_recorder-record_lock_contention",
-                    timing::duration_as_ms(&now.elapsed()) as usize
+                    timing::duration_as_us(&now.elapsed()) as usize
                 );
-                let entry = Entry {
-                    num_hashes: poh_entry.num_hashes,
-                    hash: poh_entry.hash,
-                    transactions,
-                };
-                self.sender
-                    .send((working_bank.bank.clone(), (entry, self.tick_height)))?;
-                return Ok(());
+                let now = Instant::now();
+                let res = poh_lock.record(mixin);
+                inc_new_counter_warn!(
+                    "poh_recorder-record_ms",
+                    timing::duration_as_us(&now.elapsed()) as usize
+                );
+                if let Some(poh_entry) = res {
+                    let entry = Entry {
+                        num_hashes: poh_entry.num_hashes,
+                        hash: poh_entry.hash,
+                        transactions,
+                    };
+                    self.sender
+                        .send((working_bank.bank.clone(), (entry, self.tick_height)))?;
+                    return Ok(());
+                }
             }
             // record() might fail if the next PoH hash needs to be a tick.  But that's ok, tick()
             // and re-record()
