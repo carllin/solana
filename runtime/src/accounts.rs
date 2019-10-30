@@ -434,11 +434,21 @@ impl Accounts {
     ) -> Result<()> {
         let (credit_debit_keys, credit_only_keys) = message.get_account_keys_by_lock_type();
 
-        for k in credit_debit_keys.iter() {
-            if locks.contains(k) || self.is_locked_credit_only(k) {
-                error_counters.account_in_use += 1;
-                debug!("CD Account in use: {:?}", k);
-                return Err(TransactionError::AccountInUse);
+        {
+            let r_credit_only_locks = self.credit_only_locks.read().unwrap();
+
+            for k in credit_debit_keys.iter() {
+                if locks.contains(k)
+                    || r_credit_only_locks.as_ref().map_or(false, |locks| {
+                        locks
+                            .get(k)
+                            .map_or(false, |lock| *lock.lock_count.lock().unwrap() > 0)
+                    })
+                {
+                    error_counters.account_in_use += 1;
+                    debug!("CD Account in use: {:?}", k);
+                    return Err(TransactionError::AccountInUse);
+                }
             }
         }
         for k in credit_only_keys.iter() {
