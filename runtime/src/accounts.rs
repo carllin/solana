@@ -273,18 +273,9 @@ impl Accounts {
         ancestors: &HashMap<Slot, usize>,
         pubkey: &Pubkey,
     ) -> Option<(Account, Slot)> {
-        let (mut account, slot) = self
-            .accounts_db
+        self.accounts_db
             .load_slow(ancestors, pubkey)
-            .unwrap_or((Account::default(), self.slot));
-
-        account.lamports += self.credit_only_pending_credits(pubkey);
-
-        if account.lamports > 0 {
-            Some((account, slot))
-        } else {
-            None
-        }
+            .filter(|(acc, _)| acc.lamports != 0)
     }
 
     /// scans underlying accounts_db for this delta (slot) with a map function
