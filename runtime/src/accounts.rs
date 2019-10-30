@@ -21,6 +21,7 @@ use std::io::{BufReader, Error as IOError, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 use crate::transaction_utils::OrderedIterator;
 
@@ -582,10 +583,17 @@ impl Accounts {
     //     the HashMap is None on unlock_accounts, and will perform a no-op.
     pub fn commit_credits(&self, ancestors: &HashMap<Slot, usize>, slot: Slot) {
         // Clear the credit only hashmap so that no further transactions can modify it
+        let now = Instant::now();
         let credit_only_locks = self
             .take_credit_only()
             .expect("Credit only locks didn't exist in commit_credits");
+        let len = credit_only_locks.len();
         self.store_credit_only_credits(credit_only_locks, ancestors, slot);
+        datapoint_info!(
+            "commit-credits",
+            ("duration", now.elapsed().as_millis(), i64),
+            ("count", len, i64)
+        );
     }
 
     /// Used only for tests to store credit-only accounts after every transaction
