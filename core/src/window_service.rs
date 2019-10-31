@@ -104,15 +104,15 @@ where
                         } else if let Ok(shred) =
                             Shred::new_from_serialized_shred(packet.data.to_vec())
                         {
+                            error!(
+                                "Recv_window: shred with slot: {}, index: {}, seed: {:?}",
+                                shred.slot(),
+                                shred.index(),
+                                packet.meta.seed,
+                            );
                             if shred_filter(&shred, last_root) {
                                 packet.meta.slot = shred.slot();
                                 packet.meta.seed = shred.seed();
-                                error!(
-                                    "Recv_window: shred with slot: {}, index: {}, seed: {:?}",
-                                    shred.slot(),
-                                    shred.index(),
-                                    packet.meta.seed,
-                                );
                                 Some(shred)
                             } else {
                                 packet.meta.discard = true;

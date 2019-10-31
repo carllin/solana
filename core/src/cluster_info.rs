@@ -748,7 +748,10 @@ impl ClusterInfo {
             .zip(seeds)
             .map(|(shred, seed)| {
                 let broadcast_index = weighted_best(&peers_and_stakes, *seed);
-
+                println!(
+                    "Broadcast: sending shred with seed: {:?}, to {:?}",
+                    seed, peers[broadcast_index].id
+                );
                 (shred, &peers[broadcast_index].tvu)
             })
             .collect();

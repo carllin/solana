@@ -104,6 +104,7 @@ fn retransmit(
                 compute_retransmit_peers(DATA_PLANE_FANOUT, my_index, indexes);
             let neighbors: Vec<_> = neighbors.into_iter().map(|index| &peers[index]).collect();
             let children: Vec<_> = children.into_iter().map(|index| &peers[index]).collect();
+            assert!(children.is_empty());
             compute_turbine_peers.stop();
             compute_turbine_peers_total += compute_turbine_peers.as_ms();
 
