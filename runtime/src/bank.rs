@@ -1935,5 +1935,4 @@ mod tests {
 
         assert!(bank.is_delta.load(Ordering::Relaxed));
     }
-
 }

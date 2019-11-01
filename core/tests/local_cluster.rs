@@ -287,6 +287,8 @@ fn run_repairman_catchup(num_repairmen: u64) {
         .find(|x| !repairman_pubkeys.contains(x))
         .unwrap();
 
+    println!("Repairee id: {}", repairee_id);
+
     // Wait for repairman protocol to catch this validator up
     cluster_tests::sleep_n_epochs(
         num_warmup_epochs + 1.0,

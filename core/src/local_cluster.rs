@@ -582,5 +582,4 @@ mod test {
         assert_eq!(cluster.fullnodes.len(), NUM_NODES);
         assert_eq!(cluster.replicators.len(), num_replicators);
     }
-
 }

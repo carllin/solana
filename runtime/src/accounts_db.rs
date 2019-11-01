@@ -860,7 +860,7 @@ mod tests {
         let ancestors = vec![(0, 0)].into_iter().collect();
         assert!(accounts.load_slow(&ancestors, &pubkeys[0]).is_some());;
         accounts.purge_fork(0);
-        assert!(accounts.load_slow(&ancestors, &pubkeys[0]).is_none());;
+        assert!(accounts.load_slow(&ancestors, &pubkeys[0]).is_none());
     }
 
     #[test]
@@ -912,5 +912,4 @@ mod tests {
         let ancestors = vec![(1, 1)].into_iter().collect();
         assert_eq!(accounts.load_slow(&ancestors, &pubkey), Some((account, 1)));
     }
-
 }

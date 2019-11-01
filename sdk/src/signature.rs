@@ -202,5 +202,4 @@ mod tests {
             Err(ParseSignatureError::Invalid)
         );
     }
-
 }

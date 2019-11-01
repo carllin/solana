@@ -332,5 +332,4 @@ mod test {
     fn gen_records() -> impl Iterator<Item = (Key, Value)> {
         gen::pairs(DATA_SIZE).map(|(key, data)| (key, Value::new(0, Some(data))))
     }
-
 }

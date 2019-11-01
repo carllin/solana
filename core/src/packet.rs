@@ -872,5 +872,4 @@ mod tests {
         blob.set_genesis_blockhash(&hash);
         assert_eq!(blob.genesis_blockhash(), hash);
     }
-
 }

@@ -218,5 +218,4 @@ mod tests {
         bank_forks.insert(child_bank);
         assert_eq!(bank_forks.active_banks(), vec![1]);
     }
-
 }

@@ -371,6 +371,10 @@ impl RepairService {
                 Self::retain_slots_greater_than_root(slots_in_gossip, latest_known_root);
             }
 
+            println!(
+                "{} updating EpochSlots, root: {}, slots: {:?}",
+                id, latest_known_root, slots_in_gossip
+            );
             cluster_info.write().unwrap().push_epoch_slots(
                 id,
                 latest_known_root,

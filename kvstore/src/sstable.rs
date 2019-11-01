@@ -560,5 +560,4 @@ pub mod test {
         gen::pairs_vary(0..255)
             .map(|(key, bytes)| (key, Value::new(bytes.len() as i64, Some(bytes))))
     }
-
 }

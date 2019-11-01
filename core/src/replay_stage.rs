@@ -143,6 +143,7 @@ impl ReplayStage {
                         subscriptions.notify_subscribers(bank.slot(), &bank_forks);
 
                         Self::handle_votable_bank(
+                            &my_pubkey,
                             &bank,
                             &bank_forks,
                             &mut locktower,
@@ -288,6 +289,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn handle_votable_bank<T>(
+        id: &Pubkey,
         bank: &Arc<Bank>,
         bank_forks: &Arc<RwLock<BankForks>>,
         locktower: &mut Locktower,
@@ -324,6 +326,7 @@ impl ReplayStage {
             // is consumed by repair_service to update gossip, so we don't want to get blobs for
             // repair on gossip before we update leader schedule, otherwise they may get dropped.
             leader_schedule_cache.set_root(new_root);
+            println!("{} new root: {}", id, new_root);
             bank_forks.write().unwrap().set_root(new_root);
             Self::handle_new_root(&bank_forks, progress);
             root_slot_sender.send(rooted_slots)?;

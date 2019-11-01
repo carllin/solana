@@ -166,7 +166,7 @@ impl ClusterInfoRepairListener {
         let my_root = Self::read_my_gossiped_root(&my_pubkey, cluster_info, my_gossiped_root);
         {
             let r_cluster_info = cluster_info.read().unwrap();
-
+            println!("{} checking if should repair: {}", my_pubkey, peer_pubkey);
             // Update our local map with the updated peers' information
             if let Some((peer_epoch_slots, updated_ts)) =
                 r_cluster_info.get_epoch_state_for_node(&peer_pubkey, last_cached_repair_ts)
@@ -178,10 +178,18 @@ impl ClusterInfoRepairListener {
                     // Following logic needs to be fast because it holds the lock
                     // preventing updates on gossip
                     if Self::should_repair_peer(my_root, peer_epoch_slots.root, NUM_BUFFER_SLOTS) {
+                        println!(
+                            "{} should repair: {}, root: {}, epoch slots: {:?}",
+                            my_pubkey, peer_pubkey, peer_epoch_slots.root, peer_epoch_slots.slots
+                        );
                         // Clone out EpochSlots structure to avoid holding lock on gossip
                         result = Some(peer_epoch_slots.clone());
                         updated_ts
                     } else {
+                        println!(
+                            "{} should not repair: {}, root: {}, epoch slots: {:?}",
+                            my_pubkey, peer_pubkey, peer_epoch_slots.root, peer_epoch_slots.slots
+                        );
                         // No repairs were sent, don't need to update the timestamp
                         peer_entry.0
                     }
@@ -208,13 +216,13 @@ impl ClusterInfoRepairListener {
         for (repairee_pubkey, repairee_epoch_slots) in repairees {
             let repairee_root = repairee_epoch_slots.root;
 
-            let repairee_tvu = {
+            let repairee_info = {
                 let r_cluster_info = cluster_info.read().unwrap();
                 let contact_info = r_cluster_info.get_contact_info_for_node(repairee_pubkey);
-                contact_info.map(|c| c.tvu)
+                contact_info.map(|c| (c.tvu, c.id))
             };
 
-            if let Some(repairee_tvu) = repairee_tvu {
+            if let Some((repairee_tvu, repairee_id)) = repairee_info {
                 // For every repairee, get the set of repairmen who are responsible for
                 let mut eligible_repairmen = Self::find_eligible_repairmen(
                     my_pubkey,
@@ -240,6 +248,7 @@ impl ClusterInfoRepairListener {
                     &eligible_repairmen,
                     socket,
                     &repairee_tvu,
+                    &repairee_id,
                     NUM_SLOTS_PER_UPDATE,
                     epoch_schedule,
                 );
@@ -257,6 +266,7 @@ impl ClusterInfoRepairListener {
         eligible_repairmen: &[&Pubkey],
         socket: &UdpSocket,
         repairee_tvu: &SocketAddr,
+        repairee_id: &Pubkey,
         num_slots_to_repair: usize,
         epoch_schedule: &EpochSchedule,
     ) -> Result<()> {
@@ -284,6 +294,7 @@ impl ClusterInfoRepairListener {
                 break;
             }
             if !repairee_epoch_slots.slots.contains(&slot) {
+                println!("{} sending slot {} to {}", my_pubkey, slot, repairee_id);
                 // Calculate the blob indexes this node is responsible for repairing. Note that
                 // because we are only repairing slots that are before our root, the slot.received
                 // should be equal to the actual total number of blobs in the slot. Optimistically

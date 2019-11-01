@@ -445,5 +445,4 @@ mod tests {
             Err(InstructionError::InvalidArgument)
         );
     }
-
 }

@@ -643,5 +643,4 @@ mod test {
             influxdb::Value::Boolean(true)
         ));
     }
-
 }
