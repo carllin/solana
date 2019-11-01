@@ -353,7 +353,7 @@ impl RepairService {
         completed_slots_receiver: &CompletedSlotsReceiver,
     ) {
         // If the latest known root is different, update gossip.
-        let mut should_update = latest_known_root != *prev_root;
+        let mut should_update = false;
         while let Ok(completed_slots) = completed_slots_receiver.try_recv() {
             for slot in completed_slots {
                 // If the newly completed slot > root, and the set did not contain this value
