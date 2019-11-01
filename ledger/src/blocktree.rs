@@ -87,6 +87,8 @@ pub struct BlocktreeInsertionMetrics {
     pub num_inserted: u64,
     pub num_recovered: usize,
     pub index_meta_time: u64,
+    pub slot: u64,
+    pub max: u64,
 }
 
 impl SlotMetaWorkingSetEntry {
@@ -125,6 +127,8 @@ impl BlocktreeInsertionMetrics {
             ("write_batch_elapsed", self.write_batch_elapsed as i64, i64),
             ("num_inserted", self.num_inserted as i64, i64),
             ("num_recovered", self.num_recovered as i64, i64),
+            ("slot", self.slot as i64, i64),
+            ("max", self.max as i64, i64),
         );
     }
 }
@@ -452,7 +456,9 @@ impl Blocktree {
         let mut start = Measure::start("Shred insertion");
         let mut num_inserted = 0;
         let mut index_meta_time = 0;
+        let mut most_shred_slots = HashMap::new();
         shreds.into_iter().for_each(|shred| {
+            *most_shred_slots.entry(shred.slot()).or_insert(0) += 1;
             let insert_success = {
                 if shred.is_data() {
                     self.check_insert_data_shred(
@@ -553,7 +559,19 @@ impl Blocktree {
 
         total_start.stop();
 
+        let (slot, max) =
+            most_shred_slots
+                .into_iter()
+                .fold((0, 0), |(slot, max), (slot2, max2)| {
+                    if max2 > max {
+                        (slot2, max2)
+                    } else {
+                        (slot, max)
+                    }
+                });
         Ok(BlocktreeInsertionMetrics {
+            slot,
+            max,
             num_shreds,
             total_elapsed: total_start.as_us(),
             insert_lock_elapsed,
