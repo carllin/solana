@@ -111,6 +111,12 @@ fn retransmit(
                 leader_schedule_cache.slot_leader_at(packet.meta.slot, Some(r_bank.as_ref()));
             let mut retransmit_time = Measure::start("retransmit_to");
             if !packet.meta.forward {
+                let neighbor_ids: Vec<_> = neighbors.iter().map(|n| n.id).collect();
+                let children_ids: Vec<_> = children.iter().map(|n| n.id).collect();
+                error!(
+                    "Retransmit: packet with seed: {:?}, transmitting to neighbors: {:?}, children: {:?}",
+                    packet.meta.seed, neighbor_ids, children_ids
+                );
                 ClusterInfo::retransmit_to(&neighbors, packet, leader, sock, true)?;
                 ClusterInfo::retransmit_to(&children, packet, leader, sock, false)?;
             } else {

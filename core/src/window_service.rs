@@ -107,6 +107,12 @@ where
                             if shred_filter(&shred, last_root) {
                                 packet.meta.slot = shred.slot();
                                 packet.meta.seed = shred.seed();
+                                error!(
+                                    "Recv_window: shred with slot: {}, index: {}, seed: {:?}",
+                                    shred.slot(),
+                                    shred.index(),
+                                    packet.meta.seed,
+                                );
                                 Some(shred)
                             } else {
                                 packet.meta.discard = true;

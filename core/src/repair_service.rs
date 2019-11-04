@@ -352,6 +352,10 @@ impl RepairService {
         let mut should_update = latest_known_root != *prev_root;
         while let Ok(completed_slots) = completed_slots_receiver.try_recv() {
             for slot in completed_slots {
+                error!(
+                    "updating epoch slots, completed slot: {}, last root: {}",
+                    slot, latest_known_root
+                );
                 // If the newly completed slot > root, and the set did not contain this value
                 // before, we should update gossip.
                 if slot > latest_known_root {

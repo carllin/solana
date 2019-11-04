@@ -74,6 +74,15 @@ pub struct SlotMetaWorkingSetEntry {
     // struct was created.
     did_insert_occur: bool,
 }
+impl SlotMetaWorkingSetEntry {
+    fn new(new_slot_meta: Rc<RefCell<SlotMeta>>, old_slot_meta: Option<SlotMeta>) -> Self {
+        Self {
+            new_slot_meta,
+            old_slot_meta,
+            did_insert_occur: false,
+        }
+    }
+}
 
 pub struct BlocktreeInsertionMetrics {
     pub num_shreds: usize,
@@ -89,16 +98,7 @@ pub struct BlocktreeInsertionMetrics {
     pub index_meta_time: u64,
     pub slot: u64,
     pub max: u64,
-}
-
-impl SlotMetaWorkingSetEntry {
-    fn new(new_slot_meta: Rc<RefCell<SlotMeta>>, old_slot_meta: Option<SlotMeta>) -> Self {
-        Self {
-            new_slot_meta,
-            old_slot_meta,
-            did_insert_occur: false,
-        }
-    }
+    pub num_inserted_coding: u64,
 }
 
 impl BlocktreeInsertionMetrics {
@@ -129,6 +129,7 @@ impl BlocktreeInsertionMetrics {
             ("num_recovered", self.num_recovered as i64, i64),
             ("slot", self.slot as i64, i64),
             ("max", self.max as i64, i64),
+            ("num_inserted_coding", self.num_inserted_coding as i64, i64),
         );
     }
 }
@@ -455,29 +456,38 @@ impl Blocktree {
         let num_shreds = shreds.len();
         let mut start = Measure::start("Shred insertion");
         let mut num_inserted = 0;
+        let mut num_inserted_coding = 0;
         let mut index_meta_time = 0;
         let mut most_shred_slots = HashMap::new();
         shreds.into_iter().for_each(|shred| {
             *most_shred_slots.entry(shred.slot()).or_insert(0) += 1;
             let insert_success = {
                 if shred.is_data() {
-                    self.check_insert_data_shred(
+                    let res = self.check_insert_data_shred(
                         shred,
                         &mut index_working_set,
                         &mut slot_meta_working_set,
                         &mut write_batch,
                         &mut just_inserted_data_shreds,
                         &mut index_meta_time,
-                    )
+                    );
+                    if !res {
+                        num_inserted += 1;
+                    }
+                    res
                 } else if shred.is_code() {
-                    self.check_insert_coding_shred(
+                    let res = self.check_insert_coding_shred(
                         shred,
                         &mut erasure_metas,
                         &mut index_working_set,
                         &mut write_batch,
                         &mut just_inserted_coding_shreds,
                         &mut index_meta_time,
-                    )
+                    );
+                    if !res {
+                        num_inserted_coding += 1;
+                    }
+                    res
                 } else {
                     panic!("There should be no other case");
                 }
@@ -581,6 +591,7 @@ impl Blocktree {
             commit_working_sets_elapsed,
             write_batch_elapsed,
             num_inserted,
+            num_inserted_coding,
             num_recovered,
             index_meta_time,
         })
@@ -647,16 +658,11 @@ impl Blocktree {
             index_meta.data(),
             &self.last_root,
         ) {
-            if let Ok(()) =
-                self.insert_data_shred(slot_meta, index_meta.data_mut(), &shred, write_batch)
-            {
-                just_inserted_data_shreds.insert((slot, shred_index), shred);
-                index_meta_working_set_entry.did_insert_occur = true;
-                slot_meta_entry.did_insert_occur = true;
-                true
-            } else {
-                false
-            }
+            self.insert_data_shred(slot_meta, index_meta.data_mut(), &shred, write_batch);
+            just_inserted_data_shreds.insert((slot, shred_index), shred);
+            index_meta_working_set_entry.did_insert_occur = true;
+            slot_meta_entry.did_insert_occur = true;
+            true
         } else {
             false
         }
@@ -746,8 +752,22 @@ impl Blocktree {
             false
         };
 
+        error!(
+            "Inserting data shred slot: {}, index: {}",
+            slot, shred_index
+        );
+
         // Check that the data shred doesn't already exist in blocktree
-        if shred_index < slot_meta.consumed || data_index.is_present(shred_index) {
+        if shred_index < slot_meta.consumed {
+            error!(
+                "Shred slot: {}, index: {} less than consumed: {}",
+                slot, shred_index, slot_meta.consumed
+            );
+            return false;
+        }
+
+        if data_index.is_present(shred_index) {
+            error!("Shred slot: {}, index: {} present", slot, shred_index);
             return false;
         }
 
@@ -795,7 +815,7 @@ impl Blocktree {
         data_index: &mut DataIndex,
         shred: &Shred,
         write_batch: &mut WriteBatch,
-    ) -> Result<()> {
+    ) {
         let slot = shred.slot();
         let index = u64::from(shred.index());
 
@@ -838,7 +858,9 @@ impl Blocktree {
 
         // Commit step: commit all changes to the mutable structures at once, or none at all.
         // We don't want only a subset of these changes going through.
-        write_batch.put_bytes::<cf::ShredData>((slot, index), &shred.payload)?;
+        write_batch
+            .put_bytes::<cf::ShredData>((slot, index), &shred.payload)
+            .expect("Put bytes has to work");
         update_slot_meta(
             last_in_slot,
             last_in_data,
@@ -848,7 +870,6 @@ impl Blocktree {
         );
         data_index.set_present(index, true);
         trace!("inserted shred into slot {:?} and index {:?}", slot, index);
-        Ok(())
     }
 
     pub fn get_data_shred(&self, slot: Slot, index: u64) -> Result<Option<Vec<u8>>> {
