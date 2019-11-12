@@ -648,6 +648,7 @@ impl ReplayStage {
     ) -> Option<(Arc<Bank>, u64)> {
         let tower_start = Instant::now();
         let frozen_banks = bank_forks.read().unwrap().frozen_banks();
+        let children = bank_forks.read().unwrap().descendants();
 
         trace!("frozen_banks {}", frozen_banks.len());
         let mut votable: Vec<(u128, Arc<Bank>, HashMap<u64, StakeLockout>, u64)> = frozen_banks
@@ -656,6 +657,15 @@ impl ReplayStage {
                 let has_voted = tower.has_voted(bank.slot());
                 trace!("bank has_voted: {} {}", bank.slot(), has_voted);
                 !has_voted
+            })
+            .filter(|bank| {
+                let leaf = children.get(&bank.slot()).map(|set| set.is_empty());
+                if leaf.is_none() {
+                    warn!("bank is not in BankForks!!! {}", bank.slot());
+                    inc_new_counter_info!("replay_stage-select_fork-bank_not_in_bank_forks", 1);
+                }
+                trace!("bank is a leaf: {} {:?}", bank.slot(), leaf);
+                leaf.unwrap_or(false)
             })
             .map(|bank| {
                 let (stake_lockouts, total_staked) = tower.collect_vote_lockouts(
