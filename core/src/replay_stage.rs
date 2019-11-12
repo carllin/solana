@@ -216,6 +216,7 @@ impl ReplayStage {
                         Self::select_fork(&ancestors, &bank_forks, &tower, &mut progress);
 
                     if let Some((bank, total_staked)) = best_bank {
+                        info!("voting on bank: {}", bank.slot());
                         subscriptions.notify_subscribers(bank.slot(), &bank_forks);
                         if let Some(votable_leader) =
                             leader_schedule_cache.slot_leader_at(bank.slot(), Some(&bank))
@@ -657,7 +658,20 @@ impl ReplayStage {
                 trace!("bank has_voted: {} {}", bank.slot(), has_voted);
                 !has_voted
             })
-            .filter(|bank| {
+            .map(|bank| {
+                let (stake_lockouts, total_staked) = tower.collect_vote_lockouts(
+                    bank.slot(),
+                    bank.vote_accounts().into_iter(),
+                    &ancestors,
+                );
+                Self::confirm_forks(tower, &stake_lockouts, total_staked, progress, bank_forks);
+                (
+                    bank.clone(),
+                    stake_lockouts,
+                    total_staked,
+                )
+            })
+            .filter(|(bank, _, _)| {
                 let last_slot = *tower.last_vote().slots.last().unwrap_or(&0);
                 let first_slot = *tower.last_vote().slots.first().unwrap_or(&0);
                 assert!(first_slot <= last_slot);
@@ -667,13 +681,15 @@ impl ReplayStage {
                 }
                 new_bank
             })
-            .map(|bank| {
-                let (stake_lockouts, total_staked) = tower.collect_vote_lockouts(
-                    bank.slot(),
-                    bank.vote_accounts().into_iter(),
-                    &ancestors,
-                );
-                Self::confirm_forks(tower, &stake_lockouts, total_staked, progress, bank_forks);
+            .filter(|(bank, stake_lockouts, total_staked)| {
+                let vote_threshold =
+                    tower.check_vote_stake_threshold(bank.slot(), &stake_lockouts, *total_staked);
+                if !vote_threshold {
+                    trace!("vote threshold check failed: {}", bank.slot());
+                }
+                vote_threshold 
+            })
+            .map(|(bank, stake_lockouts, total_staked)| {
                 (
                     tower.calculate_weight(&stake_lockouts),
                     bank.clone(),
@@ -682,20 +698,21 @@ impl ReplayStage {
                 )
             })
             .collect();
-        votable.sort_by_key(|b| b.0);
+        //highest weight, lowest slot first
+        votable.sort_by_key(|b| (b.0, 0i64 - b.1.slot() as i64));
         trace!("votable_banks {}", votable.len());
         let rv = Self::check_fork(ancestors, tower, votable.last());
         let ms = timing::duration_as_ms(&tower_start.elapsed());
-        if !votable.is_empty() {
-            let weights: Vec<u128> = votable.iter().map(|x| x.0).collect();
-            info!(
-                "@{:?} tower duration: {:?} len: {} weights: {:?}",
-                timing::timestamp(),
-                ms,
-                votable.len(),
-                weights
-            );
-        }
+        let weights: Vec<(u128, u64)> = votable.iter().map(|x| (x.0, x.1.slot())).collect();
+        info!(
+            "@{:?} tower duration: {:?} len: {}/{} weights: {:?} voting: {}",
+            timing::timestamp(),
+            ms,
+            votable.len(),
+            frozen_banks.len(),
+            weights,
+            rv.is_some()
+        );
         inc_new_counter_info!("replay_stage-tower_duration", ms as usize);
         rv
     }
@@ -710,11 +727,13 @@ impl ReplayStage {
         let vote_threshold =
             tower.check_vote_stake_threshold(bank.slot(), &stake_lockouts, *total_staked);
         if !vote_threshold {
+            info!("vote threshold check failed: {}", bank.slot());
             inc_new_counter_info!("replay_stage-fork_selection-heavy_bank_threshold", 1);
             return None;
         }
         let is_locked_out = tower.is_locked_out(bank.slot(), &ancestors);
         if is_locked_out {
+            info!("vote lockout check failed: {}", bank.slot());
             inc_new_counter_info!("replay_stage-fork_selection-heavy_bank_lockout", 1);
             return None;
         }
