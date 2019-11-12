@@ -212,16 +212,11 @@ impl ReplayStage {
                     );
 
                     let ancestors = Arc::new(bank_forks.read().unwrap().ancestors());
-                    let votable = Self::generate_votable_banks(
-                        &ancestors,
-                        &bank_forks,
-                        &tower,
-                        &mut progress,
-                    );
+                    let best_bank =
+                        Self::select_fork(&ancestors, &bank_forks, &tower, &mut progress);
 
-                    if let Some((_, bank, _, total_staked)) = votable.into_iter().last() {
+                    if let Some((bank, total_staked)) = best_bank {
                         subscriptions.notify_subscribers(bank.slot(), &bank_forks);
-
                         if let Some(votable_leader) =
                             leader_schedule_cache.slot_leader_at(bank.slot(), Some(&bank))
                         {
@@ -645,58 +640,42 @@ impl ReplayStage {
     }
 
     #[allow(clippy::type_complexity)]
-    fn generate_votable_banks(
+    fn select_fork(
         ancestors: &HashMap<u64, HashSet<u64>>,
         bank_forks: &Arc<RwLock<BankForks>>,
         tower: &Tower,
         progress: &mut HashMap<u64, ForkProgress>,
-    ) -> Vec<(u128, Arc<Bank>, HashMap<u64, StakeLockout>, u64)> {
+    ) -> Option<(Arc<Bank>, u64)> {
         let tower_start = Instant::now();
         let frozen_banks = bank_forks.read().unwrap().frozen_banks();
+
         trace!("frozen_banks {}", frozen_banks.len());
         let mut votable: Vec<(u128, Arc<Bank>, HashMap<u64, StakeLockout>, u64)> = frozen_banks
             .values()
-            .filter(|b| {
-                let has_voted = tower.has_voted(b.slot());
-                trace!("bank has_voted: {} {}", b.slot(), has_voted);
+            .filter(|bank| {
+                let has_voted = tower.has_voted(bank.slot());
+                trace!("bank has_voted: {} {}", bank.slot(), has_voted);
                 !has_voted
             })
-            .filter(|b| {
-                let is_locked_out = tower.is_locked_out(b.slot(), &ancestors);
-                trace!("bank is is_locked_out: {} {}", b.slot(), is_locked_out);
-                !is_locked_out
-            })
             .map(|bank| {
-                (
-                    bank,
-                    tower.collect_vote_lockouts(
-                        bank.slot(),
-                        bank.vote_accounts().into_iter(),
-                        &ancestors,
-                    ),
-                )
-            })
-            .filter(|(b, (stake_lockouts, total_staked))| {
-                let vote_threshold =
-                    tower.check_vote_stake_threshold(b.slot(), &stake_lockouts, *total_staked);
-                Self::confirm_forks(tower, &stake_lockouts, *total_staked, progress, bank_forks);
-                debug!("bank vote_threshold: {} {}", b.slot(), vote_threshold);
-                vote_threshold
-            })
-            .map(|(b, (stake_lockouts, total_staked))| {
+                let (stake_lockouts, total_staked) = tower.collect_vote_lockouts(
+                    bank.slot(),
+                    bank.vote_accounts().into_iter(),
+                    &ancestors,
+                );
+                Self::confirm_forks(tower, &stake_lockouts, total_staked, progress, bank_forks);
                 (
                     tower.calculate_weight(&stake_lockouts),
-                    b.clone(),
+                    bank.clone(),
                     stake_lockouts,
                     total_staked,
                 )
             })
             .collect();
-
         votable.sort_by_key(|b| b.0);
-        let ms = timing::duration_as_ms(&tower_start.elapsed());
-
         trace!("votable_banks {}", votable.len());
+        let rv = Self::check_fork(ancestors, tower, votable.last());
+        let ms = timing::duration_as_ms(&tower_start.elapsed());
         if !votable.is_empty() {
             let weights: Vec<u128> = votable.iter().map(|x| x.0).collect();
             info!(
@@ -708,8 +687,28 @@ impl ReplayStage {
             );
         }
         inc_new_counter_info!("replay_stage-tower_duration", ms as usize);
+        rv
+    }
 
-        votable
+    #[allow(clippy::type_complexity)]
+    fn check_fork(
+        ancestors: &HashMap<u64, HashSet<u64>>,
+        tower: &Tower,
+        best_bank: Option<&(u128, Arc<Bank>, HashMap<u64, StakeLockout>, u64)>,
+    ) -> Option<(Arc<Bank>, u64)> {
+        let (_, bank, stake_lockouts, total_staked) = best_bank?;
+        let vote_threshold =
+            tower.check_vote_stake_threshold(bank.slot(), &stake_lockouts, *total_staked);
+        if !vote_threshold {
+            inc_new_counter_info!("replay_stage-fork_selection-heavy_bank_threshold", 1);
+            return None;
+        }
+        let is_locked_out = tower.is_locked_out(bank.slot(), &ancestors);
+        if is_locked_out {
+            inc_new_counter_info!("replay_stage-fork_selection-heavy_bank_lockout", 1);
+            return None;
+        }
+        Some((bank.clone(), *total_staked))
     }
 
     fn confirm_forks(
