@@ -212,11 +212,16 @@ impl ReplayStage {
                     );
 
                     let ancestors = Arc::new(bank_forks.read().unwrap().ancestors());
-                    let best_bank =
-                        Self::select_fork(&ancestors, &bank_forks, &tower, &mut progress);
+                    let best_bank = Self::select_fork(
+                        &my_pubkey,
+                        &ancestors,
+                        &bank_forks,
+                        &tower,
+                        &mut progress,
+                    );
 
                     if let Some((bank, total_staked)) = best_bank {
-                        info!("voting on bank: {}", bank.slot());
+                        error!("voting on bank: {}", bank.slot());
                         subscriptions.notify_subscribers(bank.slot(), &bank_forks);
                         if let Some(votable_leader) =
                             leader_schedule_cache.slot_leader_at(bank.slot(), Some(&bank))
@@ -230,6 +235,7 @@ impl ReplayStage {
                         }
 
                         Self::handle_votable_bank(
+                            &my_pubkey,
                             &bank,
                             &bank_forks,
                             &mut tower,
@@ -384,7 +390,10 @@ impl ReplayStage {
                 ("leader", next_leader.to_string(), String),
             );
 
-            info!("new fork:{} parent:{} (leader)", poh_slot, parent_slot);
+            error!(
+                "{} new fork:{} parent:{} (leader)",
+                my_pubkey, poh_slot, parent_slot
+            );
             let tpu_bank = bank_forks
                 .write()
                 .unwrap()
@@ -473,6 +482,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn handle_votable_bank<T>(
+        pubkey: &Pubkey,
         bank: &Arc<Bank>,
         bank_forks: &Arc<RwLock<BankForks>>,
         tower: &mut Tower,
@@ -519,7 +529,7 @@ impl ReplayStage {
                 .unwrap()
                 .set_root(new_root, snapshot_package_sender);
             Self::handle_new_root(&bank_forks, progress);
-            trace!("new root {}", new_root);
+            error!("{} new root {}", pubkey, new_root);
             if let Err(e) = root_bank_sender.send(rooted_banks) {
                 trace!("root_bank_sender failed: {:?}", e);
                 return Err(e.into());
@@ -578,7 +588,7 @@ impl ReplayStage {
             "I am not in the leader schedule yet".to_owned()
         };
 
-        info!(
+        error!(
             "{} voted and reset PoH to tick {} (within slot {}). {}",
             my_pubkey,
             bank.tick_height(),
@@ -642,6 +652,7 @@ impl ReplayStage {
 
     #[allow(clippy::type_complexity)]
     fn select_fork(
+        pubkey: &Pubkey,
         ancestors: &HashMap<u64, HashSet<u64>>,
         bank_forks: &Arc<RwLock<BankForks>>,
         tower: &Tower,
@@ -655,7 +666,7 @@ impl ReplayStage {
             .values()
             .filter(|bank| {
                 let has_voted = tower.has_voted(bank.slot());
-                trace!("bank has_voted: {} {}", bank.slot(), has_voted);
+                error!("{} bank has_voted: {} {}", pubkey, bank.slot(), has_voted);
                 !has_voted
             })
             .map(|bank| {
@@ -665,11 +676,7 @@ impl ReplayStage {
                     &ancestors,
                 );
                 Self::confirm_forks(tower, &stake_lockouts, total_staked, progress, bank_forks);
-                (
-                    bank.clone(),
-                    stake_lockouts,
-                    total_staked,
-                )
+                (bank.clone(), stake_lockouts, total_staked)
             })
             .filter(|(bank, _, _)| {
                 let last_slot = *tower.last_vote().slots.last().unwrap_or(&0);
@@ -677,6 +684,12 @@ impl ReplayStage {
                 assert!(first_slot <= last_slot);
                 let new_bank = bank.slot() > last_slot;
                 if !new_bank {
+                    error!(
+                        "{} bank filter less, new: {}, last: {}",
+                        pubkey,
+                        bank.slot(),
+                        last_slot
+                    );
                     inc_new_counter_debug!("replay_stage-select_fork-bank_is_to_old", 1);
                 }
                 new_bank
@@ -685,9 +698,9 @@ impl ReplayStage {
                 let vote_threshold =
                     tower.check_vote_stake_threshold(bank.slot(), &stake_lockouts, *total_staked);
                 if !vote_threshold {
-                    trace!("vote threshold check failed: {}", bank.slot());
+                    error!("{} vote threshold check failed: {}", pubkey, bank.slot());
                 }
-                vote_threshold 
+                vote_threshold
             })
             .map(|(bank, stake_lockouts, total_staked)| {
                 (
@@ -701,7 +714,7 @@ impl ReplayStage {
         //highest weight, lowest slot first
         votable.sort_by_key(|b| (b.0, 0i64 - b.1.slot() as i64));
         trace!("votable_banks {}", votable.len());
-        let rv = Self::check_fork(ancestors, tower, votable.last());
+        let rv = Self::check_fork(pubkey, ancestors, tower, votable.last());
         let ms = timing::duration_as_ms(&tower_start.elapsed());
         let weights: Vec<(u128, u64)> = votable.iter().map(|x| (x.0, x.1.slot())).collect();
         info!(
@@ -719,6 +732,7 @@ impl ReplayStage {
 
     #[allow(clippy::type_complexity)]
     fn check_fork(
+        pubkey: &Pubkey,
         ancestors: &HashMap<u64, HashSet<u64>>,
         tower: &Tower,
         best_bank: Option<&(u128, Arc<Bank>, HashMap<u64, StakeLockout>, u64)>,
@@ -727,13 +741,13 @@ impl ReplayStage {
         let vote_threshold =
             tower.check_vote_stake_threshold(bank.slot(), &stake_lockouts, *total_staked);
         if !vote_threshold {
-            info!("vote threshold check failed: {}", bank.slot());
+            error!("{} vote threshold check failed: {}", pubkey, bank.slot());
             inc_new_counter_info!("replay_stage-fork_selection-heavy_bank_threshold", 1);
             return None;
         }
         let is_locked_out = tower.is_locked_out(bank.slot(), &ancestors);
         if is_locked_out {
-            info!("vote lockout check failed: {}", bank.slot());
+            error!("{} vote lockout check failed: {}", pubkey, bank.slot());
             inc_new_counter_info!("replay_stage-fork_selection-heavy_bank_lockout", 1);
             return None;
         }
@@ -910,7 +924,7 @@ impl ReplayStage {
         slot_full_senders: &[Sender<(u64, Pubkey)>],
     ) {
         bank.freeze();
-        info!("bank frozen {}", bank.slot());
+        error!("{} bank frozen {}", my_pubkey, bank.slot());
         slot_full_senders.iter().for_each(|sender| {
             if let Err(e) = sender.send((bank.slot(), *bank.collector_id())) {
                 trace!("{} slot_full alert failed: {:?}", my_pubkey, e);
@@ -948,7 +962,7 @@ impl ReplayStage {
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_slot, Some(&parent_bank))
                     .unwrap();
-                info!("new fork:{} parent:{}", child_slot, parent_slot);
+                error!("new fork:{} parent:{}", child_slot, parent_slot);
                 forks.insert(Bank::new_from_parent(&parent_bank, &leader, child_slot));
             }
         }

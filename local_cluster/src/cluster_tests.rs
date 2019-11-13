@@ -204,7 +204,7 @@ pub fn kill_entry_and_spend_and_verify_rest(
         slot_millis * first_two_epoch_slots as u64,
     ));
     info!("done sleeping for first 2 warmup epochs");
-    info!("killing entry point: {}", entry_point_info.id);
+    println!("killing entry point: {}", entry_point_info.id);
     assert!(client.validator_exit().unwrap());
     info!("sleeping for some time");
     sleep(Duration::from_millis(

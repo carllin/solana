@@ -93,7 +93,8 @@ impl Tower {
             let mut vote_state = vote_state.unwrap();
 
             if key == self.node_pubkey || vote_state.node_pubkey == self.node_pubkey {
-                debug!("vote state {:?}", vote_state);
+                let votes: Vec<_> = vote_state.votes.iter().map(|v| v.slot).collect();
+                error!("vote state for slot: {}, {:#?}", bank_slot, votes);
                 debug!(
                     "observed slot {}",
                     vote_state.nth_recent_vote(0).map(|v| v.slot).unwrap_or(0) as i64
@@ -317,7 +318,10 @@ impl Tower {
         if let Some(vote) = vote {
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {
                 let lockout = fork_stake.stake as f64 / total_staked as f64;
-                info!("fork_stake {} {} {} {}", slot, lockout, fork_stake.stake, total_staked);
+                error!(
+                    "fork_stake slot: {}, threshold slot: {} {} {} {}",
+                    slot, vote.slot, lockout, fork_stake.stake, total_staked
+                );
                 lockout > self.threshold_size
             } else {
                 false
