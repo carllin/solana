@@ -4,6 +4,7 @@ extern crate test;
 #[macro_use]
 extern crate solana_ledger;
 
+use byteorder::{ByteOrder, LittleEndian};
 use crossbeam_channel::unbounded;
 use log::*;
 use rand::{thread_rng, Rng};
@@ -21,7 +22,7 @@ use solana_ledger::entry::{next_hash, Entry};
 use solana_perf::test_tx::test_tx;
 use solana_runtime::bank::Bank;
 use solana_sdk::genesis_config::GenesisConfig;
-use solana_sdk::hash::Hash;
+use solana_sdk::hash::{hash, Hash};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signature::KeypairUtil;
@@ -51,6 +52,21 @@ fn check_txs(receiver: &Arc<Receiver<WorkingBankEntry>>, ref_tx_count: usize) {
         }
     }
     assert_eq!(total, ref_tx_count);
+}
+
+#[bench]
+fn hash_100000_ancestors(bencher: &mut Bencher) {
+    let ancestors: Vec<u64> = (0..100000).collect();
+
+    bencher.iter(|| {
+        let mut buf: Vec<u8> = vec![0; ancestors.len() * 8];
+        for (i, num) in ancestors.iter().enumerate() {
+            LittleEndian::write_u64(&mut buf[i * 8..(i + 1) * 8], *num);
+        }
+        let v = hash(&buf[..]);
+        println!("v: {:?}", v);
+        //let a = v.len();
+    });
 }
 
 #[bench]
