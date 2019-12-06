@@ -613,7 +613,7 @@ pub fn main() {
     });
 
     if matches.is_present("limit_ledger_size") {
-        validator_config.max_ledger_slots = Some(DEFAULT_MAX_LEDGER_SLOTS);
+        validator_config.max_ledger_slots = Some(1000);
     }
 
     if matches.value_of("signer_addr").is_some() {
