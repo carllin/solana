@@ -495,6 +495,7 @@ impl Archiver {
             shred_fetch_receiver,
             verified_sender.clone(),
             DisabledSigVerifier::default(),
+            "archiver",
         );
 
         let window_service = WindowService::new(

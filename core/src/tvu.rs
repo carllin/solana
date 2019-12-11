@@ -121,12 +121,14 @@ impl Tvu {
                 fetch_receiver,
                 verified_sender.clone(),
                 ShredSigVerifier::new(bank_forks.clone(), leader_schedule_cache.clone()),
+                "tvu",
             )
         } else {
             SigVerifyStage::new(
                 fetch_receiver,
                 verified_sender.clone(),
                 DisabledSigVerifier::default(),
+                "tvu",
             )
         };
 

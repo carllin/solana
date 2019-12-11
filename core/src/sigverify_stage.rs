@@ -46,8 +46,9 @@ impl SigVerifyStage {
         packet_receiver: Receiver<Packets>,
         verified_sender: CrossbeamSender<Vec<Packets>>,
         verifier: T,
+        name: &str,
     ) -> Self {
-        let thread_hdls = Self::verifier_services(packet_receiver, verified_sender, verifier);
+        let thread_hdls = Self::verifier_services(packet_receiver, verified_sender, verifier, name);
         Self { thread_hdls }
     }
 
@@ -69,9 +70,10 @@ impl SigVerifyStage {
         let mut verify_batch_time = Measure::start("sigverify_batch_time");
         let batch_len = batch.len();
         info!(
-            "@{:?} verifier: verifying: {} id: {}",
+            "@{:?} verifier: verifying: {} name: {} id: {}",
             timing::timestamp(),
             len,
+            thread::current().name().unwrap(),
             id
         );
 
@@ -112,10 +114,11 @@ impl SigVerifyStage {
         verified_sender: CrossbeamSender<Vec<Packets>>,
         id: usize,
         verifier: &T,
+        name: &str,
     ) -> JoinHandle<()> {
         let verifier = verifier.clone();
         Builder::new()
-            .name(format!("solana-verifier-{}", id))
+            .name(format!("solana-verifier-{}-{}", name, id))
             .spawn(move || loop {
                 if let Err(e) = Self::verifier(&packet_receiver, &verified_sender, id, &verifier) {
                     match e {
@@ -149,11 +152,18 @@ impl SigVerifyStage {
         packet_receiver: PacketReceiver,
         verified_sender: CrossbeamSender<Vec<Packets>>,
         verifier: T,
+        name: &str,
     ) -> Vec<JoinHandle<()>> {
         let receiver = Arc::new(Mutex::new(packet_receiver));
         (0..4)
             .map(|id| {
-                Self::verifier_service(receiver.clone(), verified_sender.clone(), id, &verifier)
+                Self::verifier_service(
+                    receiver.clone(),
+                    verified_sender.clone(),
+                    id,
+                    &verifier,
+                    name,
+                )
             })
             .collect()
     }
