@@ -157,15 +157,19 @@ where
     let mut reclaim_lamports_back_to_source_account = false;
     let mut i = keypair0_balance;
     let mut blockhash = Hash::default();
-    let mut blockhash_time;
+    let mut blockhash_time = Instant::now();
     while start.elapsed() < duration {
         // ping-pong between source and destination accounts for each loop iteration
         // this seems to be faster than trying to determine the balance of individual
         // accounts
         let len = tx_count as usize;
-        blockhash_time = Instant::now();
         if let Ok((new_blockhash, _fee_calculator)) = client.get_new_blockhash(&blockhash) {
             blockhash = new_blockhash;
+            datapoint_debug!(
+                "bench-tps-get_blockhash",
+                ("duration", duration_as_us(&blockhash_time.elapsed()), i64)
+            );
+            blockhash_time = Instant::now();
         } else {
             if blockhash_time.elapsed().as_secs() > 30 {
                 panic!("Blockhash is not updating");
@@ -173,12 +177,7 @@ where
             sleep(Duration::from_millis(100));
             continue;
         }
-        datapoint_debug!(
-            "bench-tps-get_blockhash",
-            ("duration", duration_as_us(&blockhash_time.elapsed()), i64)
-        );
 
-        blockhash_time = Instant::now();
         let balance = client.get_balance(&id.pubkey()).unwrap_or(0);
         metrics_submit_lamport_balance(balance);
         datapoint_debug!(

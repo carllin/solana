@@ -76,7 +76,7 @@ fn verify_shreds_cpu(batches: &[Packets], slot_leaders: &HashMap<u64, [u8; 32]>)
                 .collect()
         })
     });
-    inc_new_counter_debug!("ed25519_shred_verify_cpu", count);
+    inc_new_counter_info!("ed25519_shred_verify_cpu", count);
     rv
 }
 
