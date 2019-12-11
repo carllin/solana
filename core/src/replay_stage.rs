@@ -1130,7 +1130,12 @@ impl ReplayStage {
                     parent_slot,
                     forks.root()
                 );
+                let now = Instant::now();
                 subscriptions.notify_slot(child_slot, parent_slot, forks.root());
+                info!(
+                    "Time to notify in replay stage: {}",
+                    now.elapsed().as_millis()
+                );
                 forks.insert(Bank::new_from_parent(&parent_bank, &leader, child_slot));
             }
         }
