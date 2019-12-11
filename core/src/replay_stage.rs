@@ -233,11 +233,16 @@ impl ReplayStage {
                     }
 
                     let start = allocated.get();
+                    let now2 = Instant::now();
                     Self::generate_new_bank_forks(
                         &blocktree,
                         &mut bank_forks.write().unwrap(),
                         &leader_schedule_cache,
                         &subscriptions,
+                    );
+                    info!(
+                        "Replay Stage, generate new bank forks elapsed: {}",
+                        now2.elapsed().as_millis()
                     );
                     datapoint_debug!(
                         "replay_stage-memory",
@@ -1100,11 +1105,22 @@ impl ReplayStage {
         subscriptions: &Arc<RpcSubscriptions>,
     ) {
         // Find the next slot that chains to the old slot
+        let now = Instant::now();
         let frozen_banks = forks.frozen_banks();
         let frozen_bank_slots: Vec<u64> = frozen_banks.keys().cloned().collect();
+        info!(
+            "Replay Stage, time to get frozen banks: {}",
+            now.elapsed().as_millis()
+        );
+
+        let now = Instant::now();
         let next_slots = blocktree
             .get_slots_since(&frozen_bank_slots)
             .expect("Db error");
+        info!(
+            "Replay Stage, time to get blocktree next slots {}",
+            now.elapsed().as_millis()
+        );
         // Filter out what we've already seen
         trace!("generate new forks {:?}", {
             let mut next_slots = next_slots.iter().collect::<Vec<_>>();
@@ -1133,7 +1149,7 @@ impl ReplayStage {
                 let now = Instant::now();
                 subscriptions.notify_slot(child_slot, parent_slot, forks.root());
                 info!(
-                    "Time to notify in replay stage: {}",
+                    "Replay Stage, time to notify: {}",
                     now.elapsed().as_millis()
                 );
                 forks.insert(Bank::new_from_parent(&parent_bank, &leader, child_slot));
