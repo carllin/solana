@@ -11,6 +11,7 @@ use solana_sdk::signature::Signature;
 use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct ShredSigVerifier {
@@ -52,7 +53,12 @@ impl ShredSigVerifier {
 
 impl SigVerifier for ShredSigVerifier {
     fn verify_batch(&self, mut batches: Vec<Packets>) -> Vec<Packets> {
+        let now = Instant::now();
         let r_bank = self.bank_forks.read().unwrap().working_bank();
+        info!(
+            "Sigverify grab working bank elapsed {}",
+            now.elapsed().as_millis()
+        );
         let slots: HashSet<u64> = Self::read_slots(&batches);
         let mut leader_slots: HashMap<u64, [u8; 32]> = slots
             .into_iter()

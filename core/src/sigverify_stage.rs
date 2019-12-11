@@ -68,7 +68,7 @@ impl SigVerifyStage {
 
         let mut verify_batch_time = Measure::start("sigverify_batch_time");
         let batch_len = batch.len();
-        debug!(
+        info!(
             "@{:?} verifier: verifying: {} id: {}",
             timing::timestamp(),
             len,
@@ -78,7 +78,8 @@ impl SigVerifyStage {
         let verified_batch = verifier.verify_batch(batch);
 
         for v in verified_batch {
-            if sendr.send(vec![v]).is_err() {
+            if let Err(e) = sendr.send(vec![v]) {
+                error!("Verifier sender error: {:?}", e);
                 return Err(Error::SendError);
             }
         }
@@ -118,12 +119,26 @@ impl SigVerifyStage {
             .spawn(move || loop {
                 if let Err(e) = Self::verifier(&packet_receiver, &verified_sender, id, &verifier) {
                     match e {
-                        Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => break,
-                        Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
-                        Error::SendError => {
+                        Error::RecvTimeoutError(RecvTimeoutError::Disconnected) => {
+                            error!(
+                                "Verifier service recv disconnected {:?}",
+                                thread::current().name()
+                            );
                             break;
                         }
-                        _ => error!("{:?}", e),
+                        Error::RecvTimeoutError(RecvTimeoutError::Timeout) => (),
+                        Error::SendError => {
+                            error!(
+                                "Verifier service send disconnected {:?}",
+                                thread::current().name()
+                            );
+                            break;
+                        }
+                        _ => error!(
+                            "Verifier service {:?} errored: {:?}",
+                            thread::current().name(),
+                            e
+                        ),
                     }
                 }
             })
