@@ -11,6 +11,7 @@ use solana_sdk::signature::Signature;
 use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
 use std::sync::{Arc, RwLock};
+use std::thread;
 use std::time::Instant;
 
 #[derive(Clone)]
@@ -56,7 +57,8 @@ impl SigVerifier for ShredSigVerifier {
         let now = Instant::now();
         let r_bank = self.bank_forks.read().unwrap().working_bank();
         info!(
-            "Sigverify grab working bank elapsed {}",
+            "{} Sigverify grab working bank elapsed {}",
+            thread::current().name().unwrap(),
             now.elapsed().as_millis()
         );
         let slots: HashSet<u64> = Self::read_slots(&batches);
