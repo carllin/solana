@@ -5,6 +5,7 @@
 //! transaction. All processing is done on the CPU by default and on a GPU
 //! if perf-libs are available
 
+use crate::cpu_time::ThreadTime;
 use crate::packet::Packets;
 use crate::result::{Error, Result};
 use crate::sigverify;
@@ -68,6 +69,7 @@ impl SigVerifyStage {
         )?;
 
         let mut verify_batch_time = Measure::start("sigverify_batch_time");
+        let verify_batch_cpu_time = ThreadTime::try_now().expect("Could not get thread time");
         let batch_len = batch.len();
         info!(
             "@{:?} verifier: verifying: {} name: {} id: {}",
@@ -98,11 +100,23 @@ impl SigVerifyStage {
             (len as f32 / verify_batch_time.as_s())
         );
 
+        let elapsed_cpu_ms = verify_batch_cpu_time
+            .try_elapsed()
+            .expect("Getting thread elapsed time failed")
+            .as_millis();
+        let elapsed_ms = verify_batch_time.as_ms();
+        info!(
+            "{} sigverify total_time_elapsed: {}, id: {}",
+            thread::current().name().unwrap(),
+            elapsed_ms,
+            id
+        );
         datapoint_debug!(
             "sigverify_stage-total_verify_time",
             ("num_batches", batch_len, i64),
             ("num_packets", len, i64),
-            ("verify_time_ms", verify_batch_time.as_ms(), i64),
+            ("verify_time_ms", elapsed_ms, i64),
+            ("verify_cpu_time_ms", elapsed_cpu_ms, i64),
             ("recv_time", recv_time, i64),
         );
 

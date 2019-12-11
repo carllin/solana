@@ -88,6 +88,8 @@ extern crate matches;
 #[cfg(unix)]
 extern crate jemallocator;
 
+extern crate cpu_time;
+
 #[cfg(unix)]
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
