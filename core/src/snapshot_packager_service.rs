@@ -108,6 +108,10 @@ impl SnapshotPackagerService {
             TAR_SNAPSHOTS_DIR,
         ];
 
+        info!(
+            "Starting to tar file into archive path: {:?}, staging dir: {:?}",
+            archive_path, staging_dir
+        );
         let output = std::process::Command::new("tar").args(&args).output()?;
         if !output.status.success() {
             warn!("tar command failed with exit code: {}", output.status);

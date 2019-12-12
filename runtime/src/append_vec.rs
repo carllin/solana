@@ -89,13 +89,18 @@ impl Drop for AppendVec {
 impl AppendVec {
     #[allow(clippy::mutex_atomic)]
     pub fn new(file: &Path, create: bool, size: usize) -> Self {
+        info!("Creating new AppendVec parents {:?}", file);
         if create {
             let _ignored = remove_file(file);
+            info!("Removed file {:?}", file);
             if let Some(parent) = file.parent() {
+                info!("Creating parent {:?}", file);
                 create_dir_all(parent).expect("Create directory failed");
+                info!("Finished creating dir {:?}", file);
             }
         }
 
+        info!("Creating new AppendVec file {:?}", file);
         let mut data = OpenOptions::new()
             .read(true)
             .write(true)
@@ -111,7 +116,7 @@ impl AppendVec {
                     ));
                 }
                 panic!(
-                    "{}Unable to {} data file {}, err {:?}",
+                    "{} Unable to {} data file {}, err {:?}",
                     msg,
                     if create { "create" } else { "open" },
                     file.display(),
@@ -120,13 +125,18 @@ impl AppendVec {
             })
             .unwrap();
 
+        info!("Seeking AppendVec file {:?}", file);
         data.seek(SeekFrom::Start((size - 1) as u64)).unwrap();
+        info!("Writing AppendVec file {:?}", file);
         data.write_all(&[0]).unwrap();
+        info!("Seeing AppendVec file 2 {:?}", file);
         data.seek(SeekFrom::Start(0)).unwrap();
+        info!("Flushing AppendVec file {:?}", file);
         data.flush().unwrap();
+        info!("Creating AppendVec Mmap file {:?}", file);
         //UNSAFE: Required to create a Mmap
         let map = unsafe { MmapMut::map_mut(&data).expect("failed to map the data file") };
-
+        info!("Returning AppendVec {:?}", file);
         AppendVec {
             path: file.to_path_buf(),
             map,

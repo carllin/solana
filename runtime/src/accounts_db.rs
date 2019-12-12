@@ -198,6 +198,10 @@ impl AccountStorageEntry {
     pub fn new(path: &Path, slot_id: Slot, id: usize, file_size: u64) -> Self {
         let tail = AppendVec::new_relative_path(slot_id, id);
         let path = Path::new(path).join(&tail);
+        info!(
+            "Creating new AccountStorageEntry for slot_id: {}, id: {}",
+            slot_id, id
+        );
         let accounts = AppendVec::new(&path, true, file_size as usize);
 
         AccountStorageEntry {
@@ -792,6 +796,7 @@ impl AccountsDB {
         slot_storage: &mut SlotStores,
         size: u64,
     ) -> Arc<AccountStorageEntry> {
+        info!("Creating store for slot: {}", slot_id);
         let paths = self.paths.read().unwrap();
         let path_index = thread_rng().gen_range(0, paths.len());
         let store = Arc::new(self.new_storage_entry(slot_id, &Path::new(&paths[path_index]), size));
