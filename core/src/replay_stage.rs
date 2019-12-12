@@ -1152,7 +1152,13 @@ impl ReplayStage {
                     "Replay Stage, time to notify: {}",
                     now.elapsed().as_millis()
                 );
-                forks.insert(Bank::new_from_parent(&parent_bank, &leader, child_slot));
+                let now = Instant::now();
+                let bb = Bank::new_from_parent(&parent_bank, &leader, child_slot);
+                info!(
+                    "Replay Stage, new from parent: {}",
+                    now.elapsed().as_millis()
+                );
+                forks.insert(bb);
             }
         }
     }

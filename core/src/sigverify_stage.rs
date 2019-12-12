@@ -105,12 +105,14 @@ impl SigVerifyStage {
             .expect("Getting thread elapsed time failed")
             .as_millis();
         let elapsed_ms = verify_batch_time.as_ms();
+
         info!(
             "{} sigverify total_time_elapsed: {}, id: {}",
             thread::current().name().unwrap(),
             elapsed_ms,
             id
         );
+
         datapoint_debug!(
             "sigverify_stage-total_verify_time",
             ("num_batches", batch_len, i64),

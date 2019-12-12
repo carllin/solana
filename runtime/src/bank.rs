@@ -53,6 +53,7 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     sync::{Arc, RwLock, RwLockReadGuard},
+    time::Instant,
 };
 
 pub const SECONDS_PER_YEAR: f64 = (365.25 * 24.0 * 60.0 * 60.0);
@@ -326,7 +327,7 @@ impl Bank {
     pub fn new_from_parent(parent: &Arc<Bank>, collector_id: &Pubkey, slot: Slot) -> Self {
         parent.freeze();
         assert_ne!(slot, parent.slot());
-
+        let now = Instant::now();
         let rc = BankRc {
             accounts: Arc::new(Accounts::new_from_parent(
                 &parent.rc.accounts,
@@ -341,7 +342,11 @@ impl Bank {
         };
         let epoch_schedule = parent.epoch_schedule;
         let epoch = epoch_schedule.get_epoch(slot);
-
+        info!(
+            "new_from_parent setup elapsed: {}",
+            now.elapsed().as_millis()
+        );
+        let now = Instant::now();
         let mut new = Bank {
             rc,
             src,
@@ -382,7 +387,7 @@ impl Bank {
             entered_epoch_callback: parent.entered_epoch_callback.clone(),
             last_vote_sync: AtomicU64::new(parent.last_vote_sync.load(Ordering::Relaxed)),
         };
-
+        info!("new bank elapsed: {}", now.elapsed().as_millis());
         datapoint_debug!(
             "bank-new_from_parent-heights",
             ("slot_height", slot, i64),
@@ -391,6 +396,7 @@ impl Bank {
 
         let leader_schedule_epoch = epoch_schedule.get_leader_schedule_epoch(slot);
 
+        let now = Instant::now();
         if parent.epoch() < new.epoch() {
             if let Some(entered_epoch_callback) =
                 parent.entered_epoch_callback.read().unwrap().as_ref()
@@ -398,6 +404,7 @@ impl Bank {
                 entered_epoch_callback(&mut new)
             }
         }
+        info!("new bank elapsed: {}", now.elapsed().as_millis());
 
         // update epoch_stakes cache
         //  if my parent didn't populate for this staker's epoch, we've
@@ -412,11 +419,17 @@ impl Bank {
             new.ancestors.insert(p.slot(), i + 1);
         });
 
+        info!("updated parents and ancestors",);
         new.update_rewards(parent.epoch());
+        info!("updated rewards",);
         new.update_stake_history(Some(parent.epoch()));
+        info!("updated stake history",);
         new.update_clock();
+        info!("updated clock",);
         new.update_fees();
+        info!("updated fees",);
         new.update_recent_blockhashes();
+        info!("updated recent blockhash",);
         new
     }
 
