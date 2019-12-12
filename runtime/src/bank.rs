@@ -424,8 +424,9 @@ impl Bank {
         info!("updated rewards",);
         new.update_stake_history(Some(parent.epoch()));
         info!("updated stake history",);
+        let now = Instant::now();
         new.update_clock();
-        info!("updated clock",);
+        info!("updated clock elapsed: {}", now.elapsed().as_millis());
         new.update_fees();
         info!("updated fees",);
         new.update_recent_blockhashes();
@@ -488,16 +489,15 @@ impl Bank {
     }
 
     fn update_clock(&self) {
-        self.store_account(
-            &sysvar::clock::id(),
-            &sysvar::clock::create_account(
-                1,
-                self.slot,
-                get_segment_from_slot(self.slot, self.slots_per_segment),
-                self.epoch_schedule.get_epoch(self.slot),
-                self.epoch_schedule.get_leader_schedule_epoch(self.slot),
-            ),
+        let clock_account = sysvar::clock::create_account(
+            1,
+            self.slot,
+            get_segment_from_slot(self.slot, self.slots_per_segment),
+            self.epoch_schedule.get_epoch(self.slot),
+            self.epoch_schedule.get_leader_schedule_epoch(self.slot),
         );
+        info!("Storing clock account with key: {:?}", sysvar::clock::id());
+        self.store_account(&sysvar::clock::id(), &clock_account);
     }
 
     fn update_slot_hashes(&self) {
@@ -1392,7 +1392,7 @@ impl Bank {
 
     pub fn store_account(&self, pubkey: &Pubkey, account: &Account) {
         self.rc.accounts.store_slow(self.slot(), pubkey, account);
-
+        info!("Done storing acccount with pubkey: {}", pubkey);
         if Stakes::is_stake(account) {
             self.stakes.write().unwrap().store(pubkey, account);
         } else if storage_utils::is_storage(account) {

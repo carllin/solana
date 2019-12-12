@@ -291,9 +291,14 @@ impl AppendVec {
         accounts: &[(StoredMeta, &Account)],
         hashes: &[Hash],
     ) -> Vec<usize> {
+        info!(
+            "Beginning store account with pubkey: {:?}",
+            accounts.first().map(|s| s.0.pubkey)
+        );
         let mut offset = self.append_offset.lock().unwrap();
         let mut rv = Vec::with_capacity(accounts.len());
         for ((stored_meta, account), hash) in accounts.iter().zip(hashes) {
+            info!("Storing account with pubkey: {}", stored_meta.pubkey);
             let meta_ptr = stored_meta as *const StoredMeta;
             let account_meta = AccountMeta {
                 lamports: account.lamports,

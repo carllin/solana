@@ -771,8 +771,11 @@ impl AccountsDB {
 
         drop(stores);
 
+        info!("create and insert store for slot: {}", slot_id);
         let store = self.create_and_insert_store(slot_id, self.file_size);
+        info!("done create and insert store for slot: {}", slot_id);
         store.try_available();
+        info!("done try available for slot: {}", slot_id);
         store
     }
 
@@ -865,6 +868,11 @@ impl AccountsDB {
         let mut infos: Vec<AccountInfo> = Vec::with_capacity(with_meta.len());
         while infos.len() < with_meta.len() {
             let storage = self.find_storage_candidate(slot_id);
+            info!(
+                "Found storage candidate for slot: {}, pubkey: {:?}",
+                slot_id,
+                with_meta.first().map(|s| s.0.pubkey)
+            );
             let rvs = storage
                 .accounts
                 .append_accounts(&with_meta[infos.len()..], &hashes);
@@ -1076,14 +1084,28 @@ impl AccountsDB {
     /// Store the account update.
     pub fn store(&self, slot_id: Slot, accounts: &[(&Pubkey, &Account)]) {
         let hashes = self.hash_accounts(slot_id, accounts);
+        info!(
+            "Store {:?} done hashing accounts",
+            accounts.first().map(|s| s.0)
+        );
 
         let mut store_accounts = Measure::start("store::store_accounts");
         let infos = self.store_accounts(slot_id, accounts, &hashes);
         store_accounts.stop();
+        info!(
+            "Store {:?} accounts elpased: {}",
+            accounts.first().map(|s| s.0),
+            store_accounts.as_ms()
+        );
 
         let mut update_index = Measure::start("store::update_index");
         let (reclaims, last_root) = self.update_index(slot_id, infos, accounts);
         update_index.stop();
+        info!(
+            "Update index {:?} elpased: {}",
+            accounts.first().map(|s| s.0),
+            update_index.as_ms()
+        );
         trace!("reclaim: {}", reclaims.len());
 
         self.handle_reclaims(&reclaims, last_root);
