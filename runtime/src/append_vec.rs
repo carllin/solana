@@ -1,10 +1,13 @@
 use bincode::{deserialize_from, serialize_into};
+use libc::{c_int, mode_t};
 use memmap::MmapMut;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{account::Account, clock::Epoch, hash::Hash, pubkey::Pubkey};
+use std::os::unix::ffi::OsStrExt;
 use std::{
+    ffi::{CStr, CString, OsStr, OsString},
     fmt,
-    fs::{create_dir_all, remove_file, OpenOptions},
+    fs::{create_dir, create_dir_all, remove_file, OpenOptions},
     io,
     io::{Cursor, Seek, SeekFrom, Write},
     mem,
@@ -87,6 +90,64 @@ impl Drop for AppendVec {
 }
 
 impl AppendVec {
+    fn cvt(result: i32) -> io::Result<usize> {
+        if result < 0 {
+            Err(io::Error::from_raw_os_error(-result))
+        } else {
+            Ok(result as usize)
+        }
+    }
+
+    fn cstr(path: &Path) -> io::Result<CString> {
+        Ok(CString::new(path.as_os_str().as_bytes())?)
+    }
+
+    pub fn mkdir(p: &Path) -> io::Result<()> {
+        let c = p.clone();
+        let mode: libc::mode_t = 0o777;
+        let p = Self::cstr(p)?;
+        info!("mkdir: {:?}", c);
+        let result = unsafe { libc::mkdir(p.as_ptr(), mode) };
+        info!("finished mkdir: {:?}", c);
+        Self::cvt(result)?;
+        Ok(())
+    }
+
+    fn create_dir_all(path: &Path) -> io::Result<()> {
+        if path == Path::new("") {
+            return Ok(());
+        }
+        info!("Creating dir: {:?}", path);
+        match Self::mkdir(path) {
+            Ok(()) => return Ok(()),
+            Err(ref e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) if path.is_dir() => {
+                info!("Creating dir fail is dir: {:?}", e);
+                return Ok(());
+            }
+            Err(e) => {
+                info!("Creating dir fail is file: {:?}", e);
+                return Err(e);
+            }
+        }
+        match path.parent() {
+            Some(p) => Self::create_dir_all(p)?,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "failed to create whole tree",
+                ))
+            }
+        }
+
+        info!("Creating dir 2: {:?}", path);
+        match Self::mkdir(path) {
+            Ok(()) => Ok(()),
+            Err(_) if path.is_dir() => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     #[allow(clippy::mutex_atomic)]
     pub fn new(file: &Path, create: bool, size: usize) -> Self {
         info!("Creating new AppendVec parents {:?}", file);
@@ -95,7 +156,7 @@ impl AppendVec {
             info!("Removed file {:?}", file);
             if let Some(parent) = file.parent() {
                 info!("Creating parent {:?}", file);
-                create_dir_all(parent).expect("Create directory failed");
+                Self::create_dir_all(parent).expect("Create directory failed");
                 info!("Finished creating dir {:?}", file);
             }
         }
