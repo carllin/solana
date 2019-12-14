@@ -50,7 +50,7 @@ fn tune_poh_service_priority(uid: u32) {
     }) {
         info!("PoH thread PID is {}", pid);
         let pid = format!("{}", pid);
-        let output = Command::new("chrt")
+        /*let output = Command::new("chrt")
             .args(&["-r", "-p", "99", pid.as_str()])
             .output()
             .expect("Expected to set priority of thread");
@@ -58,7 +58,7 @@ fn tune_poh_service_priority(uid: u32) {
             info!("Done setting thread priority");
         } else {
             error!("chrt stderr: {}", from_utf8(&output.stderr).unwrap_or("?"));
-        }
+        }*/
     } else {
         error!("Could not find pid for PoH thread");
     }
