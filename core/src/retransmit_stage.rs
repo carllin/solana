@@ -12,7 +12,7 @@ use crate::{
     result::{Error, Result},
     window_service::{should_retransmit_and_persist, WindowService},
 };
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 use solana_ledger::{
     blockstore::{Blockstore, CompletedSlotsReceiver},
     leader_schedule_cache::LeaderScheduleCache,
@@ -437,6 +437,7 @@ impl RetransmitStage {
         verified_vote_receiver: VerifiedVoteReceiver,
         repair_validators: Option<HashSet<Pubkey>>,
         completed_data_sets_sender: CompletedDataSetsSender,
+        duplicate_slots_sender: Sender<Slot>,
     ) -> Self {
         let (retransmit_sender, retransmit_receiver) = channel();
 
@@ -491,6 +492,7 @@ impl RetransmitStage {
             cluster_slots,
             verified_vote_receiver,
             completed_data_sets_sender,
+            duplicate_slots_sender,
         );
 
         let thread_hdls = t_retransmit;

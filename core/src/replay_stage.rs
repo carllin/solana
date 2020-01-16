@@ -19,6 +19,7 @@ use crate::{
     result::Result,
     rewards_recorder_service::RewardsRecorderSender,
     rpc_subscriptions::RpcSubscriptions,
+    window_service::DuplicateSlotReceiver,
 };
 use solana_ledger::{
     block_error::BlockError,
@@ -217,6 +218,7 @@ impl ReplayStage {
         bank_forks: Arc<RwLock<BankForks>>,
         cluster_info: Arc<ClusterInfo>,
         ledger_signal_receiver: Receiver<bool>,
+        duplicate_slots_receiver: DuplicateSlotReceiver,
         poh_recorder: Arc<Mutex<PohRecorder>>,
         mut tower: Tower,
         vote_tracker: Arc<VoteTracker>,
