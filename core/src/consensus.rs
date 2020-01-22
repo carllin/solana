@@ -227,8 +227,12 @@ impl Tower {
         trace!("{} record_vote for {}", self.node_pubkey, slot);
         let root_slot = self.lockouts.root_slot;
         self.lockouts.process_vote_unchecked(&vote);
-        self.last_vote = vote;
 
+        println!("Vote state after vote on: {:?}", vote.slots);
+        let votes: Vec<_> = self.lockouts.votes.iter().collect();
+        println!("Vote state: {:#?}", votes);
+
+        self.last_vote = vote;
         datapoint_debug!(
             "tower-vote",
             ("latest", slot, i64),

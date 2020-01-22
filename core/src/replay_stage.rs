@@ -212,7 +212,6 @@ impl ReplayStage {
         for line in r.lines() {
             if let Ok(num) = line {
                 let v = num.parse::<u64>().unwrap();
-                println!("v: {:?}", v);
                 if v > root {
                     votes.push_back(v);
                 }
@@ -307,7 +306,7 @@ impl ReplayStage {
                         let mut vote_bank_slot = None;
                         let start = allocated.get();
                         if !stats.is_locked_out && stats.vote_threshold {
-                            println!("Would vote on: {} {}", bank.slot(), stats.fork_weight);
+                            println!("voting on: {} {}", bank.slot(), stats.fork_weight);
                             subscriptions.notify_subscribers(bank.slot(), &bank_forks);
                             if let Some(votable_leader) =
                                 leader_schedule_cache.slot_leader_at(bank.slot(), Some(&bank))
@@ -352,7 +351,7 @@ impl ReplayStage {
                             );
                             last_reset = bank.last_blockhash();
                             tpu_has_bank = false;
-                            info!(
+                            println!(
                                 "vote bank: {:?} reset bank: {}",
                                 vote_bank_slot,
                                 bank.slot()
@@ -640,7 +639,7 @@ impl ReplayStage {
         if bank.is_empty() {
             inc_new_counter_info!("replay_stage-voted_empty_bank", 1);
         }
-        trace!("handle votable bank {}", bank.slot());
+        println!("handle votable bank {}", bank.slot());
         let (vote, tower_index) = tower.new_vote_from_bank(bank, vote_account);
         if let Some(new_root) = tower.record_bank_vote(vote) {
             // get the root bank before squash
@@ -671,7 +670,7 @@ impl ReplayStage {
                     trace!("latest root send failed: {:?}", e);
                 }
             });
-            trace!("new root {}", new_root);
+            println!("new root {}", new_root);
             if let Err(e) = root_bank_sender.send(rooted_banks) {
                 trace!("root_bank_sender failed: {:?}", e);
                 return Err(e.into());
@@ -775,21 +774,19 @@ impl ReplayStage {
             let bank_progress = &mut progress
                 .entry(bank.slot())
                 .or_insert_with(|| ForkProgress::new(bank.slot(), bank.last_blockhash()));
-            if bank.collector_id() != my_pubkey {
-                let (replay_result, replay_tx_count) = Self::replay_blockstore_into_bank(
-                    &bank,
-                    &blockstore,
-                    bank_progress,
-                    transaction_status_sender.clone(),
-                    verify_recyclers,
-                );
-                tx_count += replay_tx_count;
-                if Self::is_replay_result_fatal(&replay_result) {
-                    trace!("replay_result_fatal slot {}", bank_slot);
-                    // If the bank was corrupted, don't try to run the below logic to check if the
-                    // bank is completed
-                    continue;
-                }
+            let (replay_result, replay_tx_count) = Self::replay_blockstore_into_bank(
+                &bank,
+                &blockstore,
+                bank_progress,
+                transaction_status_sender.clone(),
+                verify_recyclers,
+            );
+            tx_count += replay_tx_count;
+            if Self::is_replay_result_fatal(&replay_result) {
+                trace!("replay_result_fatal slot {}", bank_slot);
+                // If the bank was corrupted, don't try to run the below logic to check if the
+                // bank is completed
+                continue;
             }
             assert_eq!(*bank_slot, bank.slot());
             if bank.tick_height() == bank.max_tick_height() {
@@ -851,6 +848,7 @@ impl ReplayStage {
                     .fork_stats
                     .clone();
 
+                let mut was_computed = false;
                 if !stats.computed {
                     stats.slot = bank.slot();
                     let (stake_lockouts, total_staked, bank_weight) = tower.collect_vote_lockouts(
@@ -884,14 +882,26 @@ impl ReplayStage {
                     );
                     stats.stake_lockouts = stake_lockouts;
                     stats.block_height = bank.block_height();
-                    stats.computed = true;
+                    was_computed = true;
                 }
                 stats.vote_threshold = tower.check_vote_stake_threshold(
                     bank.slot(),
                     &stats.stake_lockouts,
                     stats.total_staked,
                 );
+
                 stats.is_locked_out = tower.is_locked_out(bank.slot(), &ancestors);
+
+                if was_computed {
+                    if !stats.vote_threshold {
+                        println!("{} failed threshold", bank.slot());
+                    }
+                    if stats.is_locked_out {
+                        println!("{} is locked out", bank.slot());
+                    }
+                    stats.computed = true;
+                }
+
                 stats.has_voted = tower.has_voted(bank.slot());
                 stats.is_recent = tower.is_recent(bank.slot());
                 progress
@@ -954,6 +964,9 @@ impl ReplayStage {
                 let slot = vote_slots.pop_front().unwrap();
                 println!("voting on predefined: {}", slot);
                 assert_eq!(slot, bank.slot());
+                if vote_slots.is_empty() {
+                    println!("FINISHED SIMULATING VOTE HISTORY");
+                }
                 return Some((
                     bank,
                     progress
@@ -964,8 +977,10 @@ impl ReplayStage {
                 ));
             } else {
                 println!("waiting to vote on slot {}", vote_slots.front().unwrap());
+                return None;
             }
         }
+
         rv.cloned().map(|x| (x.0.clone(), x.1.clone()))
     }
 
@@ -1147,7 +1162,7 @@ impl ReplayStage {
         slot_full_senders: &[Sender<(u64, Pubkey)>],
     ) {
         bank.freeze();
-        println!("bank_frozen: {}", bank.slot());
+        println!("bank frozen: {}", bank.slot());
         slot_full_senders.iter().for_each(|sender| {
             if let Err(e) = sender.send((bank.slot(), *bank.collector_id())) {
                 trace!("{} slot_full alert failed: {:?}", my_pubkey, e);
@@ -1188,7 +1203,7 @@ impl ReplayStage {
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_slot, Some(&parent_bank))
                     .unwrap();
-                info!(
+                println!(
                     "new fork:{} parent:{} root:{}",
                     child_slot,
                     parent_slot,

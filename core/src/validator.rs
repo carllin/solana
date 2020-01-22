@@ -144,7 +144,6 @@ impl Validator {
         config: &ValidatorConfig,
     ) -> Self {
         let id = keypair.pubkey();
-        assert_eq!(id, node.info.id);
 
         warn!("identity pubkey: {:?}", id);
         warn!("vote pubkey: {:?}", vote_account);

@@ -380,7 +380,8 @@ pub fn main() {
                 .takes_value(true)
                 .required(true)
                 .help("Use DIR as persistent ledger location"),
-        );
+        )
+        .get_matches();
 
     let ledger_path = PathBuf::from(matches.value_of("ledger_path").unwrap());
     // Canonicalize ledger path to avoid issues with symlink creation
@@ -391,7 +392,7 @@ pub fn main() {
     });
 
     // Create and canonicalize account paths to avoid issues with symlink creation
-    let validator_config = &ValidatorConfig::default();
+    let mut validator_config = ValidatorConfig::default();
     let account_paths = vec![ledger_path.join("accounts")];
 
     validator_config.account_paths = account_paths
@@ -409,6 +410,13 @@ pub fn main() {
             }
         })
         .collect();
+
+    validator_config.snapshot_config = Some(SnapshotConfig {
+        snapshot_interval_slots: std::usize::MAX,
+        snapshot_path: ledger_path.clone().join("snapshot"),
+        snapshot_package_output_path: ledger_path.clone(),
+    });
+
     if !ledger_path.is_dir() {
         error!(
             "ledger directory does not exist or is not accessible: {:?}",
