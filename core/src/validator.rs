@@ -9,6 +9,7 @@ use crate::{
     partition_cfg::PartitionCfg,
     poh_recorder::PohRecorder,
     poh_service::PohService,
+    replay_stage::{ReplayStage, ReplayStageConfig},
     rpc::JsonRpcConfig,
     rpc_pubsub_service::PubSubService,
     rpc_service::JsonRpcService,
@@ -45,8 +46,9 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process,
+    str::FromStr,
     sync::atomic::{AtomicBool, Ordering},
-    sync::mpsc::Receiver,
+    sync::mpsc::{channel, Receiver},
     sync::{Arc, Mutex, RwLock},
     thread::{sleep, Result},
     time::Duration,
@@ -117,15 +119,15 @@ impl ValidatorExit {
 pub struct Validator {
     pub id: Pubkey,
     validator_exit: Arc<RwLock<Option<ValidatorExit>>>,
-    rpc_service: Option<JsonRpcService>,
-    rpc_pubsub_service: Option<PubSubService>,
-    transaction_status_service: Option<TransactionStatusService>,
-    gossip_service: GossipService,
+    //rpc_service: Option<JsonRpcService>,
+    //rpc_pubsub_service: Option<PubSubService>,
+    //transaction_status_service: Option<TransactionStatusService>,
+    //gossip_service: GossipService,
     poh_recorder: Arc<Mutex<PohRecorder>>,
     poh_service: PohService,
-    tpu: Tpu,
-    tvu: Tvu,
-    ip_echo_server: solana_net_utils::IpEchoServer,
+    //tpu: Tpu,
+    //tvu: Tvu,
+    //ip_echo_server: solana_net_utils::IpEchoServer,
 }
 
 impl Validator {
@@ -220,7 +222,7 @@ impl Validator {
 
         let blockstore = Arc::new(blockstore);
 
-        let rpc_service = if node.info.rpc.port() == 0 {
+        /*let rpc_service = if node.info.rpc.port() == 0 {
             None
         } else {
             Some(JsonRpcService::new(
@@ -235,10 +237,10 @@ impl Validator {
                 storage_state.clone(),
                 validator_exit.clone(),
             ))
-        };
+        };*/
 
         let subscriptions = Arc::new(RpcSubscriptions::default());
-        let rpc_pubsub_service = if node.info.rpc_pubsub.port() == 0 {
+        /*let rpc_pubsub_service = if node.info.rpc_pubsub.port() == 0 {
             None
         } else {
             Some(PubSubService::new(
@@ -279,7 +281,7 @@ impl Validator {
             // Park with the RPC service running, ready for inspection!
             warn!("Validator halted");
             std::thread::park();
-        }
+        }*/
 
         let poh_config = Arc::new(poh_config);
         let (mut poh_recorder, entry_receiver) = PohRecorder::new_with_clear_signal(
@@ -299,7 +301,7 @@ impl Validator {
         }
         let poh_recorder = Arc::new(Mutex::new(poh_recorder));
 
-        let ip_echo_server = solana_net_utils::ip_echo_server(node.sockets.ip_echo.unwrap());
+        /*let ip_echo_server = solana_net_utils::ip_echo_server(node.sockets.ip_echo.unwrap());
 
         let gossip_service = GossipService::new(
             &cluster_info,
@@ -332,7 +334,7 @@ impl Validator {
                 }
                 sleep(Duration::new(1, 0));
             }
-        }
+        }*/
 
         let sockets = Sockets {
             repair: node
@@ -373,7 +375,37 @@ impl Validator {
             "New shred signal for the TVU should be the same as the clear bank signal."
         );
 
-        let tvu = Tvu::new(
+        // TEST
+        let (ledger_cleanup_slot_sender, ledger_cleanup_slot_receiver) = channel();
+        let (blockstream_slot_sender, blockstream_slot_receiver) = channel();
+        let pubkey =
+            Pubkey::from_str("ChorusXqjLC2NbiStKR6k9WoD7wu6TVTtFG8qCL5XBVa").expect("valid pubkey");
+        let replay_stage_config = ReplayStageConfig {
+            my_pubkey: pubkey,
+            vote_account: Pubkey::default(),
+            voting_keypair: None,
+            exit: exit.clone(),
+            subscriptions: subscriptions.clone(),
+            leader_schedule_cache: leader_schedule_cache.clone(),
+            slot_full_senders: vec![blockstream_slot_sender],
+            latest_root_senders: vec![ledger_cleanup_slot_sender],
+            snapshot_package_sender: None,
+            block_commitment_cache,
+            transaction_status_sender: None,
+        };
+
+        let (replay_stage, root_bank_receiver) = ReplayStage::new(
+            replay_stage_config,
+            blockstore.clone(),
+            bank_forks.clone(),
+            cluster_info.clone(),
+            ledger_signal_receiver,
+            poh_recorder.clone(),
+        );
+
+        loop {}
+
+        /*let tvu = Tvu::new(
             vote_account,
             voting_keypair,
             storage_keypair,
@@ -414,20 +446,20 @@ impl Validator {
             &config.broadcast_stage_type,
             &exit,
             node.info.shred_version,
-        );
+        );*/
 
         datapoint_info!("validator-new", ("id", id.to_string(), String));
         Self {
             id,
-            gossip_service,
-            rpc_service,
-            rpc_pubsub_service,
-            transaction_status_service,
-            tpu,
-            tvu,
+            //gossip_service,
+            //rpc_service,
+            //rpc_pubsub_service,
+            //transaction_status_service,
+            //tpu,
+            //tvu,
             poh_service,
             poh_recorder,
-            ip_echo_server,
+            //ip_echo_server,
             validator_exit,
         }
     }
@@ -472,7 +504,7 @@ impl Validator {
     pub fn join(self) -> Result<()> {
         self.poh_service.join()?;
         drop(self.poh_recorder);
-        if let Some(rpc_service) = self.rpc_service {
+        /*if let Some(rpc_service) = self.rpc_service {
             rpc_service.join()?;
         }
         if let Some(rpc_pubsub_service) = self.rpc_pubsub_service {
@@ -485,7 +517,7 @@ impl Validator {
         self.gossip_service.join()?;
         self.tpu.join()?;
         self.tvu.join()?;
-        self.ip_echo_server.shutdown_now();
+        self.ip_echo_server.shutdown_now();*/
 
         Ok(())
     }

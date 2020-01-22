@@ -340,7 +340,7 @@ pub fn process_blockstore_from_root(
 
     // Iterate and replay slots from blockstore starting from `start_slot`
     let (bank_forks, bank_forks_info, leader_schedule_cache) = {
-        if let Some(meta) = meta {
+        /*if let Some(meta) = meta {
             let epoch_schedule = bank.epoch_schedule();
             let mut leader_schedule_cache = LeaderScheduleCache::new(*epoch_schedule, &bank);
             if opts.full_leader_cache {
@@ -361,17 +361,17 @@ pub fn process_blockstore_from_root(
             }
             let bank_forks = BankForks::new_from_banks(&banks, rooted_path);
             (bank_forks, bank_forks_info, leader_schedule_cache)
-        } else {
-            // If there's no meta for the input `start_slot`, then we started from a snapshot
-            // and there's no point in processing the rest of blockstore and implies blockstore
-            // should be empty past this point.
-            let bfi = BankForksInfo {
-                bank_slot: start_slot,
-            };
-            let leader_schedule_cache = LeaderScheduleCache::new_from_bank(&bank);
-            let bank_forks = BankForks::new_from_banks(&[bank], rooted_path);
-            (bank_forks, vec![bfi], leader_schedule_cache)
-        }
+        } else {*/
+        // If there's no meta for the input `start_slot`, then we started from a snapshot
+        // and there's no point in processing the rest of blockstore and implies blockstore
+        // should be empty past this point.
+        let bfi = BankForksInfo {
+            bank_slot: start_slot,
+        };
+        let leader_schedule_cache = LeaderScheduleCache::new_from_bank(&bank);
+        let bank_forks = BankForks::new_from_banks(&[bank], rooted_path);
+        (bank_forks, vec![bfi], leader_schedule_cache)
+        //}
     };
 
     info!(

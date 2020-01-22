@@ -29,8 +29,10 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_vote_program::vote_instruction;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{channel, Receiver, RecvTimeoutError, Sender},
@@ -202,6 +204,20 @@ impl ReplayStage {
         let (root_bank_sender, root_bank_receiver) = channel();
         trace!("replay stage");
         let mut tower = Tower::new(&my_pubkey, &vote_account, &bank_forks.read().unwrap());
+        let votes_file = "/Users/carl/Projects/solana/DebugConsensus/chorus_one_votes";
+        let f = File::open(votes_file).unwrap();
+        let r = BufReader::new(f);
+        let mut votes = VecDeque::new();
+        let root = bank_forks.read().unwrap().root();
+        for line in r.lines() {
+            if let Ok(num) = line {
+                let v = num.parse::<u64>().unwrap();
+                println!("v: {:?}", v);
+                if v > root {
+                    votes.push_back(v);
+                }
+            }
+        }
 
         // Start the replay stage loop
 
@@ -224,6 +240,7 @@ impl ReplayStage {
                 let mut current_leader = None;
                 let mut last_reset = Hash::default();
                 let mut partition = false;
+
                 loop {
                     let allocated = thread_mem_usage::Allocatedp::default();
 
@@ -276,6 +293,7 @@ impl ReplayStage {
                             &bank_forks,
                             &tower,
                             &mut progress,
+                            &mut votes,
                         );
                         datapoint_debug!(
                             "replay_stage-memory",
@@ -289,7 +307,7 @@ impl ReplayStage {
                         let mut vote_bank_slot = None;
                         let start = allocated.get();
                         if !stats.is_locked_out && stats.vote_threshold {
-                            info!("voting: {} {}", bank.slot(), stats.fork_weight);
+                            println!("Would vote on: {} {}", bank.slot(), stats.fork_weight);
                             subscriptions.notify_subscribers(bank.slot(), &bank_forks);
                             if let Some(votable_leader) =
                                 leader_schedule_cache.slot_leader_at(bank.slot(), Some(&bank))
@@ -661,7 +679,7 @@ impl ReplayStage {
         }
         Self::update_commitment_cache(bank.clone(), total_staked, lockouts_sender);
 
-        if let Some(ref voting_keypair) = voting_keypair {
+        /*if let Some(ref voting_keypair) = voting_keypair {
             let node_keypair = cluster_info.read().unwrap().keypair.clone();
 
             // Send our last few votes along with the new one
@@ -681,7 +699,7 @@ impl ReplayStage {
                 .write()
                 .unwrap()
                 .push_vote(tower_index, vote_tx);
-        }
+        }*/
         Ok(())
     }
 
@@ -745,7 +763,7 @@ impl ReplayStage {
         for bank_slot in &active_banks {
             // If the fork was marked as dead, don't replay it
             if progress.get(bank_slot).map(|p| p.is_dead).unwrap_or(false) {
-                debug!("bank_slot {:?} is marked dead", *bank_slot);
+                println!("bank_slot {:?} is marked dead", *bank_slot);
                 continue;
             }
 
@@ -801,6 +819,7 @@ impl ReplayStage {
         bank_forks: &Arc<RwLock<BankForks>>,
         tower: &Tower,
         progress: &mut HashMap<u64, ForkProgress>,
+        vote_slots: &mut VecDeque<u64>,
     ) -> VoteAndPoHBank {
         let tower_start = Instant::now();
 
@@ -925,6 +944,28 @@ impl ReplayStage {
             ),
             ("tower_duration", ms as i64, i64),
         );
+
+        if !vote_slots.is_empty() {
+            if let Some(pos) = frozen_banks
+                .iter()
+                .position(|b| b.slot() == *vote_slots.front().unwrap())
+            {
+                let bank = frozen_banks[pos].clone();
+                let slot = vote_slots.pop_front().unwrap();
+                println!("voting on predefined: {}", slot);
+                assert_eq!(slot, bank.slot());
+                return Some((
+                    bank,
+                    progress
+                        .get(&slot)
+                        .expect("All frozen banks must exist in the Progress map")
+                        .fork_stats
+                        .clone(),
+                ));
+            } else {
+                println!("waiting to vote on slot {}", vote_slots.front().unwrap());
+            }
+        }
         rv.cloned().map(|x| (x.0.clone(), x.1.clone()))
     }
 
@@ -1106,6 +1147,7 @@ impl ReplayStage {
         slot_full_senders: &[Sender<(u64, Pubkey)>],
     ) {
         bank.freeze();
+        println!("bank_frozen: {}", bank.slot());
         slot_full_senders.iter().for_each(|sender| {
             if let Err(e) = sender.send((bank.slot(), *bank.collector_id())) {
                 trace!("{} slot_full alert failed: {:?}", my_pubkey, e);
