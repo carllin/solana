@@ -369,6 +369,7 @@ fn hardforks_of(matches: &ArgMatches<'_>, name: &str) -> Option<Vec<Slot>> {
 
 #[allow(clippy::cognitive_complexity)]
 pub fn main() {
+    println!("starting");
     let matches = App::new(crate_name!())
         .about(crate_description!())
         .version(solana_clap_utils::version!())
@@ -392,6 +393,7 @@ pub fn main() {
     });
 
     // Create and canonicalize account paths to avoid issues with symlink creation
+    println!("Make accounts");
     let mut validator_config = ValidatorConfig::default();
     let account_paths = vec![ledger_path.join("accounts")];
 
@@ -425,6 +427,7 @@ pub fn main() {
         exit(1);
     }
 
+    println!("New validator");
     let validator = Validator::new(
         Node::new_localhost(),
         &Arc::new(Keypair::new()),

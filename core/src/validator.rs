@@ -378,7 +378,7 @@ impl Validator {
         let (ledger_cleanup_slot_sender, ledger_cleanup_slot_receiver) = channel();
         let (blockstream_slot_sender, blockstream_slot_receiver) = channel();
         let pubkey =
-            Pubkey::from_str("ChorusXqjLC2NbiStKR6k9WoD7wu6TVTtFG8qCL5XBVa").expect("valid pubkey");
+            Pubkey::from_str("5KTouxSFVt5d6DyN4oCMASQXzvaeXdwqLNuptRfWAJGH").expect("valid pubkey");
         let replay_stage_config = ReplayStageConfig {
             my_pubkey: pubkey,
             vote_account: Pubkey::default(),

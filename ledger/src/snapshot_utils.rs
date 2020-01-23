@@ -430,6 +430,7 @@ where
     let file = File::open(&root_paths.snapshot_file_path)?;
     let mut stream = BufReader::new(file);
     let mut bank: Bank = match snapshot_version {
+        "0.22.6" => deserialize_from(&mut stream)?,
         env!("CARGO_PKG_VERSION") => deserialize_from(&mut stream)?,
         "0.22.3" => {
             let bank0223: solana_runtime::bank::LegacyBank0223 = deserialize_from(&mut stream)?;

@@ -18,6 +18,7 @@ use std::{
 
 pub const VOTE_THRESHOLD_DEPTH: usize = 8;
 pub const VOTE_THRESHOLD_SIZE: f64 = 2f64 / 3f64;
+pub const LAST_SLOT: u64 = 1031277;
 
 #[derive(Default, Debug, Clone)]
 pub struct StakeLockout {
@@ -104,7 +105,7 @@ impl Tower {
             let mut vote_state = vote_state.unwrap();
 
             if key == self.node_pubkey || vote_state.node_pubkey == self.node_pubkey {
-                debug!("vote state {:?}", vote_state);
+                println!("My vote state in bank: {} {:#?}", bank_slot, vote_state);
                 debug!(
                     "observed slot {}",
                     vote_state.nth_recent_vote(0).map(|v| v.slot).unwrap_or(0) as i64
@@ -318,18 +319,20 @@ impl Tower {
         stake_lockouts: &HashMap<u64, StakeLockout>,
         total_staked: u64,
     ) -> bool {
+        println!("checking threshold on slot: {}", slot);
         let mut lockouts = self.lockouts.clone();
         lockouts.process_slot_vote_unchecked(slot);
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
         if let Some(vote) = vote {
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {
                 let lockout = fork_stake.stake as f64 / total_staked as f64;
-                trace!(
-                    "fork_stake slot: {} lockout: {} fork_stake: {} total_stake: {}",
-                    slot,
-                    lockout,
-                    fork_stake.stake,
-                    total_staked
+                println!(
+                    "slot: {},  
+                    checking threshold on slot: {},
+                    percentage: {},
+                    fork stake: {},
+                    total stake: {}",
+                    slot, vote.slot, lockout, fork_stake.stake, total_staked,
                 );
                 for (new_lockout, original_lockout) in
                     lockouts.votes.iter().zip(self.lockouts.votes.iter())
@@ -350,6 +353,7 @@ impl Tower {
                 false
             }
         } else {
+            println!("No need for threshold check");
             true
         }
     }

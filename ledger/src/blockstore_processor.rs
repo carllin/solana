@@ -301,7 +301,7 @@ pub fn process_blockstore_from_root(
     bank: Arc<Bank>,
     opts: &ProcessOptions,
 ) -> BlockstoreProcessorResult {
-    info!("processing ledger from root slot {}...", bank.slot());
+    println!("processing ledger from root slot {}...", bank.slot());
     let allocated = thread_mem_usage::Allocatedp::default();
     let initial_allocation = allocated.get();
 

@@ -204,7 +204,7 @@ impl ReplayStage {
         let (root_bank_sender, root_bank_receiver) = channel();
         trace!("replay stage");
         let mut tower = Tower::new(&my_pubkey, &vote_account, &bank_forks.read().unwrap());
-        let votes_file = "/Users/carl/Projects/solana/DebugConsensus/chorus_one_votes";
+        let votes_file = "/Users/carl/Projects/solana/DebugConsensus/votes";
         let f = File::open(votes_file).unwrap();
         let r = BufReader::new(f);
         let mut votes = VecDeque::new();
@@ -214,6 +214,8 @@ impl ReplayStage {
                 let v = num.parse::<u64>().unwrap();
                 if v > root {
                     votes.push_back(v);
+                } else {
+                    tower.record_vote(v, Hash::default());
                 }
             }
         }
@@ -967,14 +969,15 @@ impl ReplayStage {
                 if vote_slots.is_empty() {
                     println!("FINISHED SIMULATING VOTE HISTORY");
                 }
-                return Some((
-                    bank,
-                    progress
-                        .get(&slot)
-                        .expect("All frozen banks must exist in the Progress map")
-                        .fork_stats
-                        .clone(),
-                ));
+
+                let fork_progress = progress
+                    .get(&slot)
+                    .expect("All frozen banks must exist in the Progress map")
+                    .fork_stats
+                    .clone();
+
+                assert!(!fork_progress.is_locked_out && fork_progress.vote_threshold);
+                return Some((bank, fork_progress));
             } else {
                 println!("waiting to vote on slot {}", vote_slots.front().unwrap());
                 return None;
