@@ -142,6 +142,21 @@ where
     Ok(())
 }
 
+fn is_playable_slot(blockstore: &Arc<Blockstore>, slot: Slot, packet: &Packet) -> bool {
+    if let Some(status) = blockstore.get_slot_confirmation_status(slot) {
+        if status.is_dead() {
+            false
+        } else if let Some(_confirmed_blockhash) = status.confirmed_blockhash {
+            // TODO: confirm this shred is for the confirmed_blockhash
+            packet.meta.repair
+        } else {
+            true
+        }
+    } else {
+        true
+    }
+}
+
 fn recv_window<F>(
     blockstore: &Arc<Blockstore>,
     insert_shred_sender: &CrossbeamSender<Vec<Shred>>,
@@ -182,7 +197,9 @@ where
                         } else if let Ok(shred) =
                             Shred::new_from_serialized_shred(packet.data.to_vec())
                         {
-                            if shred_filter(&shred, last_root) {
+                            if is_playable_slot(blockstore, shred.slot(), packet)
+                                && shred_filter(&shred, last_root)
+                            {
                                 // Mark slot as dead if the current shred is on the boundary
                                 // of max shreds per slot. However, let the current shred
                                 // get retransmitted. It'll allow peer nodes to see this shred

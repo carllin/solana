@@ -67,11 +67,23 @@ pub struct DuplicateSlotProof {
     pub shred2: Vec<u8>,
 }
 
+#[derive(Deserialize, Default, Serialize)]
+pub struct SlotConfirmationStatus {
+    pub is_dead: bool,
+    pub confirmed_blockhash: Option<Hash>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum ErasureMetaStatus {
     CanRecover,
     DataFull,
     StillNeed(usize),
+}
+
+impl SlotConfirmationStatus {
+    pub fn is_dead(&self) -> bool {
+        self.confirmed_blockhash.is_none() && self.is_dead
+    }
 }
 
 impl Index {
