@@ -48,6 +48,7 @@ pub struct RepairStats {
 pub const MAX_REPAIR_LENGTH: usize = 512;
 pub const REPAIR_MS: u64 = 100;
 pub const MAX_ORPHANS: usize = 5;
+pub const MAX_DUPLICATES: usize = 10;
 
 pub enum RepairStrategy {
     RepairRange(RepairSlotRange),
@@ -248,7 +249,20 @@ impl RepairService {
         // Try to resolve orphans in blockstore
         let orphans = blockstore.orphans_iterator(root + 1).unwrap();
         Self::generate_repairs_for_orphans(orphans, &mut repairs);
+
+        // Try to resolve duplicates in blockstore
+        let duplicates = blockstore.get_unconfirmed_duplicates(root + 1, Some(MAX_ORPHANS));
+        Self::generate_repairs_for_duplicates(&duplicates[..], &mut repairs);
+
         Ok(repairs)
+    }
+
+    fn generate_repairs_for_duplicates(duplicates: &[u64], repairs: &mut Vec<RepairType>) {
+        repairs.extend(
+            duplicates
+                .iter()
+                .map(|d| RepairType::ConfirmedBlockhash(*d)),
+        );
     }
 
     fn generate_repairs_for_slot(

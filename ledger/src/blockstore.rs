@@ -2137,6 +2137,27 @@ impl Blockstore {
         Ok(orphans_iter.map(|(slot, _)| slot))
     }
 
+    pub fn get_unconfirmed_duplicates(&self, start_slot: Slot, max: Option<usize>) -> Vec<u64> {
+        let mut results = vec![];
+
+        let iter = self
+            .db
+            .iter::<cf::DuplicateSlots>(IteratorMode::From(start_slot, IteratorDirection::Forward))
+            .unwrap();
+
+        for (slot, _) in iter {
+            if let Some(max) = max {
+                if results.len() > max {
+                    break;
+                }
+            }
+            if self.is_dead(slot) {
+                results.push(slot);
+            }
+        }
+        results
+    }
+
     /// Prune blockstore such that slots higher than `target_slot` are deleted and all references to
     /// higher slots are removed
     pub fn prune(&self, target_slot: Slot) {

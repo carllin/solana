@@ -36,6 +36,7 @@ pub enum RepairType {
     Orphan(Slot),
     HighestShred(Slot, u64),
     Shred(Slot, u64),
+    ConfirmedBlockhash(Slot),
 }
 
 impl RepairType {
@@ -44,6 +45,7 @@ impl RepairType {
             RepairType::Orphan(slot) => *slot,
             RepairType::HighestShred(slot, _) => *slot,
             RepairType::Shred(slot, _) => *slot,
+            RepairType::ConfirmedBlockhash(slot) => *slot,
         }
     }
 }
@@ -65,6 +67,7 @@ pub enum RepairProtocol {
     WindowIndex(ContactInfo, u64, u64),
     HighestWindowIndex(ContactInfo, u64, u64),
     Orphan(ContactInfo, u64),
+    ConfirmedBlockhash(ContactInfo, u64),
 }
 
 #[derive(Clone)]
@@ -107,6 +110,7 @@ impl ServeRepair {
             RepairProtocol::WindowIndex(ref from, _, _) => from,
             RepairProtocol::HighestWindowIndex(ref from, _, _) => from,
             RepairProtocol::Orphan(ref from, _) => from,
+            RepairProtocol::ConfirmedBlockhash(ref from, _) => from,
         }
     }
 
@@ -170,6 +174,13 @@ impl ServeRepair {
                             MAX_ORPHAN_REPAIR_RESPONSES,
                         ),
                         "Orphan",
+                    )
+                }
+                RepairProtocol::ConfirmedBlockhash(_, slot) => {
+                    inc_new_counter_debug!("serve_repair-duplicate-slot", 1);
+                    (
+                        Self::run_confirmed_blockhash(recycler, from_addr, blockstore, *slot),
+                        "ConfirmedBlockhash",
                     )
                 }
             }
@@ -349,6 +360,12 @@ impl ServeRepair {
         Ok(out)
     }
 
+    fn duplicate_bytes(&self, slot: Slot) -> Result<Vec<u8>> {
+        let req = RepairProtocol::ConfirmedBlockhash(self.my_info.clone(), slot);
+        let out = serialize(&req)?;
+        Ok(out)
+    }
+
     pub fn repair_request(
         &self,
         cluster_slots: &ClusterSlots,
@@ -390,6 +407,13 @@ impl ServeRepair {
             RepairType::Orphan(slot) => {
                 repair_stats.orphan.update(*slot);
                 Ok(self.orphan_bytes(*slot)?)
+            }
+            RepairType::ConfirmedBlockhash(slot) => {
+                datapoint_debug!(
+                    "serve_repair-duplicate_slot",
+                    ("repair-duplicate-slot", *slot, i64)
+                );
+                Ok(self.duplicate_bytes(*slot)?)
             }
         }
     }
@@ -483,6 +507,30 @@ impl ServeRepair {
             return None;
         }
         Some(res)
+    }
+
+    fn run_confirmed_blockhash(
+        recycler: &PacketsRecycler,
+        from_addr: &SocketAddr,
+        blockstore: Option<&Arc<Blockstore>>,
+        slot: Slot,
+    ) -> Option<Packets> {
+        let packet = blockstore
+            .map(|blockstore| blockstore.get_confirmed_blockhash(slot))
+            .unwrap_or(None)
+            .map(|hash| {
+                let hash_bytes = hash.as_ref();
+                let mut packet = Packet::default();
+                packet.meta.size = hash_bytes.len();
+                packet.meta.set_addr(from_addr);
+                packet.data.copy_from_slice(&hash_bytes);
+                packet
+            })?;
+        return Some(Packets::new_with_recycler_data(
+            recycler,
+            "run_highest_window_request",
+            vec![packet],
+        ));
     }
 
     fn get_data_shred_as_packet(
