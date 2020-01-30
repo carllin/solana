@@ -48,6 +48,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher>(
     let (cluster_nodes, _) = discover_cluster(&entry_point_info.gossip, nodes).unwrap();
     assert!(cluster_nodes.len() >= nodes);
     for ingress_node in &cluster_nodes {
+        println!("verifying on node: {}", ingress_node.id);
         if ignore_nodes.contains(&ingress_node.id) {
             continue;
         }
@@ -70,6 +71,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher>(
             if ignore_nodes.contains(&validator.id) {
                 continue;
             }
+            println!("polling on: {}, {:?}", validator.id, validator.client_facing_addr());
             let client = create_client(validator.client_facing_addr(), VALIDATOR_PORT_RANGE);
             client.poll_for_signature_confirmation(&sig, confs).unwrap();
         }

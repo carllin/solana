@@ -67,7 +67,7 @@ impl GenericRpcClientRequest for RpcClientRequest {
                     return Ok(json["result"].clone());
                 }
                 Err(e) => {
-                    info!("{:?} failed, {} retries left: {:?}", request, retries, e);
+                    println!("{:?} failed, {} retries left: {:?}", request, retries, e);
                     if retries == 0 {
                         return Err(e.into());
                     }

@@ -30,7 +30,7 @@ jsonrpc-http-server = "14.0.5"
 jsonrpc-pubsub = "14.0.5"
 jsonrpc-ws-server = "14.0.5"
 libc = "0.2.66"
-log = "0.4.8"
+log = {version = "0.4.8", features = ["max_level_debug", "release_max_level_warn"] }
 memmap = { version = "0.7.0", optional = true }
 nix = "0.16.1"
 num-traits = "0.2"

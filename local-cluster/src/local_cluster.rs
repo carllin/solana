@@ -673,7 +673,7 @@ impl Cluster for LocalCluster {
 
         // Restart the node
         let validator_info = &cluster_validator_info.info;
-
+        println!("restarted node rpc: {:?}", node.info.rpc);
         let restarted_node = Validator::new(
             node,
             &validator_info.keypair,

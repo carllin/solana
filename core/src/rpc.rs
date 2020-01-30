@@ -853,7 +853,7 @@ impl RpcSol for RpcSolImpl {
         signature_str: String,
         commitment: Option<CommitmentConfig>,
     ) -> Result<Option<RpcSignatureConfirmation>> {
-        debug!(
+        println!(
             "get_signature_confirmation rpc request received: {:?}",
             signature_str
         );

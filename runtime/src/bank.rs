@@ -1768,6 +1768,7 @@ impl Bank {
         &self,
         signature: &Signature,
     ) -> Option<(usize, Result<()>)> {
+        println!("get_signature_confirmation_status");
         let rcache = self.src.status_cache.read().unwrap();
         rcache.get_signature_status_slow(signature, &self.ancestors)
     }

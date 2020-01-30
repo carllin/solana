@@ -40,7 +40,7 @@ use tempfile::TempDir;
 #[serial]
 fn test_ledger_cleanup_service() {
     solana_logger::setup();
-    error!("test_ledger_cleanup_service");
+    println!("test_ledger_cleanup_service");
     let num_nodes = 3;
     let mut validator_config = ValidatorConfig::default();
     validator_config.max_ledger_slots = Some(100);
@@ -79,7 +79,7 @@ fn test_ledger_cleanup_service() {
 #[serial]
 fn test_spend_and_verify_all_nodes_1() {
     solana_logger::setup();
-    error!("test_spend_and_verify_all_nodes_1");
+    println!("test_spend_and_verify_all_nodes_1");
     let num_nodes = 1;
     let local = LocalCluster::new_with_equal_stakes(num_nodes, 10_000, 100);
     cluster_tests::spend_and_verify_all_nodes(
@@ -94,7 +94,7 @@ fn test_spend_and_verify_all_nodes_1() {
 #[serial]
 fn test_spend_and_verify_all_nodes_2() {
     solana_logger::setup();
-    error!("test_spend_and_verify_all_nodes_2");
+    println!("test_spend_and_verify_all_nodes_2");
     let num_nodes = 2;
     let local = LocalCluster::new_with_equal_stakes(num_nodes, 10_000, 100);
     cluster_tests::spend_and_verify_all_nodes(
@@ -109,7 +109,7 @@ fn test_spend_and_verify_all_nodes_2() {
 #[serial]
 fn test_spend_and_verify_all_nodes_3() {
     solana_logger::setup();
-    error!("test_spend_and_verify_all_nodes_3");
+    println!("test_spend_and_verify_all_nodes_3");
     let num_nodes = 3;
     let local = LocalCluster::new_with_equal_stakes(num_nodes, 10_000, 100);
     cluster_tests::spend_and_verify_all_nodes(
@@ -143,7 +143,7 @@ fn test_spend_and_verify_all_nodes_env_num_nodes() {
 #[should_panic]
 fn test_validator_exit_default_config_should_panic() {
     solana_logger::setup();
-    error!("test_validator_exit_default_config_should_panic");
+    println!("test_validator_exit_default_config_should_panic");
     let num_nodes = 2;
     let local = LocalCluster::new_with_equal_stakes(num_nodes, 10_000, 100);
     cluster_tests::validator_exit(&local.entry_point_info, num_nodes);
@@ -153,7 +153,7 @@ fn test_validator_exit_default_config_should_panic() {
 #[serial]
 fn test_validator_exit_2() {
     solana_logger::setup();
-    error!("test_validator_exit_2");
+    println!("test_validator_exit_2");
     let num_nodes = 2;
     let mut validator_config = ValidatorConfig::default();
     validator_config.rpc_config.enable_validator_exit = true;
@@ -174,7 +174,7 @@ fn test_validator_exit_2() {
 #[serial]
 fn test_leader_failure_4() {
     solana_logger::setup();
-    error!("test_leader_failure_4");
+    println!("test_leader_failure_4");
     let num_nodes = 4;
     let mut validator_config = ValidatorConfig::default();
     validator_config.rpc_config.enable_validator_exit = true;
@@ -435,7 +435,7 @@ fn test_kill_partition() {
 #[serial]
 fn test_two_unbalanced_stakes() {
     solana_logger::setup();
-    error!("test_two_unbalanced_stakes");
+    println!("test_two_unbalanced_stakes");
     let mut validator_config = ValidatorConfig::default();
     let num_ticks_per_second = 100;
     let num_ticks_per_slot = 10;
@@ -496,7 +496,7 @@ fn test_forwarding() {
 #[serial]
 fn test_restart_node() {
     solana_logger::setup();
-    error!("test_restart_node");
+    println!("test_restart_node");
     let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH * 2 as u64;
     let ticks_per_slot = 16;
     let validator_config = ValidatorConfig::default();
@@ -662,10 +662,11 @@ fn test_snapshot_restart_tower() {
     cluster.restart_node(&validator_id, validator_info);
 
     // Test cluster can still make progress and get confirmations in tower
+    println!("spending and verifying");
     cluster_tests::spend_and_verify_all_nodes(
         &cluster.entry_point_info,
         &cluster.funding_keypair,
-        1,
+        2,
         HashSet::new(),
     );
 }
@@ -943,7 +944,7 @@ fn test_no_voting() {
 #[test]
 fn test_repairman_catchup() {
     solana_logger::setup();
-    error!("test_repairman_catchup");
+    println!("test_repairman_catchup");
     run_repairman_catchup(3);
 }
 

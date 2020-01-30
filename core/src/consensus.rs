@@ -235,9 +235,13 @@ impl Tower {
 
     pub fn record_bank_vote(&mut self, vote: Vote) -> Option<Slot> {
         let slot = *vote.slots.last().unwrap_or(&0);
-        trace!("{} record_vote for {}", self.node_pubkey, slot);
+        println!("{} record_vote for {}", self.node_pubkey, slot);
         let root_slot = self.lockouts.root_slot;
         self.lockouts.process_vote_unchecked(&vote);
+        println!(
+            "{} tower votes: {:?}",
+            self.node_pubkey, self.lockouts.votes
+        );
         self.last_vote = vote;
 
         datapoint_debug!(
@@ -439,10 +443,9 @@ impl Tower {
                     .expect("vote_account isn't a VoteState?");
                 vote_state.root_slot = Some(root);
                 vote_state.votes.retain(|v| v.slot > root);
-                trace!(
+                println!(
                     "{} lockouts initialized to {:?}",
-                    self.node_pubkey,
-                    vote_state
+                    self.node_pubkey, vote_state
                 );
 
                 assert_eq!(

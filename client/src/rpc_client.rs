@@ -1004,11 +1004,12 @@ impl RpcClient {
         let mut now = Instant::now();
         let mut confirmed_blocks = 0;
         loop {
+            println!("trying to poll for signature");
             let response = self.get_num_blocks_since_signature_confirmation(signature);
             match response {
                 Ok(count) => {
                     if confirmed_blocks != count {
-                        info!(
+                        println!(
                             "signature {} confirmed {} out of {} after {} ms",
                             signature,
                             count,
@@ -1023,7 +1024,7 @@ impl RpcClient {
                     }
                 }
                 Err(err) => {
-                    debug!("check_confirmations request failed: {:?}", err);
+                    println!("check_confirmations request failed: {:?}", err);
                 }
             };
             if now.elapsed().as_secs() > 20 {

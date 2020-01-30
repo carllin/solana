@@ -10,7 +10,7 @@ homepage = "https://solana.com/"
 
 [dependencies]
 itertools = "0.8.1"
-log = "0.4.8"
+log = {version = "0.4.8", features = ["max_level_debug", "release_max_level_warn"] }
 rand = "0.6.5"
 solana-archiver-lib = { path = "../archiver-lib", version = "0.24.0" }
 solana-config-program = { path = "../programs/config", version = "0.24.0" }

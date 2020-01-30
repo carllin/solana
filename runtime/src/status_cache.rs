@@ -102,15 +102,15 @@ impl<T: Serialize + Clone> StatusCache<T> {
         sig: &Signature,
         ancestors: &HashMap<Slot, usize>,
     ) -> Option<(usize, T)> {
-        trace!("get_signature_status_slow");
+        println!("get_signature_status_slow");
         let mut keys = vec![];
         let mut val: Vec<_> = self.cache.iter().map(|(k, _)| *k).collect();
         keys.append(&mut val);
 
         for blockhash in keys.iter() {
-            trace!("get_signature_status_slow: trying {}", blockhash);
+            println!("get_signature_status_slow: trying {}", blockhash);
             if let Some((forkid, res)) = self.get_signature_status(sig, blockhash, ancestors) {
-                trace!("get_signature_status_slow: got {}", forkid);
+                println!("get_signature_status_slow: got {}", forkid);
                 return ancestors
                     .get(&forkid)
                     .map(|id| (*id, res.clone()))
