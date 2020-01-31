@@ -271,7 +271,12 @@ impl ReplayStage {
                         let mut vote_bank_slot = None;
                         let start = allocated.get();
                         if !stats.is_locked_out && stats.vote_threshold {
-                            println!("{} voting: {} {}", my_pubkey, bank.slot(), stats.fork_weight);
+                            println!(
+                                "{} voting: {} {}",
+                                my_pubkey,
+                                bank.slot(),
+                                stats.fork_weight
+                            );
                             subscriptions.notify_subscribers(bank.slot(), &bank_forks);
                             if let Some(votable_leader) =
                                 leader_schedule_cache.slot_leader_at(bank.slot(), Some(&bank))
