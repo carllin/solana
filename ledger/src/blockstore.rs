@@ -2085,6 +2085,12 @@ impl Blockstore {
         Ok(())
     }
 
+    pub fn is_slot_confirmed(&self, slot: Slot) -> bool {
+        self.get_slot_confirmation_status(slot)
+            .map(|status| status.confirmed_blockhash.is_some())
+            .unwrap_or(false)
+    }
+
     pub fn get_slot_confirmation_status(&self, slot: Slot) -> Option<SlotConfirmationStatus> {
         self.db
             .get::<cf::SlotConfirmationStatus>(slot)

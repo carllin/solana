@@ -665,7 +665,9 @@ impl ReplayStage {
                 );
             } else {
                 if let Some(fork_progress) = progress.get(&duplicate_slot) {
-                    if fork_progress.fork_stats.confirmation_reported {
+                    if fork_progress.fork_stats.confirmation_reported
+                        && blockstore.is_slot_confirmed(duplicate_slot)
+                    {
                         Self::handle_approved_duplicate_blockhash(
                             blockstore,
                             duplicate_slot,
@@ -1717,6 +1719,7 @@ impl ReplayStage {
         total_staked: u64,
         progress: &ProgressMap,
         bank_forks: &RwLock<BankForks>,
+        blockstore: &Blockstore,
     ) -> Vec<Slot> {
         let mut confirmed_forks = vec![];
         for (slot, prog) in progress.iter() {
@@ -1732,6 +1735,7 @@ impl ReplayStage {
                 {
                     info!("validator fork confirmed {} {}ms", *slot, duration);
                     datapoint_info!("validator-confirmation", ("duration_ms", duration, i64));
+                    blockstore.set_confirmed_blockhash(*slot, bank.last_blockhash());
                     confirmed_forks.push(*slot);
                 } else {
                     debug!(
