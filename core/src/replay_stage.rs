@@ -221,7 +221,6 @@ impl ReplayStage {
         }
 
         // Start the replay stage loop
-
         let (lockouts_sender, commitment_service) =
             AggregateCommitmentService::new(&exit, block_commitment_cache);
 
@@ -644,38 +643,40 @@ impl ReplayStage {
         println!("handle votable bank {}", bank.slot());
         let (vote, tower_index) = tower.new_vote_from_bank(bank, vote_account);
         if let Some(new_root) = tower.record_bank_vote(vote) {
-            // get the root bank before squash
-            let root_bank = bank_forks
-                .read()
-                .unwrap()
-                .get(new_root)
-                .expect("Root bank doesn't exist")
-                .clone();
-            let mut rooted_banks = root_bank.parents();
-            rooted_banks.push(root_bank);
-            let rooted_slots: Vec<_> = rooted_banks.iter().map(|bank| bank.slot()).collect();
-            // Call leader schedule_cache.set_root() before blockstore.set_root() because
-            // bank_forks.root is consumed by repair_service to update gossip, so we don't want to
-            // get shreds for repair on gossip before we update leader schedule, otherwise they may
-            // get dropped.
-            leader_schedule_cache.set_root(rooted_banks.last().unwrap());
-            blockstore
-                .set_roots(&rooted_slots)
-                .expect("Ledger set roots failed");
-            bank_forks
-                .write()
-                .unwrap()
-                .set_root(new_root, snapshot_package_sender);
-            Self::handle_new_root(&bank_forks, progress);
-            latest_root_senders.iter().for_each(|s| {
-                if let Err(e) = s.send(new_root) {
-                    trace!("latest root send failed: {:?}", e);
+            if new_root > bank_forks.read().unwrap().root() {
+                // get the root bank before squash
+                let root_bank = bank_forks
+                    .read()
+                    .unwrap()
+                    .get(new_root)
+                    .expect("Root bank doesn't exist")
+                    .clone();
+                let mut rooted_banks = root_bank.parents();
+                rooted_banks.push(root_bank);
+                let rooted_slots: Vec<_> = rooted_banks.iter().map(|bank| bank.slot()).collect();
+                // Call leader schedule_cache.set_root() before blockstore.set_root() because
+                // bank_forks.root is consumed by repair_service to update gossip, so we don't want to
+                // get shreds for repair on gossip before we update leader schedule, otherwise they may
+                // get dropped.
+                leader_schedule_cache.set_root(rooted_banks.last().unwrap());
+                blockstore
+                    .set_roots(&rooted_slots)
+                    .expect("Ledger set roots failed");
+                bank_forks
+                    .write()
+                    .unwrap()
+                    .set_root(new_root, snapshot_package_sender);
+                Self::handle_new_root(&bank_forks, progress);
+                latest_root_senders.iter().for_each(|s| {
+                    if let Err(e) = s.send(new_root) {
+                        trace!("latest root send failed: {:?}", e);
+                    }
+                });
+                println!("new root {}", new_root);
+                if let Err(e) = root_bank_sender.send(rooted_banks) {
+                    trace!("root_bank_sender failed: {:?}", e);
+                    return Err(e.into());
                 }
-            });
-            println!("new root {}", new_root);
-            if let Err(e) = root_bank_sender.send(rooted_banks) {
-                trace!("root_bank_sender failed: {:?}", e);
-                return Err(e.into());
             }
         }
         Self::update_commitment_cache(bank.clone(), total_staked, lockouts_sender);

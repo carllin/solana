@@ -46,6 +46,7 @@ pub struct Tower {
     lockouts: VoteState,
     last_vote: Vote,
     last_timestamp: BlockTimestamp,
+    start_root: u64,
 }
 
 impl Tower {
@@ -57,9 +58,10 @@ impl Tower {
             lockouts: VoteState::default(),
             last_vote: Vote::default(),
             last_timestamp: BlockTimestamp::default(),
+            start_root: bank_forks.root(),
         };
 
-        tower.initialize_lockouts_from_bank_forks(&bank_forks, vote_account_pubkey);
+        //tower.initialize_lockouts_from_bank_forks(&bank_forks, vote_account_pubkey);
 
         tower
     }
@@ -296,7 +298,7 @@ impl Tower {
         let mut lockouts = self.lockouts.clone();
         lockouts.process_slot_vote_unchecked(slot);
         for vote in &lockouts.votes {
-            if vote.slot == slot {
+            if vote.slot == slot || vote.slot < self.start_root {
                 continue;
             }
             if !ancestors[&slot].contains(&vote.slot) {
@@ -306,7 +308,8 @@ impl Tower {
         if let Some(root_slot) = lockouts.root_slot {
             // This case should never happen because bank forks purges all
             // non-descendants of the root every time root is set
-            if slot != root_slot {
+            if slot > root_slot && root_slot >= self.start_root {
+                println!("slot {}", slot);
                 assert!(ancestors[&slot].contains(&root_slot));
             }
         }
@@ -324,6 +327,9 @@ impl Tower {
         lockouts.process_slot_vote_unchecked(slot);
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
         if let Some(vote) = vote {
+            if vote.slot < self.start_root {
+                return true;
+            }
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {
                 let lockout = fork_stake.stake as f64 / total_staked as f64;
                 println!(
@@ -337,6 +343,7 @@ impl Tower {
                 for (new_lockout, original_lockout) in
                     lockouts.votes.iter().zip(self.lockouts.votes.iter())
                 {
+                    println!("{} {}", new_lockout.slot, original_lockout.slot);
                     if new_lockout.slot == original_lockout.slot {
                         if new_lockout.confirmation_count <= self.threshold_depth as u32 {
                             break;
