@@ -222,7 +222,7 @@ impl ReplayStage {
                         &leader_schedule_cache,
                         &subscriptions,
                     );
-                    datapoint_debug!(
+                    datapoint_info!(
                         "replay_stage-memory",
                         (
                             "generate_new_bank_forks",
@@ -243,7 +243,7 @@ impl ReplayStage {
                         transaction_status_sender.clone(),
                         &verify_recyclers,
                     );
-                    datapoint_debug!(
+                    datapoint_info!(
                         "replay_stage-memory",
                         ("replay_active_banks", (allocated.get() - start) as i64, i64),
                     );
@@ -258,7 +258,7 @@ impl ReplayStage {
                             &tower,
                             &mut progress,
                         );
-                        datapoint_debug!(
+                        datapoint_info!(
                             "replay_stage-memory",
                             ("select_fork", (allocated.get() - start) as i64, i64),
                         );
@@ -300,7 +300,7 @@ impl ReplayStage {
                                 &latest_root_senders,
                             )?;
                         }
-                        datapoint_debug!(
+                        datapoint_info!(
                             "replay_stage-memory",
                             ("votable_bank", (allocated.get() - start) as i64, i64),
                         );
@@ -344,7 +344,7 @@ impl ReplayStage {
                         } else {
                             done = true;
                         }
-                        datapoint_debug!(
+                        datapoint_info!(
                             "replay_stage-memory",
                             ("reset_bank", (allocated.get() - start) as i64, i64),
                         );
@@ -372,7 +372,7 @@ impl ReplayStage {
                             );
                         }
                     }
-                    datapoint_debug!(
+                    datapoint_info!(
                         "replay_stage-memory",
                         ("start_leader", (allocated.get() - start) as i64, i64),
                     );
@@ -634,7 +634,7 @@ impl ReplayStage {
         bank: Arc<Bank>,
         total_staked: u64,
         lockouts_sender: &Sender<CommitmentAggregationData>,
-    ) {
+    ) { 
         if let Err(e) = lockouts_sender.send(CommitmentAggregationData::new(bank, total_staked)) {
             trace!("lockouts_sender failed: {:?}", e);
         }
