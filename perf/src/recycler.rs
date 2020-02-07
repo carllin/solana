@@ -121,7 +121,7 @@ impl<T: Default + Reset> RecyclerX<T> {
         let total = self.stats.total.load(Ordering::Relaxed);
         let reuse = self.stats.reuse.load(Ordering::Relaxed);
         let freed = self.stats.total.fetch_add(1, Ordering::Relaxed);
-        datapoint_debug!(
+        datapoint_info!(
             "recycler",
             ("gc_len", len as i64, i64),
             ("total", total as i64, i64),
@@ -134,6 +134,9 @@ impl<T: Default + Reset> RecyclerX<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use solana_measure::thread_mem_usage;
+    use std::sync::mpsc::channel;
+    use std::thread::{self, Builder, JoinHandle};
 
     impl Reset for u64 {
         fn reset(&mut self) {
@@ -155,5 +158,96 @@ mod tests {
         let z = recycler.allocate("test_recycler2");
         assert_eq!(z, 10);
         assert_eq!(recycler.recycler.gc.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_allocate() {
+        let (s, r) = channel();
+        let sender = Builder::new()
+            .name("sender".to_string())
+            .spawn(move || {
+                let allocated = thread_mem_usage::Allocatedp::default();
+                let recycler = Recycler::default();
+                loop {
+                    let start = allocated.get();
+                    {
+                        let y: u64 = recycler.allocate("test_recycler1");
+                        s.send(y);
+                    }
+                    let a = allocated.get();
+                    let da = allocated.get_deallocated();
+                    println!(
+                        "sender a: {}, da: {}, diff: {}",
+                        a,
+                        da,
+                        a.saturating_sub(da)
+                    );
+                }
+            })
+            .unwrap();
+
+        let receiver = Builder::new()
+            .name("receiver".to_string())
+            .spawn(move || {
+                let allocated = thread_mem_usage::Allocatedp::default();
+                loop {
+                    let x = r.recv();
+                    let a = allocated.get();
+                    let da = allocated.get_deallocated();
+                    println!(
+                        "receiver a: {}, da: {}, diff: {}",
+                        a,
+                        da,
+                        a.saturating_sub(da)
+                    );
+                }
+            })
+            .unwrap();
+        
+        loop {}
+    }
+
+    #[test]
+    fn test_allocate2() {
+        let (s, r) = channel();
+        let sender = Builder::new()
+            .name("sender".to_string())
+            .spawn(move || {
+                let allocated = thread_mem_usage::Allocatedp::default();
+                loop {
+                    let start = allocated.get();
+                    let y = 0;
+                    s.send(y);
+                    let a = allocated.get();
+                    let da = allocated.get_deallocated();
+                    println!(
+                        "sender a: {}, da: {}, diff: {}",
+                        a,
+                        da,
+                        a.saturating_sub(da)
+                    );
+                }
+            })
+            .unwrap();
+
+        let receiver = Builder::new()
+            .name("receiver".to_string())
+            .spawn(move || {
+                let allocated = thread_mem_usage::Allocatedp::default();
+                loop {
+                    let x = r.recv();
+                    let a = allocated.get();
+                    let da = allocated.get_deallocated();
+                    println!(
+                        "receiver a: {}, da: {}, diff: {}",
+                        a,
+                        da,
+                        a.saturating_sub(da)
+                    );
+                }
+            })
+            .unwrap();
+        
+        loop {}
     }
 }

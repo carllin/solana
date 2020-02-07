@@ -58,6 +58,8 @@ fn recv_loop(
                 if len > 0 {
                     channel.send(msgs)?;
                 }
+
+                thread_mem_usage::datapoint(name);
                 break;
             }
         }
@@ -92,7 +94,6 @@ pub fn receiver(
     Builder::new()
         .name("solana-receiver".to_string())
         .spawn(move || {
-            thread_mem_usage::datapoint(name);
             let _ = recv_loop(&sock, exit, &packet_sender, &recycler.clone(), name);
         })
         .unwrap()
