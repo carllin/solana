@@ -21,6 +21,16 @@ pub struct RecyclerX<T> {
     gc: Mutex<Vec<T>>,
     stats: RecyclerStats,
     id: usize,
+    name: String,
+}
+
+impl<T: Default> RecyclerX<T> {
+    fn new(name: String) -> Self {
+        Self {
+            name: name,
+            ..RecyclerX::default()
+        }
+    }
 }
 
 impl<T: Default> Default for RecyclerX<T> {
@@ -31,6 +41,7 @@ impl<T: Default> Default for RecyclerX<T> {
             gc: Mutex::new(vec![]),
             stats: RecyclerStats::default(),
             id,
+            name: String::default(),
         }
     }
 }
@@ -53,6 +64,14 @@ pub fn enable_recycler_warming() {
 
 fn warm_recyclers() -> bool {
     WARM_RECYCLERS.load(Ordering::Relaxed)
+}
+
+impl<T: Default> Recycler<T> {
+    pub fn new(name: String) -> Self {
+        Self {
+            recycler: Arc::new(RecyclerX::new(name)),
+        }
+    }
 }
 
 impl<T: Default + Reset + Sized> Recycler<T> {
@@ -124,6 +143,7 @@ impl<T: Default + Reset> RecyclerX<T> {
         datapoint_info!(
             "recycler",
             ("gc_len", len as i64, i64),
+            ("name", self.name, String),
             ("total", total as i64, i64),
             ("freed", freed as i64, i64),
             ("reuse", reuse as i64, i64),

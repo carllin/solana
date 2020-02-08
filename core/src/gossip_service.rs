@@ -36,11 +36,12 @@ impl GossipService {
             &cluster_info.read().unwrap().my_data().id,
             gossip_socket.local_addr().unwrap()
         );
+        let recycler = Recycler::new("gossip_receiver".to_string());
         let t_receiver = streamer::receiver(
             gossip_socket.clone(),
             &exit,
             request_sender,
-            Recycler::default(),
+            recycler,
             "gossip_receiver",
         );
         let (response_sender, response_receiver) = channel();
