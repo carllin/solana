@@ -634,7 +634,7 @@ impl ReplayStage {
         bank: Arc<Bank>,
         total_staked: u64,
         lockouts_sender: &Sender<CommitmentAggregationData>,
-    ) { 
+    ) {
         if let Err(e) = lockouts_sender.send(CommitmentAggregationData::new(bank, total_staked)) {
             trace!("lockouts_sender failed: {:?}", e);
         }

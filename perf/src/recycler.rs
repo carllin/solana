@@ -203,7 +203,7 @@ mod tests {
                 }
             })
             .unwrap();
-        
+
         loop {}
     }
 
@@ -247,7 +247,7 @@ mod tests {
                 }
             })
             .unwrap();
-        
+
         loop {}
     }
 }

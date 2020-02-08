@@ -42,7 +42,7 @@ use solana_sdk::{
     clock::{Slot, DEFAULT_MS_PER_SLOT},
     pubkey::Pubkey,
     signature::{Keypair, KeypairUtil, Signable, Signature},
-    timing::{duration_as_ms, timestamp},
+    timing::{duration_as_us, timestamp},
     transaction::Transaction,
 };
 use std::{
@@ -180,6 +180,22 @@ enum Protocol {
     RequestWindowIndex(ContactInfo, u64, u64),
     RequestHighestWindowIndex(ContactInfo, u64, u64),
     RequestOrphan(ContactInfo, u64),
+}
+
+#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+enum ProtocolDebug {
+    /// Gossip protocol messages
+    PullRequest,
+    PullResponse,
+    PushMessage,
+    PruneMessage,
+
+    /// Window protocol messages
+    /// TODO: move this message to a different module
+    RequestWindowIndex,
+    RequestHighestWindowIndex,
+    RequestOrphan,
 }
 
 impl ClusterInfo {
@@ -1288,12 +1304,14 @@ impl ClusterInfo {
         packets: Packets,
         response_sender: &PacketSender,
         epoch_ms: u64,
+        request_tracker: &mut HashMap<ProtocolDebug, HashMap<Pubkey, u64>>,
     ) {
         // iter over the packets, collect pulls separately and process everything else
         let allocated = thread_mem_usage::Allocatedp::default();
         let mut gossip_pull_data: Vec<PullData> = vec![];
         let timeouts = me.read().unwrap().gossip.make_timeouts(&stakes, epoch_ms);
         packets.packets.iter().for_each(|packet| {
+            let now = Instant::now();
             let from_addr = packet.meta.addr();
             limited_deserialize(&packet.data[..packet.meta.size])
                 .into_iter()
@@ -1306,6 +1324,11 @@ impl ClusterInfo {
                                 1
                             );
                         } else if let Some(contact_info) = caller.contact_info() {
+                            *request_tracker
+                                .entry(ProtocolDebug::PullRequest)
+                                .or_default()
+                                .entry(contact_info.id)
+                                .or_insert(0) += 1;
                             if contact_info.id == me.read().unwrap().gossip.id {
                                 warn!("PullRequest ignored, I'm talking to myself");
                                 inc_new_counter_debug!("cluster_info-window-request-loopback", 1);
@@ -1317,6 +1340,10 @@ impl ClusterInfo {
                                 });
                             }
                         }
+                        datapoint_info!(
+                            "cluster_info-generate-response-time",
+                            ("PullRequest", duration_as_us(&now.elapsed()) as i64, i64),
+                        );
                         datapoint_info!(
                             "solana-gossip-listen-memory",
                             ("pull_request", (allocated.get() - start) as i64, i64),
@@ -1335,6 +1362,15 @@ impl ClusterInfo {
                             ret
                         });
                         Self::handle_pull_response(me, &from, data, &timeouts);
+                        *request_tracker
+                            .entry(ProtocolDebug::PullResponse)
+                            .or_default()
+                            .entry(from)
+                            .or_insert(0) += 1;
+                        datapoint_info!(
+                            "cluster_info-generate-response-time",
+                            ("PullResponse", duration_as_us(&now.elapsed()) as i64, i64),
+                        );
                         datapoint_info!(
                             "solana-gossip-listen-memory",
                             ("pull_response", (allocated.get() - start) as i64, i64),
@@ -1353,9 +1389,22 @@ impl ClusterInfo {
                             ret
                         });
                         let rsp = Self::handle_push_message(me, recycler, &from, data, stakes);
+                        *request_tracker
+                            .entry(ProtocolDebug::PushMessage)
+                            .or_default()
+                            .entry(from)
+                            .or_insert(0) += 1;
                         if let Some(rsp) = rsp {
                             let _ignore_disconnect = response_sender.send(rsp);
                         }
+                        datapoint_info!(
+                            "cluster_info-generate-response-time",
+                            (
+                                "RequestWindowIndex",
+                                duration_as_us(&now.elapsed()) as i64,
+                                i64
+                            )
+                        );
                         datapoint_info!(
                             "solana-gossip-listen-memory",
                             ("push_message", (allocated.get() - start) as i64, i64),
@@ -1369,6 +1418,11 @@ impl ClusterInfo {
                                 "cluster_info-prune_message-size",
                                 data.prunes.len()
                             );
+                            *request_tracker
+                                .entry(ProtocolDebug::PruneMessage)
+                                .or_default()
+                                .entry(from)
+                                .or_insert(0) += 1;
                             match me.write().unwrap().gossip.process_prune_msg(
                                 &from,
                                 &data.destination,
@@ -1388,14 +1442,24 @@ impl ClusterInfo {
                             inc_new_counter_debug!("cluster_info-gossip_prune_msg_verify_fail", 1);
                         }
                         datapoint_info!(
+                            "cluster_info-generate-response-time",
+                            ("PruneMessage", duration_as_us(&now.elapsed()) as i64, i64),
+                        );
+                        datapoint_info!(
                             "solana-gossip-listen-memory",
                             ("prune_message", (allocated.get() - start) as i64, i64),
                         );
                     }
                     _ => {
                         let start = allocated.get();
-                        let rsp =
-                            Self::handle_repair(me, recycler, &from_addr, blockstore, request);
+                        let rsp = Self::handle_repair(
+                            me,
+                            recycler,
+                            &from_addr,
+                            blockstore,
+                            request,
+                            request_tracker,
+                        );
                         if let Some(rsp) = rsp {
                             let _ignore_disconnect = response_sender.send(rsp);
                         }
@@ -1465,7 +1529,6 @@ impl ClusterInfo {
         timeouts: &HashMap<Pubkey, u64>,
     ) {
         let len = data.len();
-        let now = Instant::now();
         let self_id = me.read().unwrap().gossip.id;
         trace!("PullResponse me: {} from: {} len={}", self_id, from, len);
         me.write()
@@ -1474,8 +1537,6 @@ impl ClusterInfo {
             .process_pull_response(from, timeouts, data, timestamp());
         inc_new_counter_debug!("cluster_info-pull_request_response", 1);
         inc_new_counter_debug!("cluster_info-pull_request_response-size", len);
-
-        report_time_spent("ReceiveUpdates", &now.elapsed(), &format!(" len: {}", len));
     }
 
     fn handle_push_message(
@@ -1551,6 +1612,7 @@ impl ClusterInfo {
         from_addr: &SocketAddr,
         blockstore: Option<&Arc<Blockstore>>,
         request: Protocol,
+        request_tracker: &mut HashMap<ProtocolDebug, HashMap<Pubkey, u64>>,
     ) -> Option<Packets> {
         let now = Instant::now();
 
@@ -1576,48 +1638,74 @@ impl ClusterInfo {
             .update_record_timestamp(&from.id, timestamp());
         let my_info = me.read().unwrap().my_data();
 
-        let (res, label) = {
+        let res = {
             match &request {
                 Protocol::RequestWindowIndex(from, slot, shred_index) => {
+                    *request_tracker
+                        .entry(ProtocolDebug::RequestWindowIndex)
+                        .or_default()
+                        .entry(from.id)
+                        .or_insert(0) += 1;
                     inc_new_counter_debug!("cluster_info-request-window-index", 1);
-                    (
-                        Self::run_window_request(
-                            recycler,
-                            from,
-                            &from_addr,
-                            blockstore,
-                            &my_info,
-                            *slot,
-                            *shred_index,
+                    datapoint_info!(
+                        "cluster_info-generate-response-time",
+                        (
+                            "RequestWindowIndex",
+                            duration_as_us(&now.elapsed()) as i64,
+                            i64
                         ),
-                        "RequestWindowIndex",
+                    );
+                    Self::run_window_request(
+                        recycler,
+                        from,
+                        &from_addr,
+                        blockstore,
+                        &my_info,
+                        *slot,
+                        *shred_index,
                     )
                 }
 
-                Protocol::RequestHighestWindowIndex(_, slot, highest_index) => {
+                Protocol::RequestHighestWindowIndex(from, slot, highest_index) => {
+                    *request_tracker
+                        .entry(ProtocolDebug::RequestHighestWindowIndex)
+                        .or_default()
+                        .entry(from.id)
+                        .or_insert(0) += 1;
                     inc_new_counter_debug!("cluster_info-request-highest-window-index", 1);
-                    (
-                        Self::run_highest_window_request(
-                            recycler,
-                            &from_addr,
-                            blockstore,
-                            *slot,
-                            *highest_index,
-                        ),
-                        "RequestHighestWindowIndex",
+                    datapoint_info!(
+                        "cluster_info-generate-response-time",
+                        (
+                            "RequestHighestWindowIndex",
+                            duration_as_us(&now.elapsed()) as i64,
+                            i64
+                        )
+                    );
+                    Self::run_highest_window_request(
+                        recycler,
+                        &from_addr,
+                        blockstore,
+                        *slot,
+                        *highest_index,
                     )
                 }
-                Protocol::RequestOrphan(_, slot) => {
+                Protocol::RequestOrphan(from, slot) => {
+                    *request_tracker
+                        .entry(ProtocolDebug::RequestOrphan)
+                        .or_default()
+                        .entry(from.id)
+                        .or_insert(0) += 1;
                     inc_new_counter_debug!("cluster_info-request-orphan", 1);
-                    (
-                        Self::run_orphan(
-                            recycler,
-                            &from_addr,
-                            blockstore,
-                            *slot,
-                            MAX_ORPHAN_REPAIR_RESPONSES,
-                        ),
-                        "RequestOrphan",
+                    datapoint_info!(
+                        "cluster_info-generate-response-time",
+                        ("RequestOrphan", duration_as_us(&now.elapsed()) as i64, i64)
+                    );
+                    Self::run_orphan(
+                        recycler,
+                        &from_addr,
+                        blockstore,
+                        *slot,
+                        MAX_ORPHAN_REPAIR_RESPONSES,
                     )
                 }
                 _ => panic!("Not a repair request"),
@@ -1625,7 +1713,6 @@ impl ClusterInfo {
         };
 
         trace!("{}: received repair request: {:?}", self_id, request);
-        report_time_spent(label, &now.elapsed(), "");
         res
     }
 
@@ -1637,6 +1724,7 @@ impl ClusterInfo {
         bank_forks: Option<&Arc<RwLock<BankForks>>>,
         requests_receiver: &PacketReceiver,
         response_sender: &PacketSender,
+        request_tracker: &mut HashMap<ProtocolDebug, HashMap<Pubkey, u64>>,
     ) -> Result<()> {
         //TODO cache connections
         let timeout = Duration::new(1, 0);
@@ -1665,9 +1753,11 @@ impl ClusterInfo {
             reqs,
             response_sender,
             epoch_ms,
+            request_tracker,
         );
         Ok(())
     }
+
     pub fn listen(
         me: Arc<RwLock<Self>>,
         blockstore: Option<Arc<Blockstore>>,
@@ -1680,29 +1770,90 @@ impl ClusterInfo {
         let recycler = PacketsRecycler::default();
         Builder::new()
             .name("solana-listen".to_string())
-            .spawn(move || loop {
-                let e = Self::run_listen(
-                    &me,
-                    &recycler,
-                    blockstore.as_ref(),
-                    bank_forks.as_ref(),
-                    &requests_receiver,
-                    &response_sender,
-                );
-                if exit.load(Ordering::Relaxed) {
-                    return;
-                }
-                if e.is_err() {
-                    let me = me.read().unwrap();
-                    debug!(
-                        "{}: run_listen timeout, table size: {}",
-                        me.gossip.id,
-                        me.gossip.crds.table.len()
+            .spawn(move || {
+                let mut now = Instant::now();
+                let mut request_tracker = HashMap::new();
+                loop {
+                    let e = Self::run_listen(
+                        &me,
+                        &recycler,
+                        blockstore.as_ref(),
+                        bank_forks.as_ref(),
+                        &requests_receiver,
+                        &response_sender,
+                        &mut request_tracker,
                     );
+                    if now.elapsed().as_millis() > 5000 {
+                        Self::print_tracker(&request_tracker);
+                        now = Instant::now();
+                    }
+                    if exit.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if e.is_err() {
+                        let me = me.read().unwrap();
+                        debug!(
+                            "{}: run_listen timeout, table size: {}",
+                            me.gossip.id,
+                            me.gossip.crds.table.len()
+                        );
+                    }
+                    thread_mem_usage::datapoint("solana-listen");
                 }
-                thread_mem_usage::datapoint("solana-listen");
             })
             .unwrap()
+    }
+
+    fn print_tracker(request_tracker: &HashMap<ProtocolDebug, HashMap<Pubkey, u64>>) {
+        for (protocol, validator_totals) in request_tracker {
+            let total: u64 = validator_totals.values().sum();
+            match protocol {
+                ProtocolDebug::PruneMessage => {
+                    datapoint_info!(
+                        "cluster_info-total-    -types",
+                        ("PruneMessage", total as i64, i64),
+                    );
+                }
+                ProtocolDebug::PullRequest => {
+                    datapoint_info!(
+                        "cluster_info-total-request-types",
+                        ("PullRequest", total as i64, i64),
+                    );
+                }
+                ProtocolDebug::PullResponse => {
+                    datapoint_info!(
+                        "cluster_info-total-request-types",
+                        ("PullResponse", total as i64, i64),
+                    );
+                }
+                ProtocolDebug::PushMessage => {
+                    datapoint_info!(
+                        "cluster_info-total-request-types",
+                        ("PushMessage", total as i64, i64),
+                    );
+                }
+                ProtocolDebug::RequestHighestWindowIndex => {
+                    datapoint_info!(
+                        "cluster_info-total-request-types",
+                        ("RequestHighestWindowIndex", total as i64, i64),
+                    );
+                }
+                ProtocolDebug::RequestOrphan => {
+                    datapoint_info!(
+                        "cluster_info-total-request-types",
+                        ("RequestOrphan", total as i64, i64),
+                    );
+                }
+                ProtocolDebug::RequestWindowIndex => {
+                    datapoint_info!(
+                        "cluster_info-total-request-types",
+                        ("RequestWindowIndex", total as i64, i64),
+                    );
+                }
+            }
+        }
+
+        info!("People sending responses: {:#?}", request_tracker);
     }
 
     fn gossip_contact_info(id: &Pubkey, gossip_addr: SocketAddr) -> ContactInfo {
@@ -1988,13 +2139,6 @@ impl Node {
         new.sockets.tpu_forwards = vec![];
 
         new
-    }
-}
-
-fn report_time_spent(label: &str, time: &Duration, extra: &str) {
-    let count = duration_as_ms(time);
-    if count > 5 {
-        info!("{} took: {} ms {}", label, count, extra);
     }
 }
 
