@@ -7,7 +7,7 @@ pub fn datapoint(_name: &'static str) {
         let allocated = thread::allocatedp::mib().unwrap();
         let allocated = allocated.read().unwrap();
         let mem = allocated.get();
-        solana_metrics::datapoint_debug!("thread-memory", (_name, mem as i64, i64));
+        solana_metrics::datapoint_info!("thread-memory", (_name, mem as i64, i64));
     }
 }
 
