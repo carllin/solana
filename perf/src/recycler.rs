@@ -49,6 +49,7 @@ impl<T: Default> Default for RecyclerX<T> {
 pub trait Reset {
     fn reset(&mut self);
     fn warm(&mut self, size_hint: usize);
+    fn length(&self) -> usize;
     fn set_recycler(&mut self, recycler: Weak<RecyclerX<Self>>)
     where
         Self: std::marker::Sized;
@@ -124,10 +125,10 @@ impl<T: Default + Reset + Sized> Recycler<T> {
 
 impl<T: Default + Reset> RecyclerX<T> {
     pub fn recycle(&self, x: T) {
-        let len = {
+        let (len, total_len) = {
             let mut gc = self.gc.lock().expect("recycler lock in pub fn recycle");
             gc.push(x);
-            gc.len()
+            (gc.len(), gc.iter().map(|x| x.length()).sum::<usize>())
         };
 
         let max_gc = self.stats.max_gc.load(Ordering::Relaxed);
@@ -143,6 +144,7 @@ impl<T: Default + Reset> RecyclerX<T> {
         datapoint_info!(
             "recycler",
             ("gc_len", len as i64, i64),
+            ("gc_total_len", total_len as i64, i64),
             ("name", self.name, String),
             ("total", total as i64, i64),
             ("freed", freed as i64, i64),
