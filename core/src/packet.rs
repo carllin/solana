@@ -6,6 +6,7 @@ pub use solana_perf::packet::{
 };
 
 use solana_metrics::inc_new_counter_debug;
+use solana_perf::recycler::Reset;
 pub use solana_sdk::packet::{Meta, Packet, PACKET_DATA_SIZE};
 use std::{io::Result, net::UdpSocket, time::Instant};
 
@@ -22,7 +23,16 @@ pub fn recv_from(obj: &mut Packets, socket: &UdpSocket, name: &str) -> Result<us
     let start = Instant::now();
     let mut total_size = 0;
     loop {
-        obj.packets.resize(i + NUM_RCVMMSGS, Packet::default());
+        if name == "gossip_receiver" {
+            info!("Resize before {}, i: {}", obj.packets.length(), i);
+        }
+        obj.packets.resize(
+            std::cmp::min(i + NUM_RCVMMSGS, obj.packets.length()),
+            Packet::default(),
+        );
+        if name == "gossip_receiver" {
+            info!("Resize after {}, i: {}", obj.packets.length(), i);
+        }
         match recv_mmsg(socket, &mut obj.packets[i..]) {
             Err(_) if i > 0 => {
                 if start.elapsed().as_millis() > 1 {
@@ -41,7 +51,7 @@ pub fn recv_from(obj: &mut Packets, socket: &UdpSocket, name: &str) -> Result<us
                 total_size += size;
                 // Try to batch into big enough buffers
                 // will cause less re-shuffling later on.
-                if start.elapsed().as_millis() > 1 || total_size >= PACKETS_BATCH_SIZE {
+                if start.elapsed().as_millis() > 1 || i >= PACKETS_PER_BATCH {
                     if name == "gossip_receiver" {
                         info!("{} got {} packets, total_size: {}", name, i, total_size);
                     }
