@@ -9,7 +9,7 @@ use solana_metrics::inc_new_counter_debug;
 pub use solana_sdk::packet::{Meta, Packet, PACKET_DATA_SIZE};
 use std::{io::Result, net::UdpSocket, time::Instant};
 
-pub fn recv_from(obj: &mut Packets, socket: &UdpSocket) -> Result<usize> {
+pub fn recv_from(obj: &mut Packets, socket: &UdpSocket, name: &str) -> Result<usize> {
     let mut i = 0;
     //DOCUMENTED SIDE-EFFECT
     //Performance out of the IO without poll
@@ -37,12 +37,14 @@ pub fn recv_from(obj: &mut Packets, socket: &UdpSocket) -> Result<usize> {
                 if i == 0 {
                     socket.set_nonblocking(true)?;
                 }
-                trace!("got {} packets", npkts);
                 i += npkts;
                 total_size += size;
                 // Try to batch into big enough buffers
                 // will cause less re-shuffling later on.
                 if start.elapsed().as_millis() > 1 || total_size >= PACKETS_BATCH_SIZE {
+                    if name == "gossip_receiver" {
+                        info!("{} got {} packets, total_size: {}", name, i, total_size);
+                    }
                     break;
                 }
             }

@@ -49,7 +49,7 @@ fn recv_loop(
             if exit.load(Ordering::Relaxed) {
                 return Ok(());
             }
-            if let Ok(len) = packet::recv_from(&mut msgs, sock) {
+            if let Ok(len) = packet::recv_from(&mut msgs, sock, name) {
                 if len == NUM_RCVMMSGS {
                     num_max_received += 1;
                 }
@@ -64,7 +64,7 @@ fn recv_loop(
             }
         }
         if recv_count > 1024 {
-            datapoint_debug!(
+            datapoint_info!(
                 name,
                 ("received", recv_count as i64, i64),
                 ("call_count", i64::from(call_count), i64),
