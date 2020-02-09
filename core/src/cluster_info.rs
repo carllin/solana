@@ -1340,11 +1340,7 @@ impl ClusterInfo {
                                 });
                             }
                         }
-                        datapoint_info!(
-                            "cluster_info-generate-response-time",
-                            ("PullRequest", duration_as_us(&now.elapsed()) as i64, i64),
-                        );
-                        datapoint_info!(
+                        datapoint_debug!(
                             "solana-gossip-listen-memory",
                             ("pull_request", (allocated.get() - start) as i64, i64),
                         );
@@ -1362,16 +1358,7 @@ impl ClusterInfo {
                             ret
                         });
                         Self::handle_pull_response(me, &from, data, &timeouts);
-                        *request_tracker
-                            .entry(ProtocolDebug::PullResponse)
-                            .or_default()
-                            .entry(from)
-                            .or_insert(0) += 1;
-                        datapoint_info!(
-                            "cluster_info-generate-response-time",
-                            ("PullResponse", duration_as_us(&now.elapsed()) as i64, i64),
-                        );
-                        datapoint_info!(
+                        datapoint_debug!(
                             "solana-gossip-listen-memory",
                             ("pull_response", (allocated.get() - start) as i64, i64),
                         );
@@ -1397,15 +1384,7 @@ impl ClusterInfo {
                         if let Some(rsp) = rsp {
                             let _ignore_disconnect = response_sender.send(rsp);
                         }
-                        datapoint_info!(
-                            "cluster_info-generate-response-time",
-                            (
-                                "RequestWindowIndex",
-                                duration_as_us(&now.elapsed()) as i64,
-                                i64
-                            )
-                        );
-                        datapoint_info!(
+                        datapoint_debug!(
                             "solana-gossip-listen-memory",
                             ("push_message", (allocated.get() - start) as i64, i64),
                         );
@@ -1441,17 +1420,12 @@ impl ClusterInfo {
                         } else {
                             inc_new_counter_debug!("cluster_info-gossip_prune_msg_verify_fail", 1);
                         }
-                        datapoint_info!(
-                            "cluster_info-generate-response-time",
-                            ("PruneMessage", duration_as_us(&now.elapsed()) as i64, i64),
-                        );
-                        datapoint_info!(
+                        datapoint_debug!(
                             "solana-gossip-listen-memory",
                             ("prune_message", (allocated.get() - start) as i64, i64),
                         );
                     }
                     _ => {
-                        let start = allocated.get();
                         let rsp = Self::handle_repair(
                             me,
                             recycler,
@@ -1463,10 +1437,6 @@ impl ClusterInfo {
                         if let Some(rsp) = rsp {
                             let _ignore_disconnect = response_sender.send(rsp);
                         }
-                        datapoint_info!(
-                            "solana-gossip-listen-memory",
-                            ("repair", (allocated.get() - start) as i64, i64),
-                        );
                     }
                 })
         });

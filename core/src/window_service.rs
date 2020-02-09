@@ -16,7 +16,6 @@ use solana_ledger::bank_forks::BankForks;
 use solana_ledger::blockstore::{self, Blockstore, MAX_DATA_SHREDS_PER_SLOT};
 use solana_ledger::leader_schedule_cache::LeaderScheduleCache;
 use solana_ledger::shred::Shred;
-use solana_measure::thread_mem_usage;
 use solana_metrics::{inc_new_counter_debug, inc_new_counter_error};
 use solana_rayon_threadlimit::get_thread_count;
 use solana_runtime::bank::Bank;
@@ -318,25 +317,16 @@ impl WindowService {
         };
         Builder::new()
             .name("solana-check-duplicate".to_string())
-            .spawn(move || {
-                let allocated = thread_mem_usage::Allocatedp::default();
-                loop {
-                    let start = allocated.get();
-                    if exit.load(Ordering::Relaxed) {
+            .spawn(move || loop {
+                if exit.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let mut noop = || {};
+                if let Err(e) = run_check_duplicate(&blockstore, &duplicate_receiver) {
+                    if Self::should_exit_on_error(e, &mut noop, &handle_error) {
                         break;
                     }
-
-                    let mut noop = || {};
-                    if let Err(e) = run_check_duplicate(&blockstore, &duplicate_receiver) {
-                        if Self::should_exit_on_error(e, &mut noop, &handle_error) {
-                            break;
-                        }
-                    }
-
-                    datapoint_info!(
-                        "window_service-memory",
-                        ("check_duplicate", (allocated.get() - start) as i64, i64),
-                    );
                 }
             })
             .unwrap()
@@ -363,9 +353,7 @@ impl WindowService {
                 let handle_duplicate = |shred| {
                     let _ = duplicate_sender.send(shred);
                 };
-                let allocated = thread_mem_usage::Allocatedp::default();
                 loop {
-                    let start = allocated.get();
                     if exit.load(Ordering::Relaxed) {
                         break;
                     }
@@ -380,10 +368,6 @@ impl WindowService {
                             break;
                         }
                     }
-                    datapoint_info!(
-                        "window_service-memory",
-                        ("insert", (allocated.get() - start) as i64, i64),
-                    );
                 }
             })
             .unwrap()
@@ -410,7 +394,6 @@ impl WindowService {
         Builder::new()
             .name("solana-window".to_string())
             .spawn(move || {
-                let allocated = thread_mem_usage::Allocatedp::default();
                 let _exit = Finalizer::new(exit.clone());
                 trace!("{}: RECV_WINDOW started", id);
                 let thread_pool = rayon::ThreadPoolBuilder::new()
@@ -433,7 +416,6 @@ impl WindowService {
                             now = Instant::now();
                         }
                     };
-                    let start = allocated.get();
                     if let Err(e) = recv_window(
                         &blockstore,
                         &insert_sender,
@@ -458,14 +440,6 @@ impl WindowService {
                     } else {
                         now = Instant::now();
                     }
-                    datapoint_info!(
-                        "window_service-memory",
-                        (
-                            "recv_window",
-                            (allocated.get() - start) as i64,
-                            i64
-                        ),
-                    );
                 }
             })
             .unwrap()
