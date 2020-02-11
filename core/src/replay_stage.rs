@@ -1043,6 +1043,7 @@ pub(crate) mod tests {
         transaction_status_service::TransactionStatusService,
     };
     use crossbeam_channel::unbounded;
+    use regex::Regex;
     use solana_client::rpc_response::{RpcEncodedTransaction, RpcTransactionWithStatusMeta};
     use solana_ledger::{
         block_error::BlockError,
@@ -1069,6 +1070,9 @@ pub(crate) mod tests {
     };
     use solana_stake_program::stake_state;
     use solana_vote_program::vote_state::{self, Vote, VoteState};
+    use std::fs::File;
+    use std::io::BufRead;
+    use std::io::BufReader;
     use std::{
         fs::remove_dir_all,
         iter,
@@ -1894,70 +1898,27 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_child_bank_heavier() {
-        let node_keypair = Keypair::new();
-        let vote_keypair = Keypair::new();
-        let node_pubkey = node_keypair.pubkey();
-        let mut keypairs = HashMap::new();
-        keypairs.insert(
-            node_pubkey,
-            ValidatorKeypairs::new(node_keypair, vote_keypair),
-        );
+    fn parse_log_for_chain() {
+        let file = "/Users/carl/Projects/solana/DebugConsensus/bsv-syslog.log";
+        let current_slot = 797772;
+        let mut parents = HashSet::new();
+        parents.insert(current_slot);
+        let f = File::open(file).unwrap();
+        let reader = BufReader::new(f);
 
-        let (bank_forks, mut progress) = initialize_state(&keypairs);
-        let bank_forks = Arc::new(RwLock::new(bank_forks));
-        let mut tower = Tower::new_with_key(&node_pubkey);
+        let new_forks_regex = Regex::new(r"new fork:([0-9]+) parent:([0-9]+)").unwrap();
+        for line in reader.lines() {
+            let line = line.unwrap();
+            let res = new_forks_regex.captures(&line);
 
-        // Create the tree of banks in a BankForks object
-        let forks = tr(0) / (tr(1) / (tr(2) / (tr(3))));
-
-        let mut voting_simulator = VoteSimulator::new(&forks);
-        let mut cluster_votes: HashMap<Pubkey, Vec<Slot>> = HashMap::new();
-        let votes: Vec<Slot> = vec![0, 2];
-        for vote in &votes {
-            assert_eq!(
-                voting_simulator.simulate_vote(
-                    *vote,
-                    &bank_forks,
-                    &mut cluster_votes,
-                    &keypairs,
-                    keypairs.get(&node_pubkey).unwrap(),
-                    &mut progress,
-                    &mut tower,
-                ),
-                VoteResult::Ok
-            );
-        }
-
-        let mut frozen_banks: Vec<_> = bank_forks
-            .read()
-            .unwrap()
-            .frozen_banks()
-            .values()
-            .cloned()
-            .collect();
-
-        ReplayStage::compute_bank_stats(
-            &Pubkey::default(),
-            &bank_forks.read().unwrap().ancestors(),
-            &mut frozen_banks,
-            &tower,
-            &mut progress,
-        );
-
-        frozen_banks.sort_by_key(|bank| bank.slot());
-        for pair in frozen_banks.windows(2) {
-            let first = progress
-                .get(&pair[0].slot())
-                .unwrap()
-                .fork_stats
-                .fork_weight;
-            let second = progress
-                .get(&pair[1].slot())
-                .unwrap()
-                .fork_stats
-                .fork_weight;
-            assert!(second >= first);
+            if let Some(res) = res {
+                let new_slot = res.get(1).unwrap().as_str().parse::<u64>().unwrap();
+                let parent = res.get(2).unwrap().as_str().parse::<u64>().unwrap();
+                if parents.contains(&parent) {
+                    parents.insert(new_slot);
+                    println!("{}", line);
+                }
+            }
         }
     }
 }
