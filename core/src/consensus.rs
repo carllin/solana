@@ -477,9 +477,11 @@ mod test {
             for slot in *votes {
                 vote_state.process_slot_vote_unchecked(*slot);
             }
-            vote_state
-                .serialize(&mut account.data)
-                .expect("serialize state");
+            VoteState::serialize(
+                &VoteStateVersions::Current(Box::new(vote_state)),
+                &mut account.data,
+            )
+            .expect("serialize state");
             stakes.push((Pubkey::new_rand(), (*lamports, account)));
         }
         stakes
