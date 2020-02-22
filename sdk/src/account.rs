@@ -10,11 +10,16 @@ use std::{
     rc::Rc,
 };
 
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
 /// An Account with data that is stored on chain
 #[repr(C)]
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct Account {
+pub struct Account<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     /// lamports in the account
     pub lamports: u64,
     /// data held in this account
@@ -34,7 +39,7 @@ pub struct Account {
 
 /// skip comparison of account.hash, since it is only meaningful when the account is loaded in a
 /// given fork and some tests do not have that.
-impl PartialEq for Account {
+impl<T: Serialize + DeserializeOwned> PartialEq for Account<T> {
     fn eq(&self, other: &Self) -> bool {
         self.lamports == other.lamports
             && self.data == other.data
@@ -44,9 +49,9 @@ impl PartialEq for Account {
     }
 }
 
-impl Eq for Account {}
+impl<T: Serialize + DeserializeOwned> Eq for Account<T> {}
 
-impl fmt::Debug for Account {
+impl<T: Serialize + DeserializeOwned> fmt::Debug for Account<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let data_len = cmp::min(64, self.data.len());
         let data_str = if data_len > 0 {
@@ -68,7 +73,7 @@ impl fmt::Debug for Account {
     }
 }
 
-impl Account {
+impl<T: Serialize + DeserializeOwned> Account<T> {
     pub fn new(lamports: u64, space: usize, owner: &Pubkey) -> Self {
         Self {
             lamports,
@@ -81,11 +86,7 @@ impl Account {
         Rc::new(RefCell::new(Self::new(lamports, space, owner)))
     }
 
-    pub fn new_data<T: serde::Serialize>(
-        lamports: u64,
-        state: &T,
-        owner: &Pubkey,
-    ) -> Result<Self, bincode::Error> {
+    pub fn new_data(lamports: u64, state: &T, owner: &Pubkey) -> Result<Self, bincode::Error> {
         let data = bincode::serialize(state)?;
         Ok(Self {
             lamports,
@@ -94,7 +95,7 @@ impl Account {
             ..Self::default()
         })
     }
-    pub fn new_ref_data<T: serde::Serialize>(
+    pub fn new_ref_data(
         lamports: u64,
         state: &T,
         owner: &Pubkey,
@@ -102,7 +103,7 @@ impl Account {
         Ok(RefCell::new(Self::new_data(lamports, state, owner)?))
     }
 
-    pub fn new_data_with_space<T: serde::Serialize>(
+    pub fn new_data_with_space(
         lamports: u64,
         state: &T,
         space: usize,
@@ -114,7 +115,7 @@ impl Account {
 
         Ok(account)
     }
-    pub fn new_ref_data_with_space<T: serde::Serialize>(
+    pub fn new_ref_data_with_space(
         lamports: u64,
         state: &T,
         space: usize,
@@ -125,11 +126,11 @@ impl Account {
         )?))
     }
 
-    pub fn deserialize_data<T: serde::de::DeserializeOwned>(&self) -> Result<T, bincode::Error> {
+    pub fn deserialize_data(&self) -> Result<T, bincode::Error> {
         bincode::deserialize(&self.data)
     }
 
-    pub fn serialize_data<T: serde::Serialize>(&mut self, state: &T) -> Result<(), bincode::Error> {
+    pub fn serialize_data(&mut self, state: &T) -> Result<(), bincode::Error> {
         if bincode::serialized_size(state)? > self.data.len() as u64 {
             return Err(Box::new(bincode::ErrorKind::SizeLimit));
         }
@@ -139,14 +140,14 @@ impl Account {
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct KeyedAccount<'a> {
+pub struct KeyedAccount<'a, T: Serialize + DeserializeOwned> {
     is_signer: bool, // Transaction was signed by this account's key
     is_writable: bool,
     key: &'a Pubkey,
-    pub account: &'a RefCell<Account>,
+    pub account: &'a RefCell<Account<T>>,
 }
 
-impl<'a> KeyedAccount<'a> {
+impl<'a, T: Serialize + DeserializeOwned> KeyedAccount<'a, T> {
     pub fn signer_key(&self) -> Option<&Pubkey> {
         if self.is_signer {
             Some(self.key)
@@ -221,13 +222,15 @@ impl<'a> KeyedAccount<'a> {
     }
 }
 
-impl<'a> PartialEq for KeyedAccount<'a> {
+impl<'a, T: Serialize + DeserializeOwned> PartialEq for KeyedAccount<'a, T> {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key
     }
 }
 
-impl<'a> From<(&'a Pubkey, &'a RefCell<Account>)> for KeyedAccount<'a> {
+impl<'a, T: Serialize + DeserializeOwned> From<(&'a Pubkey, &'a RefCell<Account<T>>)>
+    for KeyedAccount<'a, T>
+{
     fn from((key, account): (&'a Pubkey, &'a RefCell<Account>)) -> Self {
         Self {
             is_signer: false,
@@ -238,7 +241,9 @@ impl<'a> From<(&'a Pubkey, &'a RefCell<Account>)> for KeyedAccount<'a> {
     }
 }
 
-impl<'a> From<(&'a Pubkey, bool, &'a RefCell<Account>)> for KeyedAccount<'a> {
+impl<'a, T: Serialize + DeserializeOwned> From<(&'a Pubkey, bool, &'a RefCell<Account<T>>)>
+    for KeyedAccount<'a, T>
+{
     fn from((key, is_signer, account): (&'a Pubkey, bool, &'a RefCell<Account>)) -> Self {
         Self {
             is_signer,
@@ -249,7 +254,9 @@ impl<'a> From<(&'a Pubkey, bool, &'a RefCell<Account>)> for KeyedAccount<'a> {
     }
 }
 
-impl<'a> From<&'a (&'a Pubkey, &'a RefCell<Account>)> for KeyedAccount<'a> {
+impl<'a, T: Serialize + DeserializeOwned> From<&'a (&'a Pubkey, &'a RefCell<Account<T>>)>
+    for KeyedAccount<'a, T>
+{
     fn from((key, account): &'a (&'a Pubkey, &'a RefCell<Account>)) -> Self {
         Self {
             is_signer: false,
@@ -260,15 +267,15 @@ impl<'a> From<&'a (&'a Pubkey, &'a RefCell<Account>)> for KeyedAccount<'a> {
     }
 }
 
-pub fn create_keyed_accounts<'a>(
-    accounts: &'a [(&'a Pubkey, &'a RefCell<Account>)],
-) -> Vec<KeyedAccount<'a>> {
+pub fn create_keyed_accounts<'a, T: Serialize + DeserializeOwned>(
+    accounts: &'a [(&'a Pubkey, &'a RefCell<Account<T>>)],
+) -> Vec<KeyedAccount<'a, T>> {
     accounts.iter().map(Into::into).collect()
 }
 
-pub fn create_keyed_is_signer_accounts<'a>(
-    accounts: &'a [(&'a Pubkey, bool, &'a RefCell<Account>)],
-) -> Vec<KeyedAccount<'a>> {
+pub fn create_keyed_is_signer_accounts<'a, T: Serialize + DeserializeOwned>(
+    accounts: &'a [(&'a Pubkey, bool, &'a RefCell<Account<T>>)],
+) -> Vec<KeyedAccount<'a, T>> {
     accounts
         .iter()
         .map(|(key, is_signer, account)| KeyedAccount {
@@ -280,9 +287,9 @@ pub fn create_keyed_is_signer_accounts<'a>(
         .collect()
 }
 
-pub fn create_keyed_readonly_accounts(
-    accounts: &[(Pubkey, RefCell<Account>)],
-) -> Vec<KeyedAccount> {
+pub fn create_keyed_readonly_accounts<T: Serialize + DeserializeOwned>(
+    accounts: &[(Pubkey, RefCell<Account<T>>)],
+) -> Vec<KeyedAccount<T>> {
     accounts
         .iter()
         .map(|(key, account)| KeyedAccount {

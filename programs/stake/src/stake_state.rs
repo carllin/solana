@@ -535,7 +535,7 @@ pub trait StakeAccount {
     ) -> Result<(), InstructionError>;
 }
 
-impl<'a> StakeAccount for KeyedAccount<'a> {
+impl<'a, T: Serialize + DeserializeOwned> StakeAccount for KeyedAccount<'a, T> {
     fn initialize(
         &self,
         authorized: &Authorized,

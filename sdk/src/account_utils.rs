@@ -4,6 +4,7 @@ use crate::{
     instruction::InstructionError,
 };
 use bincode::ErrorKind;
+use serde::{Serialize, de::DeserializeOwned};
 
 /// Convenience trait to covert bincode errors to instruction errors.
 pub trait StateMut<T> {
@@ -31,7 +32,7 @@ where
     }
 }
 
-impl<'a, T> State<T> for KeyedAccount<'a>
+impl<'a, T: Serialize + DeserializeOwned> State<T> for KeyedAccount<'a, T>
 where
     T: serde::Serialize + serde::de::DeserializeOwned,
 {

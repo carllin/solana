@@ -10,6 +10,7 @@ use crate::{
 };
 use serde_derive::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::HashSet};
+use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Clone, Copy)]
 pub struct Meta {
@@ -70,7 +71,7 @@ pub trait NonceAccount {
     ) -> Result<(), InstructionError>;
 }
 
-impl<'a> NonceAccount for KeyedAccount<'a> {
+impl<'a, T: Serialize + DeserializeOwned> NonceAccount for KeyedAccount<'a, T> {
     fn advance_nonce_account(
         &self,
         recent_blockhashes: &RecentBlockhashes,
