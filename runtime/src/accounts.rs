@@ -15,7 +15,6 @@ use log::*;
 use rayon::slice::ParallelSliceMut;
 use solana_sdk::{
     account::Account,
-    bank_hash::BankHash,
     clock::Slot,
     hash::Hash,
     native_loader,
@@ -510,7 +509,7 @@ impl Accounts {
         }
     }
 
-    pub fn bank_hash_at(&self, slot_id: Slot) -> BankHash {
+    pub fn bank_hash_at(&self, slot_id: Slot) -> Hash {
         self.bank_hash_info_at(slot_id).hash
     }
 
@@ -1313,7 +1312,7 @@ mod tests {
     #[should_panic]
     fn test_accounts_empty_bank_hash() {
         let accounts = Accounts::new(Vec::new());
-        accounts.bank_hash_at(0);
+        accounts.bank_hash_at(1);
     }
 
     fn check_accounts(accounts: &Accounts, pubkeys: &Vec<Pubkey>, num: usize) {
