@@ -1181,6 +1181,7 @@ impl AccountsDB {
         let bank_hashes = self.bank_hashes.read().unwrap();
         if let Some(found_hash_info) = bank_hashes.get(&slot) {
             if calculated_hash == found_hash_info.snapshot_hash {
+                println!("Passed bank hash check");
                 Ok(())
             } else {
                 warn!(

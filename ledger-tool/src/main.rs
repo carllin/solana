@@ -28,11 +28,26 @@ use std::{
     process::{exit, Command, Stdio},
     str::FromStr,
 };
+use solana_runtime::bank::Bank;
 
 #[derive(PartialEq)]
 enum LedgerOutputMethod {
     Print,
     Json,
+}
+
+pub fn load_bank_from_archive(
+    account_paths: Vec<PathBuf>,
+    snapshot_config: &SnapshotConfig,
+) -> Bank {
+    let tar =
+        snapshot_utils::get_snapshot_archive_path(&snapshot_config.snapshot_package_output_path);
+    snapshot_utils::bank_from_archive(
+        &account_paths,
+        &snapshot_config.snapshot_path,
+        &tar,
+    )
+    .unwrap()
 }
 
 fn output_slot(blockstore: &Blockstore, slot: Slot, method: &LedgerOutputMethod) {
@@ -701,6 +716,14 @@ fn main() {
             .arg(&halt_at_slot_arg)
             .arg(&hard_forks_arg)
         ).subcommand(
+            SubCommand::with_name("verify-snapshot")
+            .about("Convert accounts in snapshot")
+            .arg(&no_snapshot_arg)
+            .arg(&account_paths_arg)
+            .arg(&halt_at_slot_arg)
+            .arg(&hard_forks_arg)
+        )
+        .subcommand(
             SubCommand::with_name("prune")
             .about("Prune the ledger at the block height")
             .arg(
@@ -943,6 +966,9 @@ fn main() {
                 }
             }
         }
+        ("verify-snapshot", Some(arg_matches)) => {
+            load_bank_from_snapshot(arg_matches, &ledger_path);
+        }
         ("print-accounts", Some(arg_matches)) => {
             let dev_halt_at_slot = value_t!(arg_matches, "halt_at_slot", Slot).ok();
             let process_options = ProcessOptions {
@@ -1121,4 +1147,26 @@ fn main() {
         }
         _ => unreachable!(),
     };
+}
+
+fn load_bank_from_snapshot(
+    arg_matches: &ArgMatches,
+    ledger_path: &PathBuf,
+) -> Bank {
+    let snapshot_config = SnapshotConfig {
+        snapshot_interval_slots: 0, // Value doesn't matter
+        snapshot_package_output_path: ledger_path.clone(),
+        snapshot_path: ledger_path.clone().join("snapshot"),
+        trusted_validators: None,
+    };
+    let account_paths = if let Some(account_paths) = arg_matches.value_of("account_paths") {
+        account_paths.split(',').map(PathBuf::from).collect()
+    } else {
+        vec![ledger_path.join("accounts")]
+    };
+
+    bank_forks_utils::load_bank_from_archive(
+        account_paths,
+        &snapshot_config,
+    )
 }
