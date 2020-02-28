@@ -45,11 +45,19 @@ pub fn load_bank_from_archive(
 ) -> Bank {
     let tar = snapshot_utils::get_highest_snapshot_archive_path(
         &snapshot_config.snapshot_package_output_path,
-    ).unwrap();
+    )
+    .map(|x| x.0)
+    .unwrap_or_else(|| {
+        println!("Path: {:?}", snapshot_config.snapshot_package_output_path);
+        snapshot_config
+            .snapshot_package_output_path
+            .join("snapshot.tar.bz2")
+    });
+
     snapshot_utils::bank_from_archive(
         &account_paths,
         &snapshot_config.snapshot_path,
-        &tar.0,
+        &tar,
         should_verify,
         should_deserialize_bank_hash,
     )

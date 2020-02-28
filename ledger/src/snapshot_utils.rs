@@ -439,7 +439,9 @@ pub fn bank_from_archive<P: AsRef<Path>>(
 ) -> Result<Bank> {
     // Untar the snapshot into a temp directory under `snapshot_config.snapshot_path()`
     let unpack_dir = tempfile::tempdir_in(snapshot_path)?;
+    println!("untarring: {:?}", snapshot_tar.as_ref());
     untar_snapshot_in(&snapshot_tar, &unpack_dir)?;
+    println!("done untarring");
 
     let mut measure = Measure::start("bank rebuild from snapshot");
     let unpacked_accounts_dir = unpack_dir.as_ref().join(TAR_ACCOUNTS_DIR);
