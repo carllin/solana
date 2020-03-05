@@ -13,10 +13,8 @@ use solana_ledger::{
 use solana_sdk::{clock::Slot, epoch_schedule::EpochSchedule, pubkey::Pubkey};
 
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::HashSet,
     iter::Iterator,
-    net::UdpSocket,
-    ops::Bound::{Included, Unbounded},
     net::{SocketAddr, UdpSocket},
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, RwLock},
@@ -132,8 +130,12 @@ impl RepairService {
                         ..
                     } => {
                         let new_root = blockstore.last_root();
-                        let last_slot = bank_forks.read().unwrap().working_bank().slot();
-                        let (mut full, partial) = Self::scan_slots(blockstore, new_root, last_slot);
+                        let mut full: Vec<_> = Self::find_completed_slots(blockstore, new_root)
+                            .into_iter()
+                            .collect();
+                        let partial: Vec<_> = Self::find_incomplete_slots(blockstore, new_root)
+                            .into_iter()
+                            .collect();
                         let mut received_completed = Self::recv_completed(completed_slots_receiver);
                         full.append(&mut received_completed);
                         Self::update_cluster_info_epoch_slots(
@@ -245,7 +247,9 @@ impl RepairService {
         root: Slot,
         max_repairs: usize,
     ) -> Result<Vec<RepairType>> {
-        let incomplete = Self::find_incomplete_slots(&Pubkey::default(), blockstore, root);
+        let incomplete: Vec<_> = Self::find_incomplete_slots(&Pubkey::default(), blockstore, root)
+            .into_iter()
+            .collect();
         Self::generate_repairs(repairs, blockstore, root, &incomplete, max_repairs)
     }
 
@@ -327,9 +331,7 @@ impl RepairService {
         let last_epoch_slot = epoch_schedule.get_last_slot_in_epoch(last_confirmed_epoch);
         let mut new_slots = Self::find_completed_slots(blockstore, root);
         new_slots.retain(|x| *x <= last_epoch_slot);
-        new_slots.sort();
-        new_slots.dedup();
-        new_slots
+        new_slots.into_iter().collect()
     }
 
     fn initialize_epoch_slots(
@@ -352,33 +354,17 @@ impl RepairService {
         cluster_info.write().unwrap().push_epoch_slots(&new_slots);
     }
 
-    fn scan_slots(blockstore: &Blockstore, start: Slot, end: Slot) -> (Vec<Slot>, Vec<Slot>) {
-        let mut full = vec![];
-        let mut partial = vec![];
-        for slot in start..=end {
-            if let Some(meta) = blockstore.meta(slot).unwrap() {
-                if meta.is_full() {
-                    full.push(slot);
+    fn find_completed_slots(blockstore: &Blockstore, root: Slot) -> HashSet<Slot> {
+        blockstore
+            .live_slots_iterator(root)
+            .filter_map(|(slot, slot_meta)| {
+                if slot_meta.is_full() {
+                    Some(slot)
                 } else {
-                    partial.push(slot);
+                    None
                 }
-            }
-        }
-        (full, partial)
-    }
-
-    fn find_completed_slots(blockstore: &Blockstore, root: Slot) -> Vec<Slot> {
-        let mut new_slots = vec![];
-        let meta_iter = blockstore
-            .slot_meta_iterator(root + 1)
-            .expect("Couldn't get db iterator");
-
-        for (current_slot, meta) in meta_iter {
-            if meta.is_full() {
-                new_slots.push(current_slot);
-            }
-        }
-        new_slots
+            })
+            .collect()
     }
 
     // Update the gossiped structure used for the "Repairmen" repair protocol. See book
@@ -391,7 +377,6 @@ impl RepairService {
         completed
     }
 
-    #[cfg(test)]
     fn find_incomplete_slots(blockstore: &Blockstore, root: Slot) -> HashSet<Slot> {
         blockstore
             .live_slots_iterator(root)
