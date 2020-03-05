@@ -249,7 +249,7 @@ impl RepairService {
         root: Slot,
         max_repairs: usize,
     ) -> Result<Vec<RepairType>> {
-        let incomplete: Vec<_> = Self::find_incomplete_slots(&Pubkey::default(), blockstore, root)
+        let incomplete: Vec<_> = Self::find_incomplete_slots(blockstore, root)
             .into_iter()
             .collect();
         Self::generate_repairs(repairs, blockstore, root, &incomplete, max_repairs)
