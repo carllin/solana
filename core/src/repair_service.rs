@@ -381,26 +381,6 @@ impl RepairService {
         new_slots
     }
 
-    #[cfg(test)]
-    fn find_incomplete_slots(self_id: &Pubkey, blockstore: &Blockstore, root: Slot) -> Vec<Slot> {
-        let mut incomplete_slots = vec![];
-        let mut pending_slots = vec![root];
-        while !pending_slots.is_empty() {
-            let slot = pending_slots.pop().unwrap();
-            if let Some(slot_meta) = blockstore.meta(slot).unwrap() {
-                if slot_meta.is_full() {
-                    debug!("{}: IS_FULL {}", self_id, slot);
-                    pending_slots.push(slot + 1);
-                    continue;
-                }
-                incomplete_slots.push(slot);
-                let next_slots = slot_meta.next_slots;
-                pending_slots.extend(next_slots);
-            }
-        }
-        incomplete_slots
-    }
-
     // Update the gossiped structure used for the "Repairmen" repair protocol. See book
     // for details.
     fn recv_completed(completed_slots_receiver: &CompletedSlotsReceiver) -> Vec<Slot> {
@@ -411,7 +391,7 @@ impl RepairService {
         completed
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn find_incomplete_slots(blockstore: &Blockstore, root: Slot) -> HashSet<Slot> {
         blockstore
             .live_slots_iterator(root)
