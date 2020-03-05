@@ -6,6 +6,8 @@ use crate::{
     result::Result,
     serve_repair::{RepairType, ServeRepair},
 };
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use solana_ledger::{
     bank_forks::BankForks,
     blockstore::{Blockstore, CompletedSlotsReceiver, SlotMeta},
@@ -160,7 +162,7 @@ impl RepairService {
             };
 
             if let Ok(mut repairs) = repairs {
-                repairs.sort();
+                repairs.shuffle(&mut thread_rng());
                 debug!("{}:CLUSTER_SLOTS REPAIRS: {:?}", self_id, repairs);
                 let reqs: Vec<((SocketAddr, Vec<u8>), RepairType)> = repairs
                     .into_iter()

@@ -37,21 +37,6 @@ pub enum RepairType {
     Shred(Slot, u64),
 }
 
-impl Ord for RepairType {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match (self, other) {
-            (RepairType::Orphan(a), RepairType::Orphan(b)) => a.cmp(b),
-            (RepairType::HighestShred(a1, a2), RepairType::HighestShred(b1, b2)) => {
-                (a1, a2).cmp(&(b1, b2))
-            }
-            (RepairType::Shred(a1, a2), RepairType::Shred(b1, b2)) => (a1, a2).cmp(&(b1, b2)),
-            (RepairType::Orphan(_), _) => std::cmp::Ordering::Less,
-            (RepairType::HighestShred(_, _), RepairType::Orphan(_)) => std::cmp::Ordering::Greater,
-            (RepairType::HighestShred(_, _), _) => std::cmp::Ordering::Less,
-            (RepairType::Shred(_, _), _) => std::cmp::Ordering::Greater,
-        }
-    }
-}
 impl RepairType {
     pub fn slot(&self) -> Slot {
         match self {
