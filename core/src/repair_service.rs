@@ -333,6 +333,7 @@ impl RepairService {
         let last_epoch_slot = epoch_schedule.get_last_slot_in_epoch(last_confirmed_epoch);
         let mut new_slots = Self::find_completed_slots(blockstore, root);
         new_slots.retain(|x| *x <= last_epoch_slot);
+        new_slots.remove(&root);
         new_slots.into_iter().collect()
     }
 
@@ -639,7 +640,7 @@ mod test {
                 .into_iter()
                 .flat_map(|(shreds, _)| shreds)
                 .collect();
-            let fork2 = vec![8, 12];
+            let fork2 = vec![8, root, 12];
             let fork2_shreds = make_chaining_slot_entries(&fork2, num_entries_per_slot);
 
             // Remove the last shred from each slot to make an incomplete slot
@@ -656,27 +657,31 @@ mod test {
                 .insert_shreds(fork2_incomplete_shreds, None, false)
                 .unwrap();
 
-            // Test that only slots > root from fork1 were included
+            // Test that only slots > root from fork1 were included, and that none
+            // of the incomplete slots from fork 2 were included
             let epoch_schedule = EpochSchedule::custom(32, 32, false);
 
-            let full_slots =
+            let mut full_slots =
                 RepairService::get_completed_slots_past_root(&blockstore, root, &epoch_schedule);
 
             let mut expected: Vec<_> = fork1.into_iter().filter(|x| *x > root).collect();
+            full_slots.sort();
             assert_eq!(full_slots, expected);
 
             // Test that slots past the last confirmed epoch boundary don't get included
             let last_epoch = epoch_schedule.get_leader_schedule_epoch(root);
             let last_slot = epoch_schedule.get_last_slot_in_epoch(last_epoch);
-            let fork3 = vec![last_slot, last_slot + 1];
+            let fork3 = vec![root, last_slot, last_slot + 1];
             let fork3_shreds: Vec<_> = make_chaining_slot_entries(&fork3, num_entries_per_slot)
                 .into_iter()
                 .flat_map(|(shreds, _)| shreds)
                 .collect();
+
             blockstore.insert_shreds(fork3_shreds, None, false).unwrap();
-            let full_slots =
+            let mut full_slots =
                 RepairService::get_completed_slots_past_root(&blockstore, root, &epoch_schedule);
             expected.push(last_slot);
+            full_slots.sort();
             assert_eq!(full_slots, expected);
         }
         Blockstore::destroy(&blockstore_path).expect("Expected successful database destruction");
