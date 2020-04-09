@@ -453,6 +453,7 @@ fn shape_network_steps(
 }
 
 fn parse_interface(interfaces: &str) -> &str {
+    println!("lines {:#?}", interfaces.lines());
     for line in interfaces.lines() {
         if line != "ifb0" {
             return line;
