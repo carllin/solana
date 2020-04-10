@@ -81,7 +81,7 @@ pub mod columns {
     pub struct Orphans;
 
     #[derive(Debug)]
-    /// The dead slots column
+    /// The confirmed slots column
     pub struct SlotConfirmationStatus;
 
     #[derive(Debug)]
@@ -131,8 +131,8 @@ struct Rocks(rocksdb::DB);
 impl Rocks {
     fn open(path: &Path) -> Result<Rocks> {
         use columns::{
-            AddressSignatures, DeadSlots, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards,
-            Root, ShredCode, ShredData, SlotConfirmationStatus, SlotMeta, TransactionStatus,
+            AddressSignatures, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards, Root,
+            ShredCode, ShredData, SlotConfirmationStatus, SlotMeta, TransactionStatus,
             TransactionStatusIndex,
         };
 
@@ -188,8 +188,8 @@ impl Rocks {
 
     fn columns(&self) -> Vec<&'static str> {
         use columns::{
-            AddressSignatures, DeadSlots, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards,
-            Root, ShredCode, ShredData, SlotConfirmationStatus, SlotMeta, TransactionStatus,
+            AddressSignatures, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards, Root,
+            ShredCode, ShredData, SlotConfirmationStatus, SlotMeta, TransactionStatus,
             TransactionStatusIndex,
         };
 
