@@ -534,6 +534,7 @@ impl ReplayStage {
         bank_forks: &RwLock<BankForks>,
     ) {
         bank_forks.write().unwrap().remove(duplicate_slot);
+        progress.remove(&duplicate_slot);
         // Get the descendants of `duplicate_slot`
         if let Some(slot_descendants) = descendants.get(&duplicate_slot) {
             for d in slot_descendants {
@@ -573,6 +574,7 @@ impl ReplayStage {
         bank_forks: &RwLock<BankForks>,
         last_reset_slot: u64,
         tower: &Tower,
+        blockstore: &Blockstore,
     ) -> Option<Arc<Bank>> {
         let last_vote = tower.last_vote().slots.last().cloned();
         let last_vote_ancestors = last_vote.map(|last_vote| {
@@ -594,6 +596,12 @@ impl ReplayStage {
         let mut earliest_duplicate_reset_ancestor = 0;
         let mut earliest_duplicate_vote_ancestor = 0;
         for duplicate_slot in unconfirmed_forks {
+            // Mark the duplicate slot as dead, signaling RepairService to query
+            // the cluster about alternate versions of this slot
+            blockstore
+                .set_dead_slot(*duplicate_slot)
+                .expect("Failed to mark slot as dead in blockstore");
+
             // If duplicate_slot is not yet confirmed, the
             // validator needs to purge the forks descending
             // from this slot
@@ -653,7 +661,7 @@ impl ReplayStage {
                     // `earliest_duplicate_vote_ancestor` must exist in BankForks because
                     // all entries in the `ancestors` map exists in BankForks. Furthermore,
                     // `earliest_duplicate_vote_ancestor` is a member of `unconfirmed_forks`,
-                    // so it's not equal to the root. This means it's parent must exist in
+                    // so it's not equal to the root. This means its parent must exist in
                     // BankForks
                     assert!(bank_forks.read().unwrap().get(parent_slot).is_some());
                     Some(parent_slot)
@@ -726,22 +734,16 @@ impl ReplayStage {
                     }
                 };
 
-                // Mark the duplicate as dead, signaling RepairService to query
-                // the cluster about alternate versions of this slot
-                blockstore
-                    .set_dead_slot(duplicate_slot)
-                    .expect("Failed to mark slot as dead in blockstore");
-
                 // Figure out if the validator needs to reset PoH
-                let last_reset_slot = poh_recorder.lock().unwrap().last_reset_slot();
                 if let Some(reset_bank) = Self::process_duplicate_unconfirmed_forks(
                     ancestors,
                     descendants,
                     &unconfirmed_forks,
                     progress,
                     bank_forks,
-                    last_reset_slot,
+                    poh_recorder.lock().unwrap().last_reset_slot(),
                     tower,
+                    blockstore,
                 ) {
                     Self::reset_poh_recorder(
                         &my_pubkey,
@@ -955,7 +957,6 @@ impl ReplayStage {
         );
         let tx_count_after = bank_progress.replay_progress.num_txs;
         let tx_count = tx_count_after - tx_count_before;
-
         confirm_result.map_err(|err| {
             // LedgerCleanupService should not be cleaning up anything
             // that comes after the root, so we should not see any
@@ -1938,6 +1939,7 @@ pub(crate) mod tests {
     use solana_ledger::{
         blockstore::make_slot_entries,
         blockstore::{entries_to_test_shreds, BlockstoreError},
+        blockstore_processor::{self, ProcessOptions},
         create_new_tmp_ledger,
         entry::{self, next_entry, Entry},
         genesis_utils::{create_genesis_config, create_genesis_config_with_leader},
@@ -3154,8 +3156,13 @@ pub(crate) mod tests {
                 .unwrap()
                 .fork_weight,
         );
-        let (heaviest_bank, _) =
-            ReplayStage::select_forks(&frozen_banks, &tower, &vote_simulator.progress, &ancestors, None);
+        let (heaviest_bank, _) = ReplayStage::select_forks(
+            &frozen_banks,
+            &tower,
+            &vote_simulator.progress,
+            &ancestors,
+            None,
+        );
 
         // Should pick the lower of the two equally weighted banks
         assert_eq!(heaviest_bank.unwrap().slot(), 1);
@@ -3775,49 +3782,60 @@ pub(crate) mod tests {
     fn test_process_duplicate_unconfirmed_forks() {
         // Current fork doesn't descend from the unconfirmed fork, no reset is
         // necessary
-        let unconfirmed_forks = vec![6];
+        let duplicate_unconfirmed_forks = vec![6];
         let last_reset_slot = 4;
-        assert!(
-            run_test_process_duplicate_unconfirmed_forks(unconfirmed_forks, last_reset_slot)
-                .is_none()
-        );
+        assert!(run_test_process_duplicate_unconfirmed_forks(
+            duplicate_unconfirmed_forks,
+            last_reset_slot
+        )
+        .is_none());
 
         // Duplicate slot is a descendant of the last reset, no reset
         // necessary
-        let unconfirmed_forks = vec![6];
+        let duplicate_unconfirmed_forks = vec![6];
         let last_reset_slot = 5;
-        assert!(
-            run_test_process_duplicate_unconfirmed_forks(unconfirmed_forks, last_reset_slot)
-                .is_none()
-        );
+        assert!(run_test_process_duplicate_unconfirmed_forks(
+            duplicate_unconfirmed_forks,
+            last_reset_slot
+        )
+        .is_none());
 
         // Duplicate slot is an ancestor of the last reset, reset is necessary
-        let unconfirmed_forks = vec![3];
+        let duplicate_unconfirmed_forks = vec![3];
         let last_reset_slot = 5;
         assert_eq!(
-            run_test_process_duplicate_unconfirmed_forks(unconfirmed_forks, last_reset_slot)
-                .unwrap()
-                .slot(),
+            run_test_process_duplicate_unconfirmed_forks(
+                duplicate_unconfirmed_forks,
+                last_reset_slot
+            )
+            .unwrap()
+            .slot(),
             4
         );
 
         // Duplicate slot is the same as the last reset, reset is necessary
-        let unconfirmed_forks = vec![5];
+        let duplicate_unconfirmed_forks = vec![5];
         let last_reset_slot = 5;
         assert_eq!(
-            run_test_process_duplicate_unconfirmed_forks(unconfirmed_forks, last_reset_slot)
-                .unwrap()
-                .slot(),
+            run_test_process_duplicate_unconfirmed_forks(
+                duplicate_unconfirmed_forks,
+                last_reset_slot
+            )
+            .unwrap()
+            .slot(),
             4
         );
 
         // Duplicate slot is an ancestor of the last reset, reset is necessary
-        let unconfirmed_forks = vec![4, 5];
+        let duplicate_unconfirmed_forks = vec![4, 5];
         let last_reset_slot = 6;
         assert_eq!(
-            run_test_process_duplicate_unconfirmed_forks(unconfirmed_forks, last_reset_slot)
-                .unwrap()
-                .slot(),
+            run_test_process_duplicate_unconfirmed_forks(
+                duplicate_unconfirmed_forks,
+                last_reset_slot
+            )
+            .unwrap()
+            .slot(),
             2
         );
     }
@@ -3835,12 +3853,13 @@ pub(crate) mod tests {
             let bank_forks = RwLock::new(BankForks::new(0, bank0));
             let subscriptions = Arc::new(RpcSubscriptions::default());
             let mut progress = ProgressMap::default();
+            progress.insert(0, ForkProgress::new(Hash::default(), None, None, 0, 0));
             let blockstore = Arc::new(
                 Blockstore::open(&ledger_path)
                     .expect("Expected to be able to open database ledger"),
             );
             let num_slots = 5;
-            for i in 0..num_slots {
+            for i in 0..=num_slots {
                 let ticks = entry::create_ticks(ticks_per_slot, hashes_per_tick, last_blockhash);
                 last_blockhash = ticks.last().unwrap().hash;
                 let shreds =
@@ -3848,8 +3867,16 @@ pub(crate) mod tests {
                 blockstore.insert_shreds(shreds, None, false).unwrap();
             }
 
-            // Play every slot between 0..num_slots
-            for i in 0..num_slots {
+            blockstore_processor::process_bank_0(
+                &bank_forks.read().unwrap().get(0).unwrap(),
+                &blockstore,
+                &ProcessOptions::default(),
+                &VerifyRecyclers::default(),
+            )
+            .unwrap();
+
+            // Play every slot between 1..=num_slots
+            for i in 1..=num_slots {
                 ReplayStage::generate_new_bank_forks(
                     &blockstore,
                     &bank_forks,
@@ -3877,9 +3904,6 @@ pub(crate) mod tests {
 
             // Mark a slot as duplicate
             let duplicate_slot = 1;
-            blockstore
-                .set_dead_slot(duplicate_slot)
-                .expect("Failed to mark slot as dead in blockstore");
             let unconfirmed_forks = vec![duplicate_slot];
             let last_reset_slot = 0;
             let ancestors = bank_forks.read().unwrap().ancestors();
@@ -3892,7 +3916,10 @@ pub(crate) mod tests {
                 &bank_forks,
                 last_reset_slot,
                 &Tower::new_for_tests(0, 0.67),
+                &blockstore,
             );
+            // Duplicate slot should be marked as dead
+            assert!(blockstore.is_dead(duplicate_slot));
             let verify_only_single_bank_0 =
                 |bank_forks: &RwLock<BankForks>, progress: &ProgressMap| {
                     let bf = bank_forks.read().unwrap();
@@ -3904,8 +3931,9 @@ pub(crate) mod tests {
                 };
             verify_only_single_bank_0(&bank_forks, &progress);
 
-            // All future slots past the duplicate should no longer be played
-            for _ in 1..num_slots {
+            // All future slots descended from the duplicate slot should no
+            // longer be played
+            for _ in 1..=num_slots {
                 ReplayStage::generate_new_bank_forks(
                     &blockstore,
                     &bank_forks,
@@ -4095,11 +4123,32 @@ pub(crate) mod tests {
         unconfirmed_forks: Vec<u64>,
         last_reset_slot: u64,
     ) -> Option<Arc<Bank>> {
+        let ledger_path = get_tmp_ledger_path!();
+        let blockstore =
+            Blockstore::open(&ledger_path).expect("Expected to be able to open database ledger");
         let (bank_forks, mut progress) = setup_forks();
         let ancestors = bank_forks.read().unwrap().ancestors();
         let descendants = bank_forks.read().unwrap().descendants();
         let tower = Tower::new_for_tests(0, 0.67);
-        ReplayStage::process_duplicate_unconfirmed_forks(
+        let mut frozen_banks: Vec<_> = bank_forks
+            .read()
+            .unwrap()
+            .frozen_banks()
+            .values()
+            .cloned()
+            .collect();
+        ReplayStage::compute_bank_stats(
+            &Pubkey::default(),
+            &ancestors,
+            &mut frozen_banks,
+            &tower,
+            &mut progress,
+            &VoteTracker::default(),
+            &ClusterSlots::default(),
+            &bank_forks,
+            &mut HashSet::new(),
+        );
+        let res = ReplayStage::process_duplicate_unconfirmed_forks(
             &ancestors,
             &descendants,
             &unconfirmed_forks,
@@ -4107,7 +4156,12 @@ pub(crate) mod tests {
             &bank_forks,
             last_reset_slot,
             &tower,
-        )
+            &blockstore,
+        );
+        for f in unconfirmed_forks {
+            assert!(blockstore.is_dead(f));
+        }
+        res
     }
 
     fn setup_forks() -> (RwLock<BankForks>, ProgressMap) {
@@ -4129,6 +4183,7 @@ pub(crate) mod tests {
 
         let mut vote_simulator = VoteSimulator::new(1);
         vote_simulator.fill_bank_forks(forks, &HashMap::new());
+
         (vote_simulator.bank_forks, vote_simulator.progress)
     }
 }

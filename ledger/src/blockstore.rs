@@ -2121,7 +2121,7 @@ impl Blockstore {
             .unwrap_or(SlotConfirmationStatus::default());
         if let Some(existing_hash) = slot_confirmation_status.confirmed_blockhash {
             warn!(
-                "Confirmed blockhash {} for another version of the slot already exists!",
+                "Another version of this dead slot was confirmed with hash {}",
                 existing_hash
             );
             Ok(())

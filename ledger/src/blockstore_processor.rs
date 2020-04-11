@@ -623,7 +623,7 @@ pub fn confirm_slot(
 }
 
 // Special handling required for processing the entries in slot 0
-fn process_bank_0(
+pub fn process_bank_0(
     bank0: &Arc<Bank>,
     blockstore: &Blockstore,
     opts: &ProcessOptions,
