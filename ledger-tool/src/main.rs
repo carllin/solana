@@ -70,7 +70,7 @@ fn output_slot(
     allow_dead_slots: bool,
     method: &LedgerOutputMethod,
 ) -> Result<(), String> {
-    if blockstore.is_dead(slot) {
+    /*if blockstore.is_dead(slot) {
         if allow_dead_slots {
             if *method == LedgerOutputMethod::Print {
                 println!("Slot is dead");
@@ -82,14 +82,16 @@ fn output_slot(
 
     let (entries, num_shreds, _is_full) = blockstore
         .get_slot_entries_with_shred_info(slot, 0, allow_dead_slots)
-        .map_err(|err| format!("Failed to load entries for slot {}: {}", slot, err))?;
+        .map_err(|err| format!("Failed to load entries for slot {}: {}", slot, err))?;*/
 
     if *method == LedgerOutputMethod::Print {
         println!("Slot Meta {:?}", blockstore.meta(slot));
-        println!("Number of shreds: {}", num_shreds);
+        //println!("Number of shreds: {}", num_shreds);
     }
 
-    for (entry_index, entry) in entries.iter().enumerate() {
+    Ok(())
+
+    /*for (entry_index, entry) in entries.iter().enumerate() {
         match method {
             LedgerOutputMethod::Print => {
                 println!(
@@ -127,7 +129,7 @@ fn output_slot(
         }
     }
 
-    output_slot_rewards(blockstore, slot, method)
+    output_slot_rewards(blockstore, slot, method)*/
 }
 
 fn output_ledger(

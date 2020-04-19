@@ -71,13 +71,34 @@ impl ClusterSlots {
                 }
 
                 slot_pubkeys
+                    .as_ref()
                     .unwrap()
                     .write()
                     .unwrap()
                     .insert(from.clone(), balance);
+                if *slot == 9182079 || *slot == 9182196 {
+                    let r = slot_pubkeys.as_ref().unwrap().read().unwrap();
+                    println!("slot_pubkeys {}: {:?}, len: {}", *slot, r, r.len());
+                }
             }
         }
-        self.cluster_slots.write().unwrap().retain(|x, _| *x > root);
+        let lowest = *self
+            .cluster_slots
+            .read()
+            .unwrap()
+            .keys()
+            .min()
+            .unwrap_or(&0);
+        {
+            let x = self.cluster_slots.read().unwrap().get(&lowest).cloned();
+            println!(
+                "lowest slot_pubkey {}: {:?}, len: {:?}",
+                lowest,
+                x.as_ref().map(|x| x.read().unwrap()),
+                x.as_ref().map(|x| x.read().unwrap().len())
+            );
+        };
+        //self.cluster_slots.write().unwrap().retain(|x, _| *x > root);
         self.keys
             .write()
             .unwrap()
