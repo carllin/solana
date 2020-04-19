@@ -1091,6 +1091,19 @@ impl ReplayStage {
 
         if cluster_slot_pubkeys.is_none() {
             cluster_slot_pubkeys = cluster_slots.lookup(slot);
+            cluster_slot_pubkeys.as_ref().map(|x| {
+                let y = x.read().unwrap();
+                info!(
+                    "cluster slot pubkeys for slot: {:?}, {:?}",
+                    slot,
+                    y,
+                );
+            });
+
+            if cluster_slot_pubkeys.is_none() {
+                info!("cluster slot pubkeys for slot: {:?}, None", slot);
+            }
+
             progress
                 .get_propagated_stats_mut(slot)
                 .expect("All frozen banks must exist in the Progress map")

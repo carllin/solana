@@ -539,7 +539,10 @@ pub fn confirm_slot(
         let mut load_elapsed = Measure::start("load_elapsed");
         let load_result = blockstore
             .get_slot_entries_with_shred_info(slot, progress.num_shreds, false)
-            .map_err(BlockstoreProcessorError::FailedToLoadEntries);
+            .map_err(|x| {
+                info!("get_slot_entries {} failed: {:?}", slot, x);
+                BlockstoreProcessorError::FailedToLoadEntries(x)
+            });
         load_elapsed.stop();
         if load_result.is_err() {
             timing.fetch_fail_elapsed += load_elapsed.as_us();
@@ -647,6 +650,7 @@ fn process_next_slots(
     pending_slots: &mut Vec<(SlotMeta, Arc<Bank>, Hash)>,
     fork_info: &mut HashMap<u64, (Arc<Bank>, BankForksInfo)>,
 ) -> result::Result<(), BlockstoreProcessorError> {
+    info!("next slots of {}: {:?}", meta.slot, meta.next_slots);
     if let Some(parent) = bank.parent() {
         fork_info.remove(&parent.slot());
     }
