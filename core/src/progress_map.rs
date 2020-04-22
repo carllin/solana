@@ -369,6 +369,20 @@ impl ProgressMap {
             .unwrap_or(false)
     }
 
+    pub fn set_unconfirmed_duplicate_slot(&mut self, slot: Slot, descendants: &HashSet<u64>) {
+        if let Some(fork_progress) = self.get_mut(&slot) {
+            fork_progress.duplicate_stats.is_unconfirmed_duplicate = true;
+        }
+
+        for d in descendants {
+            if let Some(fork_progress) = self.get_mut(&d) {
+                fork_progress
+                    .duplicate_stats
+                    .is_ancestor_unconfirmed_duplicate = true;
+            }
+        }
+    }
+
     pub fn get_bank_prev_leader_slot(&self, bank: &Bank) -> Option<Slot> {
         let parent_slot = bank.parent_slot();
         self.get_propagated_stats(parent_slot)

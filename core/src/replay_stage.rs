@@ -229,7 +229,7 @@ impl ReplayStage {
                     let start = allocated.get();
                     // Check to abort any duplicated slots
                     if !tpu_has_bank {
-                        Self::check_for_duplicate_slots(
+                        Self::process_duplicate_slots(
                             &my_pubkey,
                             &duplicate_slots_receiver,
                             &ancestors,
@@ -491,48 +491,6 @@ impl ReplayStage {
         );
     }
 
-    // Adds a slot `duplicate_slot` to the `unconfirmed_forks` list if no
-    // earlier ancestor of `duplicate_slot` exists in `unconfirmed_forks`
-    fn add_unconfirmed_duplicate_slot(
-        duplicate_slot: Slot,
-        unconfirmed_forks: &mut Vec<Slot>,
-        ancestors: &HashMap<Slot, HashSet<Slot>>,
-    ) {
-        let duplicate_slot_ancestors = ancestors.get(&duplicate_slot).unwrap_or_else(|| {
-            panic!(
-                "Slot {} exists in progress map but doesn't exist in the ancestors map",
-                duplicate_slot
-            )
-        });
-
-        for existing_slot in &*unconfirmed_forks {
-            // An ancestor off this slot already exists in `unconfirmed_forks`,
-            // no need to add this slot
-            if duplicate_slot_ancestors.contains(existing_slot) || *existing_slot == duplicate_slot
-            {
-                return;
-            }
-        }
-
-        // Check if an ancestor of this slot has already been marked duplicate, or
-        // if this slot is the earliest ancestor, remove the descendants
-        unconfirmed_forks.retain(|existing_slot| {
-            let existing_slot_ancestors = ancestors.get(&existing_slot).unwrap_or_else(|| {
-                panic!(
-                    "Slot {} exists unconfirmed_forks but doesn't exist in the ancestors map",
-                    existing_slot
-                )
-            });
-
-            // If `duplicate_slot` is the ancestor of some `existing_slot`,
-            // then we can delete `existing_slot` as the fork is now
-            // represented by `duplicate_slot`
-            !existing_slot_ancestors.contains(&duplicate_slot)
-        });
-
-        unconfirmed_forks.push(duplicate_slot);
-    }
-
     fn purge_unconfirmed_duplicate_slot(
         duplicate_slot: Slot,
         descendants: &HashMap<Slot, HashSet<Slot>>,
@@ -568,170 +526,8 @@ impl ReplayStage {
         }
     }
 
-    // If a reset of Poh is necessary, `process_duplicate_unconfirmed_forks_check_for_reset`
-    // will return the latest ancestor (and thus the heaviest) of the last vote that was not
-    // a duplicate block.
-    fn process_duplicate_unconfirmed_forks_check_for_reset(
-        ancestors: &HashMap<Slot, HashSet<Slot>>,
-        descendants: &HashMap<Slot, HashSet<Slot>>,
-        unconfirmed_forks: &[Slot],
-        progress: &mut ProgressMap,
-        bank_forks: &RwLock<BankForks>,
-        last_reset_slot: u64,
-        tower: &Tower,
-        blockstore: &Blockstore,
-    ) -> Option<Slot> {
-        let last_vote = tower.last_vote().slots.last().cloned();
-        let last_vote_ancestors = last_vote.map(|last_vote| {
-            ancestors.get(&last_vote).unwrap_or_else(|| {
-                panic!(
-                    "last_vote {} must be descended from the root and is > root, so must exist
-                    in bank_forks and thus must exist in ancestors map",
-                    last_reset_slot
-                )
-            })
-        });
-        let last_reset_slot_ancestors = ancestors.get(&last_reset_slot).unwrap_or_else(|| {
-            panic!(
-                "Poh was last reset to slot {} which doesn't exist in the ancestors map",
-                last_reset_slot
-            )
-        });
-        let mut reset_necessary = false;
-        let mut earliest_duplicate_reset_ancestor = 0;
-        let mut earliest_duplicate_vote_ancestor = 0;
-        for duplicate_slot in unconfirmed_forks {
-            // Mark the duplicate slot as dead, signaling RepairService to query
-            // the cluster about alternate versions of this slot
-            blockstore
-                .set_dead_slot(*duplicate_slot)
-                .expect("Failed to mark slot as dead in blockstore");
-
-            // If duplicate_slot is not yet confirmed, the
-            // validator needs to purge the forks descending
-            // from this slot
-            Self::purge_unconfirmed_duplicate_slot(
-                *duplicate_slot,
-                descendants,
-                progress,
-                bank_forks,
-            );
-
-            // Check if current Poh descends from any of these duplicate slots.
-            if *duplicate_slot == last_reset_slot
-                || last_reset_slot_ancestors.contains(&duplicate_slot)
-            {
-                if *duplicate_slot < earliest_duplicate_reset_ancestor {
-                    earliest_duplicate_reset_ancestor = *duplicate_slot;
-                }
-                reset_necessary = true;
-            }
-
-            // Check if our vote stack descends from any of these duplicate slots.
-            if Some(*duplicate_slot) == last_vote
-                || last_vote_ancestors
-                    .map(|ancestors| ancestors.contains(&duplicate_slot))
-                    .unwrap_or(false)
-            {
-                if *duplicate_slot < earliest_duplicate_vote_ancestor {
-                    earliest_duplicate_vote_ancestor = *duplicate_slot;
-                }
-            }
-        }
-
-        if reset_necessary {
-            if earliest_duplicate_vote_ancestor == 0 {
-                // No votes were for duplicate slots, return the last
-                // vote because it's still a valid slot to reset to
-                tower.last_vote().slots.last().cloned()
-            } else {
-                let parent_slot = bank_forks
-                    .read()
-                    .unwrap()
-                    .get(earliest_duplicate_vote_ancestor)
-                    .unwrap()
-                    .parent_slot();
-                // `earliest_duplicate_vote_ancestor` must exist in BankForks because
-                // all entries in the `ancestors` map exists in BankForks. Furthermore,
-                // `earliest_duplicate_vote_ancestor` is a member of `unconfirmed_forks`,
-                // so it's not equal to the root. This means its parent must exist in
-                // BankForks
-                assert!(bank_forks.read().unwrap().get(parent_slot).is_some());
-                Some(parent_slot)
-            }
-        } else {
-            None
-        }
-    }
-
-    // Purge the state data for the forks in `unconfirmed_forks`. If the
-    // current descends from a duplicate fork in `unconfirmed_forks`, then
-    // choose the best non-duplicate fork and return the bank at the tip of
-    // that fork.
-    fn process_duplicate_unconfirmed_forks(
-        ancestors: &HashMap<Slot, HashSet<Slot>>,
-        descendants: &HashMap<Slot, HashSet<Slot>>,
-        unconfirmed_forks: &[Slot],
-        progress: &mut ProgressMap,
-        bank_forks: &RwLock<BankForks>,
-        last_reset_slot: u64,
-        tower: &Tower,
-        blockstore: &Blockstore,
-    ) -> Option<Arc<Bank>> {
-        let reset_necessary = Self::process_duplicate_unconfirmed_forks_check_for_reset(
-            ancestors,
-            descendants,
-            unconfirmed_forks,
-            progress,
-            bank_forks,
-            last_reset_slot,
-            tower,
-            blockstore,
-        );
-
-        // Reset Poh so validator doesn't create another block on this
-        // fork which includes a duplicate block
-        if let Some(latest_valid_vote_ancestor) = reset_necessary {
-            // Vote and reset to the last heaviest fork that doesn't
-            // include an unconfirmed duplicate block (the duplicates
-            // have all been purged from the progress map so will be
-            // out of consideration).
-            let frozen_banks: Vec<_> = bank_forks
-                .read()
-                .unwrap()
-                .frozen_banks()
-                .values()
-                .cloned()
-                .collect();
-            let (heaviest_bank, heaviest_bank_on_same_fork) = Self::select_forks(
-                &frozen_banks,
-                &tower,
-                &progress,
-                &ancestors,
-                // We need to provide the `latest_valid_vote_ancestor` as
-                // a potential option for reset in case we can't reset to
-                // the heaviest fork (for instance if switch threshold fails).
-                Some(latest_valid_vote_ancestor),
-            );
-            let (_, reset_bank, _) = Self::select_vote_and_reset_forks(
-                &heaviest_bank,
-                &heaviest_bank_on_same_fork,
-                &ancestors,
-                &descendants,
-                &progress,
-                &tower,
-            );
-            // At the very least the last vote that wasn't a descendant of any
-            // of the duplicates should have been chosen.
-            assert!(reset_bank.is_some());
-            reset_bank
-        } else {
-            None
-        }
-    }
-
     // Checks for and handle forks with duplicate slots.
-    fn check_for_duplicate_slots(
+    fn process_duplicate_slots(
         my_pubkey: &Pubkey,
         duplicate_slots_receiver: &DuplicateSlotReceiver,
         ancestors: &HashMap<Slot, HashSet<Slot>>,
@@ -743,7 +539,6 @@ impl ReplayStage {
         tower: &Tower,
         leader_schedule_cache: &LeaderScheduleCache,
     ) {
-        let mut unconfirmed_forks = vec![];
         for duplicate_slot in duplicate_slots_receiver.try_iter() {
             // Can't skip processing rooted duplicate slots
             // because somebody else in the cluster might need
@@ -755,49 +550,36 @@ impl ReplayStage {
                     &Hash::default(),
                 );
             } else {
-                if let Some(fork_progress) = progress.get(&duplicate_slot) {
-                    if fork_progress.fork_stats.confirmation_reported
-                        && blockstore.is_slot_confirmed(duplicate_slot)
-                    {
+                // Check that the duplicate slot is one that is descended from
+                // current root, otherwise don't process it
+                if progress.get(&duplicate_slot).is_some() {
+                    if !blockstore.is_unconfirmed_duplicate(duplicate_slot) {
                         Self::handle_approved_duplicate_blockhash(
                             blockstore,
                             duplicate_slot,
                             &Hash::default(),
                         );
                     } else {
-                        Self::add_unconfirmed_duplicate_slot(
+                        // Mark the unconfirmed duplicate slot in the ProgressMap.
+                        // Note RepairService will query the cluster about alternate
+                        // versions of this slot because this slot has a duplicate
+                        // proof in Blockstore.
+                        progress.set_unconfirmed_duplicate_slot(
                             duplicate_slot,
-                            &mut unconfirmed_forks,
-                            ancestors,
+                            descendants
+                                .get(&duplicate_slot)
+                                .unwrap_or(&HashSet::default()),
                         );
                     }
-                };
-
-                // Figure out if the validator needs to reset PoH
-                if let Some(reset_bank) = Self::process_duplicate_unconfirmed_forks(
-                    ancestors,
-                    descendants,
-                    &unconfirmed_forks,
-                    progress,
-                    bank_forks,
-                    poh_recorder.lock().unwrap().last_reset_slot(),
-                    tower,
-                    blockstore,
-                ) {
-                    Self::reset_poh_recorder(
-                        &my_pubkey,
-                        &blockstore,
-                        &reset_bank,
-                        poh_recorder,
-                        &leader_schedule_cache,
-                    )
                 };
             }
         }
     }
 
     // TODO: should update gossip bloom filter which contains
-    // the hashes of any duplicate blocks
+    // the hashes of any duplicate blocks.
+    // TODO: needs to be called for a slot even if confirmation happens
+    // after ReplayStage marked a slot as duplicate
     fn handle_approved_duplicate_blockhash(
         _blockstore: &Blockstore,
         _slot: Slot,
