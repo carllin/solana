@@ -8,7 +8,7 @@ use crate::{
     commitment::{AggregateCommitmentService, BlockCommitmentCache, CommitmentAggregationData},
     consensus::{StakeLockout, Tower},
     poh_recorder::{PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
-    progress_map::{ForkProgress, ForkStats, ProgressMap, PropagatedStats},
+    progress_map::{DuplicateStats, ForkProgress, ForkStats, ProgressMap, PropagatedStats},
     result::Result,
     rewards_recorder_service::RewardsRecorderSender,
     rpc_subscriptions::RpcSubscriptions,
@@ -165,6 +165,11 @@ impl ReplayStage {
                 // Initialize progress map with any root banks
                 for bank in frozen_banks {
                     let prev_leader_slot = progress.get_bank_prev_leader_slot(&bank);
+                    let duplicate_stats = DuplicateStats {
+                        is_unconfirmed_duplicate: blockstore.is_unconfirmed_duplicate(bank.slot()),
+                        is_ancestor_unconfirmed_duplicate: progress
+                            .is_slot_ancestor_unconfirmed_duplicate(bank.parent_slot()),
+                    };
                     progress.insert(
                         bank.slot(),
                         ForkProgress::new_from_bank(
@@ -172,6 +177,7 @@ impl ReplayStage {
                             &my_pubkey,
                             &vote_account,
                             prev_leader_slot,
+                            duplicate_stats,
                             0,
                             0,
                         ),
@@ -634,25 +640,25 @@ impl ReplayStage {
         }
 
         if reset_necessary {
-                if earliest_duplicate_vote_ancestor == 0 {
-                    // No votes were for duplicate slots, return the last
-                    // vote because it's still a valid slot to reset to
-                    tower.last_vote().slots.last().cloned()
-                } else {
-                    let parent_slot = bank_forks
-                        .read()
-                        .unwrap()
-                        .get(earliest_duplicate_vote_ancestor)
-                        .unwrap()
-                        .parent_slot();
-                    // `earliest_duplicate_vote_ancestor` must exist in BankForks because
-                    // all entries in the `ancestors` map exists in BankForks. Furthermore,
-                    // `earliest_duplicate_vote_ancestor` is a member of `unconfirmed_forks`,
-                    // so it's not equal to the root. This means its parent must exist in
-                    // BankForks
-                    assert!(bank_forks.read().unwrap().get(parent_slot).is_some());
-                    Some(parent_slot)
-                }
+            if earliest_duplicate_vote_ancestor == 0 {
+                // No votes were for duplicate slots, return the last
+                // vote because it's still a valid slot to reset to
+                tower.last_vote().slots.last().cloned()
+            } else {
+                let parent_slot = bank_forks
+                    .read()
+                    .unwrap()
+                    .get(earliest_duplicate_vote_ancestor)
+                    .unwrap()
+                    .parent_slot();
+                // `earliest_duplicate_vote_ancestor` must exist in BankForks because
+                // all entries in the `ancestors` map exists in BankForks. Furthermore,
+                // `earliest_duplicate_vote_ancestor` is a member of `unconfirmed_forks`,
+                // so it's not equal to the root. This means its parent must exist in
+                // BankForks
+                assert!(bank_forks.read().unwrap().get(parent_slot).is_some());
+                Some(parent_slot)
+            }
         } else {
             None
         }
@@ -672,17 +678,16 @@ impl ReplayStage {
         tower: &Tower,
         blockstore: &Blockstore,
     ) -> Option<Arc<Bank>> {
-        let reset_necessary =
-            Self::process_duplicate_unconfirmed_forks_check_for_reset(
-                ancestors,
-                descendants,
-                unconfirmed_forks,
-                progress,
-                bank_forks,
-                last_reset_slot,
-                tower,
-                blockstore,
-            );
+        let reset_necessary = Self::process_duplicate_unconfirmed_forks_check_for_reset(
+            ancestors,
+            descendants,
+            unconfirmed_forks,
+            progress,
+            bank_forks,
+            last_reset_slot,
+            tower,
+            blockstore,
+        );
 
         // Reset Poh so validator doesn't create another block on this
         // fork which includes a duplicate block
@@ -1263,12 +1268,18 @@ impl ReplayStage {
             // Insert a progress entry even for slots this node is the leader for, so that
             // 1) confirm_forks can report confirmation, 2) we can cache computations about
             // this bank in `select_forks()`
+            let duplicate_stats = DuplicateStats {
+                is_unconfirmed_duplicate: blockstore.is_unconfirmed_duplicate(bank.slot()),
+                is_ancestor_unconfirmed_duplicate: progress
+                    .is_slot_ancestor_unconfirmed_duplicate(bank.parent_slot()),
+            };
             let bank_progress = &mut progress.entry(bank.slot()).or_insert_with(|| {
                 ForkProgress::new_from_bank(
                     &bank,
                     &my_pubkey,
                     vote_account,
                     prev_leader_slot,
+                    duplicate_stats,
                     num_blocks_on_fork,
                     num_dropped_blocks_on_fork,
                 )
@@ -2119,7 +2130,16 @@ pub(crate) mod tests {
             let bank = &bank_forks.banks[&0];
             fork_progress
                 .entry(neutral_fork.fork[0])
-                .or_insert_with(|| ForkProgress::new(bank.last_blockhash(), None, None, 0, 0));
+                .or_insert_with(|| {
+                    ForkProgress::new(
+                        bank.last_blockhash(),
+                        None,
+                        DuplicateStats::default(),
+                        None,
+                        0,
+                        0,
+                    )
+                });
         }
 
         for index in 1..neutral_fork.fork.len() {
@@ -2145,7 +2165,16 @@ pub(crate) mod tests {
                 let bank = &bank_forks.banks[&neutral_fork.fork[index]];
                 fork_progress
                     .entry(bank_forks.banks[&neutral_fork.fork[index]].slot())
-                    .or_insert_with(|| ForkProgress::new(bank.last_blockhash(), None, None, 0, 0));
+                    .or_insert_with(|| {
+                        ForkProgress::new(
+                            bank.last_blockhash(),
+                            None,
+                            DuplicateStats::default(),
+                            None,
+                            0,
+                            0,
+                        )
+                    });
             }
         }
 
@@ -2186,7 +2215,14 @@ pub(crate) mod tests {
                     fork_progress
                         .entry(bank_forks.banks[&fork_info.fork[index]].slot())
                         .or_insert_with(|| {
-                            ForkProgress::new(bank.last_blockhash(), None, None, 0, 0)
+                            ForkProgress::new(
+                                bank.last_blockhash(),
+                                None,
+                                DuplicateStats::default(),
+                                None,
+                                0,
+                                0,
+                            )
                         });
                 }
             }
@@ -2329,6 +2365,7 @@ pub(crate) mod tests {
                     bank0.collector_id(),
                     &Pubkey::default(),
                     None,
+                    DuplicateStats::default(),
                     0,
                     0,
                 ),
@@ -2357,6 +2394,7 @@ pub(crate) mod tests {
                     bank1.collector_id(),
                     &validator_voting_keys.get(&bank1.collector_id()).unwrap(),
                     Some(0),
+                    DuplicateStats::default(),
                     0,
                     0,
                 ),
@@ -2453,7 +2491,10 @@ pub(crate) mod tests {
         bank_forks.write().unwrap().insert(root_bank);
         let mut progress = ProgressMap::default();
         for i in 0..=root {
-            progress.insert(i, ForkProgress::new(Hash::default(), None, None, 0, 0));
+            progress.insert(
+                i,
+                ForkProgress::new(Hash::default(), None, DuplicateStats::default(), None, 0, 0),
+            );
         }
         ReplayStage::handle_new_root(
             root,
@@ -2743,9 +2784,9 @@ pub(crate) mod tests {
             let bank0 = Arc::new(Bank::new(&genesis_config));
             let mut progress = ProgressMap::default();
             let last_blockhash = bank0.last_blockhash();
-            let mut bank0_progress = progress
-                .entry(bank0.slot())
-                .or_insert_with(|| ForkProgress::new(last_blockhash, None, None, 0, 0));
+            let mut bank0_progress = progress.entry(bank0.slot()).or_insert_with(|| {
+                ForkProgress::new(last_blockhash, None, DuplicateStats::default(), None, 0, 0)
+            });
             let shreds = shred_to_insert(&mint_keypair, bank0.clone());
             blockstore.insert_shreds(shreds, None, false).unwrap();
             let res = ReplayStage::replay_blockstore_into_bank(
@@ -3085,7 +3126,14 @@ pub(crate) mod tests {
             bank_forks.write().unwrap().insert(bank1);
             progress.insert(
                 1,
-                ForkProgress::new(bank0.last_blockhash(), None, None, 0, 0),
+                ForkProgress::new(
+                    bank0.last_blockhash(),
+                    None,
+                    DuplicateStats::default(),
+                    None,
+                    0,
+                    0,
+                ),
             );
             let ancestors = bank_forks.read().unwrap().ancestors();
             let mut frozen_banks: Vec<_> = bank_forks
@@ -3508,6 +3556,7 @@ pub(crate) mod tests {
             ForkProgress::new(
                 Hash::default(),
                 Some(9),
+                DuplicateStats::default(),
                 Some(ValidatorStakeInfo {
                     total_epoch_stake,
                     ..ValidatorStakeInfo::default()
@@ -3521,6 +3570,7 @@ pub(crate) mod tests {
             ForkProgress::new(
                 Hash::default(),
                 Some(8),
+                DuplicateStats::default(),
                 Some(ValidatorStakeInfo {
                     total_epoch_stake,
                     ..ValidatorStakeInfo::default()
@@ -3605,6 +3655,7 @@ pub(crate) mod tests {
                 ForkProgress::new(
                     Hash::default(),
                     Some(prev_leader_slot),
+                    DuplicateStats::default(),
                     {
                         if i % 2 == 0 {
                             Some(ValidatorStakeInfo {
@@ -3686,6 +3737,7 @@ pub(crate) mod tests {
             let mut fork_progress = ForkProgress::new(
                 Hash::default(),
                 Some(prev_leader_slot),
+                DuplicateStats::default(),
                 Some(ValidatorStakeInfo {
                     total_epoch_stake,
                     ..ValidatorStakeInfo::default()
@@ -3818,21 +3870,27 @@ pub(crate) mod tests {
         // necessary
         let duplicate_unconfirmed_forks = vec![6];
         let last_reset_slot = 4;
-        assert_eq!(run_test_process_duplicate_unconfirmed_forks_check_for_reset(
-            duplicate_unconfirmed_forks,
-            last_reset_slot,
-            None,
-        ), None);
+        assert_eq!(
+            run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+                duplicate_unconfirmed_forks,
+                last_reset_slot,
+                None,
+            ),
+            None
+        );
 
         // Duplicate slot is a descendant of the last reset, no reset
         // necessary
         let duplicate_unconfirmed_forks = vec![6];
         let last_reset_slot = 5;
-        assert_eq!(run_test_process_duplicate_unconfirmed_forks_check_for_reset(
-            duplicate_unconfirmed_forks,
-            last_reset_slot,
-            None,
-        ), Some(0));
+        assert_eq!(
+            run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+                duplicate_unconfirmed_forks,
+                last_reset_slot,
+                None,
+            ),
+            Some(0)
+        );
 
         // Duplicate slot is an ancestor of the last reset, reset is necessary
         let duplicate_unconfirmed_forks = vec![3];
@@ -3917,7 +3975,6 @@ pub(crate) mod tests {
             ),
             Some(3)
         );
-
     }
 
     #[test]
@@ -3995,7 +4052,10 @@ pub(crate) mod tests {
             let bank_forks = RwLock::new(BankForks::new(0, bank0));
             let subscriptions = Arc::new(RpcSubscriptions::default());
             let mut progress = ProgressMap::default();
-            progress.insert(0, ForkProgress::new(Hash::default(), None, None, 0, 0));
+            progress.insert(
+                0,
+                ForkProgress::new(Hash::default(), None, DuplicateStats::default(), None, 0, 0),
+            );
             let blockstore = Arc::new(
                 Blockstore::open(&ledger_path)
                     .expect("Expected to be able to open database ledger"),
@@ -4111,7 +4171,10 @@ pub(crate) mod tests {
 
         // If there is no previous leader slot (previous leader slot is None),
         // should succeed
-        progress_map.insert(3, ForkProgress::new(Hash::default(), None, None, 0, 0));
+        progress_map.insert(
+            3,
+            ForkProgress::new(Hash::default(), None, DuplicateStats::default(), None, 0, 0),
+        );
         assert!(ReplayStage::check_propagation_for_start_leader(
             poh_slot,
             parent_slot,
@@ -4124,6 +4187,7 @@ pub(crate) mod tests {
             ForkProgress::new(
                 Hash::default(),
                 None,
+                DuplicateStats::default(),
                 Some(ValidatorStakeInfo::default()),
                 0,
                 0,
@@ -4147,12 +4211,23 @@ pub(crate) mod tests {
         // Now, set up the progress map to show that the previous leader slot of 5 is
         // 2 (even though the parent is 3), so 2 needs to see propagation confirmation
         // before we can start a leader for block 5
-        progress_map.insert(3, ForkProgress::new(Hash::default(), Some(2), None, 0, 0));
+        progress_map.insert(
+            3,
+            ForkProgress::new(
+                Hash::default(),
+                Some(2),
+                DuplicateStats::default(),
+                None,
+                0,
+                0,
+            ),
+        );
         progress_map.insert(
             2,
             ForkProgress::new(
                 Hash::default(),
                 None,
+                DuplicateStats::default(),
                 Some(ValidatorStakeInfo::default()),
                 0,
                 0,
@@ -4212,6 +4287,7 @@ pub(crate) mod tests {
             ForkProgress::new(
                 Hash::default(),
                 None,
+                DuplicateStats::default(),
                 Some(ValidatorStakeInfo::default()),
                 0,
                 0,
@@ -4222,6 +4298,7 @@ pub(crate) mod tests {
             ForkProgress::new(
                 Hash::default(),
                 None,
+                DuplicateStats::default(),
                 Some(ValidatorStakeInfo::default()),
                 0,
                 0,
@@ -4275,8 +4352,12 @@ pub(crate) mod tests {
         let mut tower = Tower::new_for_tests(0, 0.67);
 
         if let Some(last_vote) = last_vote {
-            let new_vote =
-            tower.new_vote_from_bank(bank_forks.read().unwrap().get(last_vote).unwrap(), &Pubkey::default()).0;
+            let new_vote = tower
+                .new_vote_from_bank(
+                    bank_forks.read().unwrap().get(last_vote).unwrap(),
+                    &Pubkey::default(),
+                )
+                .0;
             tower.record_bank_vote(new_vote);
         }
 

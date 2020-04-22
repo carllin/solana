@@ -481,7 +481,7 @@ pub mod test {
     use crate::{
         cluster_info_vote_listener::VoteTracker,
         cluster_slots::ClusterSlots,
-        progress_map::ForkProgress,
+        progress_map::{DuplicateStats, ForkProgress},
         replay_stage::{HeaviestForkFailures, ReplayStage},
     };
     use solana_ledger::bank_forks::BankForks;
@@ -538,9 +538,16 @@ pub mod test {
             loop {
                 if let Some(visit) = walk.get() {
                     let slot = visit.node().data;
-                    self.progress
-                        .entry(slot)
-                        .or_insert_with(|| ForkProgress::new(Hash::default(), None, None, 0, 0));
+                    self.progress.entry(slot).or_insert_with(|| {
+                        ForkProgress::new(
+                            Hash::default(),
+                            None,
+                            DuplicateStats::default(),
+                            None,
+                            0,
+                            0,
+                        )
+                    });
                     if self.bank_forks.read().unwrap().get(slot).is_some() {
                         walk.forward();
                         continue;
@@ -736,7 +743,14 @@ pub mod test {
         let mut progress = ProgressMap::default();
         progress.insert(
             0,
-            ForkProgress::new(bank0.last_blockhash(), None, None, 0, 0),
+            ForkProgress::new(
+                bank0.last_blockhash(),
+                None,
+                DuplicateStats::default(),
+                None,
+                0,
+                0,
+            ),
         );
         (BankForks::new(0, bank0), progress)
     }

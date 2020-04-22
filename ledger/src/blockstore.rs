@@ -2187,6 +2187,16 @@ impl Blockstore {
             .is_some()
     }
 
+    pub fn is_unconfirmed_duplicate(&self, slot: Slot) -> bool {
+        let slot_confirmation_status = self
+            .slot_confirmation_status_cf
+            .get(slot)
+            .expect("Couldn't fetch from SlotConfirmationStatus column family")
+            .unwrap_or(SlotConfirmationStatus::default());
+        slot_confirmation_status.confirmed_blockhash.is_none()
+            && self.has_duplicate_shreds_in_slot(slot)
+    }
+
     pub fn orphans_iterator<'a>(&'a self, slot: Slot) -> Result<impl Iterator<Item = u64> + 'a> {
         let orphans_iter = self
             .db
