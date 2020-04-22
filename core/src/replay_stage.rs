@@ -273,11 +273,12 @@ impl ReplayStage {
                         );
 
                         for slot in confirmed_forks {
-                            progress
-                                .get_mut(&slot)
-                                .unwrap()
-                                .fork_stats
-                                .confirmation_reported = true;
+                            progress.set_confirmed_slot(
+                                slot,
+                                ancestors
+                                    .get(&slot)
+                                    .expect("Entry in progress map must exist in ancestors"),
+                            );
                         }
                     }
 
