@@ -562,11 +562,10 @@ impl ReplayStage {
         }
     }
 
-    // Purge the state data for the forks in `unconfirmed_forks`. If the
-    // current descends from a duplicate fork in `unconfirmed_forks`, then
-    // choose the best non-duplicate fork and return the bank at the tip of
-    // that fork.
-    fn process_duplicate_unconfirmed_forks(
+    // If a reset of Poh is necessary, `process_duplicate_unconfirmed_forks_check_for_reset`
+    // will return the latest ancestor (and thus the heaviest) of the last vote that was not
+    // a duplicate block.
+    fn process_duplicate_unconfirmed_forks_check_for_reset(
         ancestors: &HashMap<Slot, HashSet<Slot>>,
         descendants: &HashMap<Slot, HashSet<Slot>>,
         unconfirmed_forks: &[Slot],
@@ -575,7 +574,7 @@ impl ReplayStage {
         last_reset_slot: u64,
         tower: &Tower,
         blockstore: &Blockstore,
-    ) -> Option<Arc<Bank>> {
+    ) -> Option<Slot> {
         let last_vote = tower.last_vote().slots.last().cloned();
         let last_vote_ancestors = last_vote.map(|last_vote| {
             ancestors.get(&last_vote).unwrap_or_else(|| {
@@ -634,22 +633,10 @@ impl ReplayStage {
             }
         }
 
-        // Reset Poh so validator doesn't create another block on this
-        // fork which includes a duplicate block
         if reset_necessary {
-            // Vote and reset to the last heaviest fork that doesn't
-            // include an unconfirmed duplicate block (the duplicates
-            // have all been purged from the progress map so will be
-            // out of consideration).
-            let frozen_banks: Vec<_> = bank_forks
-                .read()
-                .unwrap()
-                .frozen_banks()
-                .values()
-                .cloned()
-                .collect();
-            let earliest_valid_vote_ancestor = {
                 if earliest_duplicate_vote_ancestor == 0 {
+                    // No votes were for duplicate slots, return the last
+                    // vote because it's still a valid slot to reset to
                     tower.last_vote().slots.last().cloned()
                 } else {
                     let parent_slot = bank_forks
@@ -666,13 +653,60 @@ impl ReplayStage {
                     assert!(bank_forks.read().unwrap().get(parent_slot).is_some());
                     Some(parent_slot)
                 }
-            };
+        } else {
+            None
+        }
+    }
+
+    // Purge the state data for the forks in `unconfirmed_forks`. If the
+    // current descends from a duplicate fork in `unconfirmed_forks`, then
+    // choose the best non-duplicate fork and return the bank at the tip of
+    // that fork.
+    fn process_duplicate_unconfirmed_forks(
+        ancestors: &HashMap<Slot, HashSet<Slot>>,
+        descendants: &HashMap<Slot, HashSet<Slot>>,
+        unconfirmed_forks: &[Slot],
+        progress: &mut ProgressMap,
+        bank_forks: &RwLock<BankForks>,
+        last_reset_slot: u64,
+        tower: &Tower,
+        blockstore: &Blockstore,
+    ) -> Option<Arc<Bank>> {
+        let reset_necessary =
+            Self::process_duplicate_unconfirmed_forks_check_for_reset(
+                ancestors,
+                descendants,
+                unconfirmed_forks,
+                progress,
+                bank_forks,
+                last_reset_slot,
+                tower,
+                blockstore,
+            );
+
+        // Reset Poh so validator doesn't create another block on this
+        // fork which includes a duplicate block
+        if let Some(latest_valid_vote_ancestor) = reset_necessary {
+            // Vote and reset to the last heaviest fork that doesn't
+            // include an unconfirmed duplicate block (the duplicates
+            // have all been purged from the progress map so will be
+            // out of consideration).
+            let frozen_banks: Vec<_> = bank_forks
+                .read()
+                .unwrap()
+                .frozen_banks()
+                .values()
+                .cloned()
+                .collect();
             let (heaviest_bank, heaviest_bank_on_same_fork) = Self::select_forks(
                 &frozen_banks,
                 &tower,
                 &progress,
                 &ancestors,
-                earliest_valid_vote_ancestor,
+                // We need to provide the `latest_valid_vote_ancestor` as
+                // a potential option for reset in case we can't reset to
+                // the heaviest fork (for instance if switch threshold fails).
+                Some(latest_valid_vote_ancestor),
             );
             let (_, reset_bank, _) = Self::select_vote_and_reset_forks(
                 &heaviest_bank,
@@ -3779,6 +3813,114 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_process_duplicate_unconfirmed_forks_check_for_reset() {
+        // Current fork doesn't descend from the unconfirmed fork, no reset is
+        // necessary
+        let duplicate_unconfirmed_forks = vec![6];
+        let last_reset_slot = 4;
+        assert_eq!(run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+            duplicate_unconfirmed_forks,
+            last_reset_slot,
+            None,
+        ), None);
+
+        // Duplicate slot is a descendant of the last reset, no reset
+        // necessary
+        let duplicate_unconfirmed_forks = vec![6];
+        let last_reset_slot = 5;
+        assert_eq!(run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+            duplicate_unconfirmed_forks,
+            last_reset_slot,
+            None,
+        ), Some(0));
+
+        // Duplicate slot is an ancestor of the last reset, reset is necessary
+        let duplicate_unconfirmed_forks = vec![3];
+        let last_reset_slot = 5;
+        assert_eq!(
+            run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+                duplicate_unconfirmed_forks,
+                last_reset_slot,
+                None,
+            ),
+            Some(0)
+        );
+
+        // Duplicate slot is the same as the last reset, reset is necessary
+        let duplicate_unconfirmed_forks = vec![5];
+        let last_reset_slot = 5;
+        assert_eq!(
+            run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+                duplicate_unconfirmed_forks,
+                last_reset_slot,
+                None,
+            ),
+            Some(0)
+        );
+
+        // Duplicate slot is an ancestor of the last reset, reset is necessary
+        let duplicate_unconfirmed_forks = vec![4, 5];
+        let last_reset_slot = 6;
+        assert_eq!(
+            run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+                duplicate_unconfirmed_forks,
+                last_reset_slot,
+                None,
+            ),
+            Some(0)
+        );
+
+        // Duplicate slot is an ancestor of the last reset, reset is necessary
+        let duplicate_unconfirmed_forks = vec![4, 5];
+        let last_reset_slot = 6;
+        assert_eq!(
+            run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+                duplicate_unconfirmed_forks,
+                last_reset_slot,
+                None,
+            ),
+            Some(0)
+        );
+
+        // Duplcate slots are 4 and 5. The last vote was for slot 6, so the
+        // earliest valid ancestor on the same fork should be 5's ancestor, 3
+        let duplicate_unconfirmed_forks = vec![4, 5];
+        let last_reset_slot = 6;
+        let mut last_vote = 6;
+        assert_eq!(
+            run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+                duplicate_unconfirmed_forks.clone(),
+                last_reset_slot,
+                Some(last_vote),
+            ),
+            Some(3)
+        );
+        // The last vote was for slot 5, so the earliest valid ancestor on the
+        // same fork should be 5's ancestor, 3
+        last_vote = 5;
+        assert_eq!(
+            run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+                duplicate_unconfirmed_forks.clone(),
+                last_reset_slot,
+                Some(last_vote),
+            ),
+            Some(3)
+        );
+        // The last vote was for slot 2, so the earliest valid ancestor on the
+        // same fork should be itself
+        last_vote = 2;
+        assert_eq!(
+            run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+                duplicate_unconfirmed_forks.clone(),
+                last_reset_slot,
+                Some(last_vote),
+            ),
+            Some(3)
+        );
+
+    }
+
+    #[test]
     fn test_process_duplicate_unconfirmed_forks() {
         // Current fork doesn't descend from the unconfirmed fork, no reset is
         // necessary
@@ -3786,7 +3928,7 @@ pub(crate) mod tests {
         let last_reset_slot = 4;
         assert!(run_test_process_duplicate_unconfirmed_forks(
             duplicate_unconfirmed_forks,
-            last_reset_slot
+            last_reset_slot,
         )
         .is_none());
 
@@ -3796,7 +3938,7 @@ pub(crate) mod tests {
         let last_reset_slot = 5;
         assert!(run_test_process_duplicate_unconfirmed_forks(
             duplicate_unconfirmed_forks,
-            last_reset_slot
+            last_reset_slot,
         )
         .is_none());
 
@@ -3806,7 +3948,7 @@ pub(crate) mod tests {
         assert_eq!(
             run_test_process_duplicate_unconfirmed_forks(
                 duplicate_unconfirmed_forks,
-                last_reset_slot
+                last_reset_slot,
             )
             .unwrap()
             .slot(),
@@ -3819,7 +3961,7 @@ pub(crate) mod tests {
         assert_eq!(
             run_test_process_duplicate_unconfirmed_forks(
                 duplicate_unconfirmed_forks,
-                last_reset_slot
+                last_reset_slot,
             )
             .unwrap()
             .slot(),
@@ -3832,7 +3974,7 @@ pub(crate) mod tests {
         assert_eq!(
             run_test_process_duplicate_unconfirmed_forks(
                 duplicate_unconfirmed_forks,
-                last_reset_slot
+                last_reset_slot,
             )
             .unwrap()
             .slot(),
@@ -4119,6 +4261,38 @@ pub(crate) mod tests {
         ));
     }
 
+    fn run_test_process_duplicate_unconfirmed_forks_check_for_reset(
+        unconfirmed_forks: Vec<u64>,
+        last_reset_slot: u64,
+        last_vote: Option<Slot>,
+    ) -> Option<Slot> {
+        let ledger_path = get_tmp_ledger_path!();
+        let blockstore =
+            Blockstore::open(&ledger_path).expect("Expected to be able to open database ledger");
+        let (bank_forks, mut progress) = setup_forks();
+        let ancestors = bank_forks.read().unwrap().ancestors();
+        let descendants = bank_forks.read().unwrap().descendants();
+        let mut tower = Tower::new_for_tests(0, 0.67);
+
+        if let Some(last_vote) = last_vote {
+            let new_vote =
+            tower.new_vote_from_bank(bank_forks.read().unwrap().get(last_vote).unwrap(), &Pubkey::default()).0;
+            tower.record_bank_vote(new_vote);
+        }
+
+        let res = ReplayStage::process_duplicate_unconfirmed_forks_check_for_reset(
+            &ancestors,
+            &descendants,
+            &unconfirmed_forks,
+            &mut progress,
+            &bank_forks,
+            last_reset_slot,
+            &tower,
+            &blockstore,
+        );
+        res
+    }
+
     fn run_test_process_duplicate_unconfirmed_forks(
         unconfirmed_forks: Vec<u64>,
         last_reset_slot: u64,
@@ -4130,6 +4304,7 @@ pub(crate) mod tests {
         let ancestors = bank_forks.read().unwrap().ancestors();
         let descendants = bank_forks.read().unwrap().descendants();
         let tower = Tower::new_for_tests(0, 0.67);
+
         let mut frozen_banks: Vec<_> = bank_forks
             .read()
             .unwrap()
