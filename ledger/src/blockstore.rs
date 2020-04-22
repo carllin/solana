@@ -78,6 +78,7 @@ pub type CompletedSlotsReceiver = Receiver<Vec<u64>>;
 pub struct Blockstore {
     db: Arc<Database>,
     meta_cf: LedgerColumn<cf::SlotMeta>,
+    dead_slots_cf: LedgerColumn<cf::DeadSlots>,
     slot_confirmation_status_cf: LedgerColumn<cf::SlotConfirmationStatus>,
     duplicate_slots_cf: LedgerColumn<cf::DuplicateSlots>,
     erasure_meta_cf: LedgerColumn<cf::ErasureMeta>,
@@ -189,6 +190,7 @@ impl Blockstore {
         let meta_cf = db.column();
 
         // Create the dead slots column family
+        let dead_slots_cf = db.column();
         let slot_confirmation_status_cf = db.column();
         let duplicate_slots_cf = db.column();
         let erasure_meta_cf = db.column();
@@ -237,6 +239,7 @@ impl Blockstore {
         let blockstore = Blockstore {
             db,
             meta_cf,
+            dead_slots_cf,
             slot_confirmation_status_cf,
             duplicate_slots_cf,
             erasure_meta_cf,
@@ -434,6 +437,7 @@ impl Blockstore {
                 .compact_range(from_slot, to_slot)
                 .unwrap_or(false)
             && self
+<<<<<<< HEAD
                 .data_shred_cf
                 .compact_range(from_slot, to_slot)
                 .unwrap_or(false)
@@ -442,6 +446,8 @@ impl Blockstore {
                 .compact_range(from_slot, to_slot)
                 .unwrap_or(false)
             && self
+=======
+>>>>>>> 5e02c7e9a... Add back DeadSlots cf for bookkeeping and backwards compatibility
                 .dead_slots_cf
                 .compact_range(from_slot, to_slot)
                 .unwrap_or(false)
@@ -2120,15 +2126,22 @@ impl Blockstore {
             .expect("Couldn't fetch from SlotConfirmationStatus column family")
             .unwrap_or(SlotConfirmationStatus::default());
         if let Some(existing_hash) = slot_confirmation_status.confirmed_blockhash {
-            warn!(
+            // This should never happen, a validator should never replay another verison
+            // of a slot after one version has already been confirmed
+            error!(
                 "Another version of this dead slot was confirmed with hash {}",
                 existing_hash
             );
             Ok(())
         } else {
             slot_confirmation_status.is_dead = true;
-            self.slot_confirmation_status_cf
-                .put(slot, &slot_confirmation_status)
+            let mut write_batch = self
+                .db
+                .batch()
+                .expect("Database Error: Failed to get write batch");
+            write_batch.put::<cf::SlotConfirmationStatus>(slot, &slot_confirmation_status)?;
+            write_batch.put::<cf::DeadSlots>(slot, &true)?;
+            self.db.write(write_batch)
         }
     }
 

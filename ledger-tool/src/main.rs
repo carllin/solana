@@ -490,6 +490,7 @@ fn analyze_storage(database: &Database) -> Result<(), String> {
     use blockstore_db::columns::*;
     analyze_column::<SlotMeta>(database, "SlotMeta", SlotMeta::key_size())?;
     analyze_column::<Orphans>(database, "Orphans", Orphans::key_size())?;
+    analyze_column::<DeadSlots>(database, "DeadSlots", DeadSlots::key_size())?;
     analyze_column::<SlotConfirmationStatus>(
         database,
         "SlotConfirmationStatus",

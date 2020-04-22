@@ -20,6 +20,9 @@ const MAX_WRITE_BUFFER_SIZE: u64 = 256 * 1024 * 1024; // 256MB
 // Column family for metadata about a leader slot
 const META_CF: &str = "meta";
 // Column family for slots that have been marked as dead
+const DEAD_SLOTS_CF: &str = "dead_slots";
+// Column family for slots that have been confirmed by the
+// supermajority stake
 const SLOT_CONFIRMATION_STATUS_CF: &str = "slot_confirmation_status";
 // Column family for storing proof that there were multiple
 // versions of a slot
@@ -81,6 +84,10 @@ pub mod columns {
     pub struct Orphans;
 
     #[derive(Debug)]
+    /// The dead slots column
+    pub struct DeadSlots;
+
+    #[derive(Debug)]
     /// The confirmed slots column
     pub struct SlotConfirmationStatus;
 
@@ -131,8 +138,8 @@ struct Rocks(rocksdb::DB);
 impl Rocks {
     fn open(path: &Path) -> Result<Rocks> {
         use columns::{
-            AddressSignatures, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards, Root,
-            ShredCode, ShredData, SlotConfirmationStatus, SlotMeta, TransactionStatus,
+            AddressSignatures, DeadSlots, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards,
+            Root, ShredCode, ShredData, SlotConfirmationStatus, SlotMeta, TransactionStatus,
             TransactionStatusIndex,
         };
 
@@ -143,6 +150,8 @@ impl Rocks {
 
         // Column family names
         let meta_cf_descriptor = ColumnFamilyDescriptor::new(SlotMeta::NAME, get_cf_options());
+        let dead_slots_cf_descriptor =
+            ColumnFamilyDescriptor::new(DeadSlots::NAME, get_cf_options());
         let slot_confirmation_status_cf_descriptor =
             ColumnFamilyDescriptor::new(SlotConfirmationStatus::NAME, get_cf_options());
         let duplicate_slots_cf_descriptor =
@@ -166,6 +175,7 @@ impl Rocks {
 
         let cfs = vec![
             meta_cf_descriptor,
+            dead_slots_cf_descriptor,
             slot_confirmation_status_cf_descriptor,
             duplicate_slots_cf_descriptor,
             erasure_meta_cf_descriptor,
@@ -188,13 +198,14 @@ impl Rocks {
 
     fn columns(&self) -> Vec<&'static str> {
         use columns::{
-            AddressSignatures, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards, Root,
-            ShredCode, ShredData, SlotConfirmationStatus, SlotMeta, TransactionStatus,
+            AddressSignatures, DeadSlots, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards,
+            Root, ShredCode, ShredData, SlotConfirmationStatus, SlotMeta, TransactionStatus,
             TransactionStatusIndex,
         };
 
         vec![
             ErasureMeta::NAME,
+            DeadSlots::NAME,
             SlotConfirmationStatus::NAME,
             DuplicateSlots::NAME,
             Index::NAME,
@@ -483,6 +494,14 @@ impl ColumnName for columns::Index {
 }
 impl TypedColumn for columns::Index {
     type Type = blockstore_meta::Index;
+}
+
+impl SlotColumn for columns::DeadSlots {}
+impl ColumnName for columns::DeadSlots {
+    const NAME: &'static str = DEAD_SLOTS_CF;
+}
+impl TypedColumn for columns::DeadSlots {
+    type Type = bool;
 }
 
 impl SlotColumn for columns::SlotConfirmationStatus {}
