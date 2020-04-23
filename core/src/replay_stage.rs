@@ -1275,9 +1275,28 @@ impl ReplayStage {
 
         let mut heaviest_bank_on_same_fork = None;
         let mut heaviest_same_fork_weight = 0;
-        let stats: Vec<&ForkStats> = frozen_banks
+        let stats: Vec<(&ForkStats, bool)> = frozen_banks
             .iter()
             .map(|bank| {
+                // If a slot is descended from an unconfirmed duplicate:
+                //
+                // 1) Remove any descendants from consideration for voting
+                // until the slot is confirmed
+                //
+                // 2) Continue to generate blocks on this fork if we:
+                //   a) already  voted on this fork, and
+                //   b) cannot generate a switching proof to another fork
+                //
+                // I.e. continue to include duplicate forks in the candidate
+                // as a potential `heaviest_bank_on_same_fork`. This is to
+                // cover the case where supermajority has voted on this fork
+                // and a block needs to be generated that includes all those
+                // votes. Otherwise, the cluster may stall because if
+                // supermajority has voted on this fork, then there's
+                // insuffcient votes to generate a switching proof to another
+                // fork.
+                let is_ancestor_unconfirmed_duplicate =
+                    progress.is_slot_ancestor_unconfirmed_duplicate(bank.slot());
                 // Only time progress map should be missing a bank slot
                 // is if this node was the leader for this slot as those banks
                 // are not replayed in replay_active_banks()
@@ -1307,19 +1326,29 @@ impl ReplayStage {
                     }
                 }
 
-                stats
+                (stats, is_ancestor_unconfirmed_duplicate)
             })
             .collect();
-        let num_not_recent = stats.iter().filter(|s| !s.is_recent).count();
-        let num_has_voted = stats.iter().filter(|s| s.has_voted).count();
-        let num_empty = stats.iter().filter(|s| s.is_empty).count();
-        let num_threshold_failure = stats.iter().filter(|s| !s.vote_threshold).count();
+        let num_not_recent = stats.iter().filter(|(s, _)| !s.is_recent).count();
+        let num_has_voted = stats.iter().filter(|(s, _)| s.has_voted).count();
+        let num_empty = stats.iter().filter(|(s, _)| s.is_empty).count();
+        let num_threshold_failure = stats.iter().filter(|(s, _)| !s.vote_threshold).count();
         let num_votable_threshold_failure = stats
             .iter()
-            .filter(|s| s.is_recent && !s.has_voted && !s.vote_threshold)
+            .filter(|(s, _)| s.is_recent && !s.has_voted && !s.vote_threshold)
             .count();
 
-        let mut candidates: Vec<_> = frozen_banks.iter().zip(stats.iter()).collect();
+        let mut candidates: Vec<_> = frozen_banks
+            .iter()
+            .zip(stats.iter())
+            .filter_map(|(b, (s, is_ancestor_unconfirmed_duplicate))| {
+                if !is_ancestor_unconfirmed_duplicate {
+                    Some((b, s))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         //highest weight, lowest slot first
         candidates.sort_by_key(|b| (b.1.fork_weight, 0i64 - b.0.slot() as i64));
@@ -1334,7 +1363,7 @@ impl ReplayStage {
             timing::timestamp(),
             ms,
             candidates.len(),
-            stats.iter().filter(|s| !s.has_voted).count(),
+            stats.iter().filter(|(s, _)| !s.has_voted).count(),
             weights,
             rv.is_some()
         );
