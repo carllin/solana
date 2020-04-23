@@ -213,8 +213,7 @@ pub(crate) struct PropagatedStats {
 
 #[derive(Clone, Default)]
 pub(crate) struct DuplicateStats {
-    pub(crate) is_unconfirmed_duplicate: bool,
-    pub(crate) is_ancestor_unconfirmed_duplicate: bool,
+    pub(crate) latest_unconfirmed_duplicate_ancestor: Option<Slot>,
 }
 
 impl PropagatedStats {
@@ -363,40 +362,52 @@ impl ProgressMap {
         }
     }
 
-    pub fn is_slot_ancestor_unconfirmed_duplicate(&self, slot: Slot) -> bool {
+    pub fn latest_unconfirmed_duplicate_ancestor(&self, slot: Slot) -> Option<Slot> {
         self.get(&slot)
-            .map(|p| p.duplicate_stats.is_ancestor_unconfirmed_duplicate)
-            .unwrap_or(false)
+            .map(|p| p.duplicate_stats.latest_unconfirmed_duplicate_ancestor)
+            .unwrap_or(None)
     }
 
     pub fn set_unconfirmed_duplicate_slot(&mut self, slot: Slot, descendants: &HashSet<u64>) {
         if let Some(fork_progress) = self.get_mut(&slot) {
-            fork_progress.duplicate_stats.is_unconfirmed_duplicate = true;
+            fork_progress.duplicate_stats.latest_unconfirmed_duplicate_ancestor = Some(slot);
         }
 
         for d in descendants {
             if let Some(fork_progress) = self.get_mut(&d) {
                 fork_progress
                     .duplicate_stats
-                    .is_ancestor_unconfirmed_duplicate = true;
+                    .latest_unconfirmed_duplicate_ancestor = Some(std::cmp::max(
+                    fork_progress
+                        .duplicate_stats
+                        .latest_unconfirmed_duplicate_ancestor
+                        .unwrap_or(0),
+                    slot,
+                ));
             }
         }
     }
 
-    pub fn set_confirmed_slot(&mut self, slot: Slot, ancestors: &HashSet<u64>) {
+    pub fn set_confirmed_slot(&mut self, slot: Slot, descendants: &HashSet<u64>) {
         {
             let slot_progress = self.get_mut(&slot).unwrap();
-
             slot_progress
                 .duplicate_stats
-                .is_ancestor_unconfirmed_duplicate = false;
+                .latest_unconfirmed_duplicate_ancestor = None;
             slot_progress.fork_stats.confirmation_reported = true;
         }
-        for a in ancestors {
-            if let Some(fork_progress) = self.get_mut(&a) {
-                fork_progress
+        for d in descendants {
+            if let Some(fork_progress) = self.get_mut(&d) {
+                if let Some(latest_unconfirmed_duplicate_ancestor) = fork_progress
                     .duplicate_stats
-                    .is_ancestor_unconfirmed_duplicate = false;
+                    .latest_unconfirmed_duplicate_ancestor
+                {
+                    if latest_unconfirmed_duplicate_ancestor <= slot {
+                        fork_progress
+                            .duplicate_stats
+                            .latest_unconfirmed_duplicate_ancestor = None;
+                    }
+                }
             }
         }
     }
