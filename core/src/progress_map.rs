@@ -414,6 +414,7 @@ impl ProgressMap {
         }
     }
 
+    #[cfg(tesst)]
     pub fn is_confirmed(&self, slot: Slot) -> Option<bool> {
         self.progress_map
             .get(&slot)

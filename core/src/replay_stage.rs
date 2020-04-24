@@ -485,6 +485,7 @@ impl ReplayStage {
         );
     }
 
+    #[allow(dead_code)]
     fn purge_unconfirmed_duplicate_slot(
         duplicate_slot: Slot,
         descendants: &HashMap<Slot, HashSet<Slot>>,
@@ -538,16 +539,25 @@ impl ReplayStage {
         progress: &mut ProgressMap,
         blockstore: &Blockstore,
     ) {
+        info!(
+            "Replay notified of duplicate version of slot: {}",
+            duplicate_slot
+        );
         // Can't skip processing rooted duplicate slots
         // because somebody else in the cluster might need
         // to know which version of this slot was confirmed
         if blockstore.is_root(duplicate_slot) {
+            info!("Some version of duplicate slot: {} rooted", duplicate_slot);
             Self::handle_approved_duplicate_blockhash(blockstore, duplicate_slot, &Hash::default());
         } else {
             // Check that the duplicate slot is one that is descended from
             // current root, otherwise don't process it
             if progress.get(&duplicate_slot).is_some() {
                 if !blockstore.is_unconfirmed_duplicate(duplicate_slot) {
+                    info!(
+                        "Some version of duplicate slot: {} confirmed",
+                        duplicate_slot
+                    );
                     Self::handle_approved_duplicate_blockhash(
                         blockstore,
                         duplicate_slot,
@@ -558,6 +568,10 @@ impl ReplayStage {
                     // Note RepairService will query the cluster about alternate
                     // versions of this slot because this slot has a duplicate
                     // proof in Blockstore.
+                    info!(
+                        "No version of duplicate slot: {} yet confirmed",
+                        duplicate_slot
+                    );
                     progress.set_unconfirmed_duplicate_slot(
                         duplicate_slot,
                         descendants
@@ -569,8 +583,9 @@ impl ReplayStage {
         }
     }
 
-    // TODO: should update gossip bloom filter which contains
-    // the hashes of any duplicate blocks.
+    // TODO: Determine way to notify cluster about confirmed version of blockhash.
+    // Maybe gossip bloom filter which contains the confirmed hashes of any duplicate
+    // blocks.
     // TODO: needs to be called for a slot even if confirmation happens
     // after ReplayStage marked a slot as duplicate
     fn handle_approved_duplicate_blockhash(
