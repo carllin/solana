@@ -301,4 +301,28 @@ mod test {
             assert_eq!(e_meta.status(&index), DataFull);
         }
     }
+
+    #[test]
+    fn test_is_dead() {
+        let s = SlotConfirmationStatus {
+            is_dead: true,
+            confirmed_blockhash: None,
+        };
+        assert!(s.is_dead());
+        let s = SlotConfirmationStatus {
+            is_dead: false,
+            confirmed_blockhash: None,
+        };
+        assert!(!s.is_dead());
+        let s = SlotConfirmationStatus {
+            is_dead: true,
+            confirmed_blockhash: Some(Hash::default()),
+        };
+        assert!(!s.is_dead());
+        let s = SlotConfirmationStatus {
+            is_dead: false,
+            confirmed_blockhash: Some(Hash::default()),
+        };
+        assert!(!s.is_dead());
+    }
 }

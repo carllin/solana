@@ -109,7 +109,7 @@ pub struct ReplayStage {
 }
 
 impl ReplayStage {
-    #[allow(clippy::new_ret_no_self)]
+    #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
     pub fn new(
         config: ReplayStageConfig,
         blockstore: Arc<Blockstore>,
@@ -3870,7 +3870,7 @@ pub(crate) mod tests {
         let (heaviest_bank, heaviest_bank_on_same_fork) =
             ReplayStage::select_forks(&frozen_banks, &tower, &progress, &ancestors, None);
         assert!(heaviest_bank_on_same_fork.is_none());
-        let (vote_bank, reset_bank, h) = ReplayStage::select_vote_and_reset_forks(
+        let (vote_bank, reset_bank, _) = ReplayStage::select_vote_and_reset_forks(
             &heaviest_bank,
             &heaviest_bank_on_same_fork,
             &ancestors,

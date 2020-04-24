@@ -433,11 +433,7 @@ impl ServeRepair {
 
             if let Ok(Some(packet)) = packet {
                 inc_new_counter_debug!("serve_repair-window-request-ledger", 1);
-                return Some(Packets::new_with_recycler_data(
-                    recycler,
-                    "run_window_request",
-                    vec![packet],
-                ));
+                Packets::new_with_recycler_data(recycler, "run_window_request", vec![packet]);
             }
         }
 
@@ -526,11 +522,12 @@ impl ServeRepair {
                 packet.data.copy_from_slice(&hash_bytes);
                 packet
             })?;
-        return Some(Packets::new_with_recycler_data(
+
+        Some(Packets::new_with_recycler_data(
             recycler,
             "run_highest_window_request",
             vec![packet],
-        ));
+        ))
     }
 
     fn get_data_shred_as_packet(

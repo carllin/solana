@@ -437,7 +437,6 @@ impl Blockstore {
                 .compact_range(from_slot, to_slot)
                 .unwrap_or(false)
             && self
-<<<<<<< HEAD
                 .data_shred_cf
                 .compact_range(from_slot, to_slot)
                 .unwrap_or(false)
@@ -446,8 +445,6 @@ impl Blockstore {
                 .compact_range(from_slot, to_slot)
                 .unwrap_or(false)
             && self
-=======
->>>>>>> 5e02c7e9a... Add back DeadSlots cf for bookkeeping and backwards compatibility
                 .dead_slots_cf
                 .compact_range(from_slot, to_slot)
                 .unwrap_or(false)
@@ -2124,7 +2121,7 @@ impl Blockstore {
             .slot_confirmation_status_cf
             .get(slot)
             .expect("Couldn't fetch from SlotConfirmationStatus column family")
-            .unwrap_or(SlotConfirmationStatus::default());
+            .unwrap_or_default();
         if let Some(existing_hash) = slot_confirmation_status.confirmed_blockhash {
             // This should never happen, a validator should never replay another verison
             // of a slot after one version has already been confirmed
@@ -2150,7 +2147,7 @@ impl Blockstore {
             .slot_confirmation_status_cf
             .get(slot)
             .expect("Couldn't fetch from SlotConfirmationStatus column family")
-            .unwrap_or(SlotConfirmationStatus::default());
+            .unwrap_or_default();
         if let Some(existing_hash) = slot_confirmation_status.confirmed_blockhash {
             if existing_hash != confirmed_blockhash {
                 warn!("Confirmed blockhash for another version of the slot with hash {} different than {} already exists!", existing_hash, confirmed_blockhash);
@@ -2161,9 +2158,15 @@ impl Blockstore {
                 .batch()
                 .expect("Database Error: Failed to get write batch");
             slot_confirmation_status.confirmed_blockhash = Some(confirmed_blockhash);
-            write_batch.put::<cf::SlotConfirmationStatus>(slot, &slot_confirmation_status).expect("Couldn't set confirmed blockhash");
-            write_batch.delete::<cf::DeadSlots>(slot).expect("Couldn't delete dead slot");
-            self.db.write(write_batch).expect("Couldn't commit write batch")
+            write_batch
+                .put::<cf::SlotConfirmationStatus>(slot, &slot_confirmation_status)
+                .expect("Couldn't set confirmed blockhash");
+            write_batch
+                .delete::<cf::DeadSlots>(slot)
+                .expect("Couldn't delete dead slot");
+            self.db
+                .write(write_batch)
+                .expect("Couldn't commit write batch")
         }
     }
 
@@ -2209,7 +2212,7 @@ impl Blockstore {
             .slot_confirmation_status_cf
             .get(slot)
             .expect("Couldn't fetch from SlotConfirmationStatus column family")
-            .unwrap_or(SlotConfirmationStatus::default());
+            .unwrap_or_default();
         slot_confirmation_status.confirmed_blockhash.is_none()
             && self.has_duplicate_shreds_in_slot(slot)
     }
