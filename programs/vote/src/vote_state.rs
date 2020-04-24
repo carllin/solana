@@ -520,6 +520,8 @@ mod tests {
         hash::hash,
         instruction_processor_utils::next_keyed_account,
     };
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
 
     const MAX_RECENT_VOTES: usize = 16;
 
@@ -848,7 +850,7 @@ mod tests {
 
     #[test]
     fn test_vote_lockout() {
-        let (_vote_pubkey, vote_account) = create_test_account();
+        let (f_vote_pubkey, vote_account) = create_test_account();
 
         let mut vote_state: VoteState = vote_account.state().unwrap();
 
@@ -1311,5 +1313,25 @@ mod tests {
                 timestamp: timestamp + 1
             }
         );
+    }
+
+    #[test]
+    fn test_simulate_tower() {
+        let votes_file = "/Users/carl/Projects/solana/DebugConsensus/votes";
+        let f = File::open(votes_file).unwrap();
+        let r = BufReader::new(f);
+        let mut vote_state = VoteState::default();
+        for line in r.lines() {
+            if let Ok(num) = line {
+                let v = num.parse::<u64>().unwrap();
+                vote_state.process_slot(v, 0);
+                if v == 10130607 {
+                    break;
+                }
+            }
+        }
+
+        println!("roots: {:?}", vote_state.root_slot);
+        println!("votes: {:#?}", vote_state.votes);
     }
 }

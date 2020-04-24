@@ -1477,6 +1477,7 @@ pub(crate) mod tests {
                     &wrapped_bank_fork,
                     &towers[i],
                     &mut fork_progresses[i],
+                    &mut VecDeque::new(),
                 );
 
                 if response.is_none() {
