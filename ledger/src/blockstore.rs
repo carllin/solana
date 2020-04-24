@@ -2156,10 +2156,14 @@ impl Blockstore {
                 warn!("Confirmed blockhash for another version of the slot with hash {} different than {} already exists!", existing_hash, confirmed_blockhash);
             }
         } else {
+            let mut write_batch = self
+                .db
+                .batch()
+                .expect("Database Error: Failed to get write batch");
             slot_confirmation_status.confirmed_blockhash = Some(confirmed_blockhash);
-            self.slot_confirmation_status_cf
-                .put(slot, &slot_confirmation_status)
-                .expect("Couldn't set confirmed blockhash");
+            write_batch.put::<cf::SlotConfirmationStatus>(slot, &slot_confirmation_status).expect("Couldn't set confirmed blockhash");
+            write_batch.delete::<cf::DeadSlots>(slot).expect("Couldn't delete dead slot");
+            self.db.write(write_batch).expect("Couldn't commit write batch")
         }
     }
 
