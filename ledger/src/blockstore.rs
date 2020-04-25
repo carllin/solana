@@ -2101,11 +2101,15 @@ impl Blockstore {
     }
 
     pub fn is_dead(&self, slot: Slot) -> bool {
-        self.db
-            .get::<cf::SlotConfirmationStatus>(slot)
-            .expect("fetch from SlotConfirmationStatus column family failed")
-            .map(|confirmation_status| confirmation_status.is_dead())
-            .unwrap_or(false)
+        if let Some(true) = self
+            .db
+            .get::<cf::DeadSlots>(slot)
+            .expect("fetch from DeadSlots column family failed")
+        {
+            true
+        } else {
+            false
+        }
     }
 
     pub fn get_confirmed_blockhash(&self, slot: Slot) -> Option<Hash> {
