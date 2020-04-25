@@ -2355,7 +2355,10 @@ pub(crate) mod tests {
         bank_forks.write().unwrap().insert(root_bank);
         let mut progress = ProgressMap::default();
         for i in 0..=root {
-            progress.insert(i, ForkProgress::new(Hash::default(), None, None, 0, 0));
+            progress.insert(
+                i,
+                ForkProgress::new(Hash::default(), None, DuplicateStats::default(), None, 0, 0),
+            );
         }
         ReplayStage::handle_new_root(
             root,
