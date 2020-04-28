@@ -1052,6 +1052,10 @@ impl Bank {
         }
     }
 
+    pub fn remove_unrooted_slot(&self, slot: Slot) {
+        self.rc.accounts.accounts_db.remove_unrooted_slot(slot)
+    }
+
     fn load_accounts(
         &self,
         txs: &[Transaction],
