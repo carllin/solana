@@ -314,6 +314,7 @@ impl RepairService {
         if let Some(slot_meta) = blockstore.meta(slot).unwrap() {
             if slot_meta.is_full() {
                 // If the slot is full, no further need to repair this slot
+                error!("duplicate slot {} is full", slot);
                 None
             } else {
                 Some(Self::generate_repairs_for_slot(
@@ -405,7 +406,7 @@ impl RepairService {
         duplicate_slots_reset_sender: &DuplicateSlotsResetSender,
     ) {
         for slot in new_duplicate_slots {
-            warn!(
+            error!(
                 "Cluster completed slot: {}, dumping our current version and repairing",
                 slot
             );
@@ -452,7 +453,7 @@ impl RepairService {
                 if let Some(status) = duplicate_slot_repair_statuses.get(&dead_slot) {
                     // Newly repaired version of this slot has been marked dead again,
                     // time to purge again
-                    warn!(
+                    error!(
                         "Repaired version of slot {} most recently (but maybe not entirely)
                         from {:?} has failed again",
                         dead_slot, status.repair_addr
@@ -576,6 +577,7 @@ impl RepairService {
         }
         slots.sort();
         if !slots.is_empty() {
+            error!("finished slots: {:?}", slots);
             cluster_info.push_epoch_slots(&slots);
         }
     }
