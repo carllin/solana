@@ -42,8 +42,11 @@ pub fn repair_response_packet_from_shred(
     let mut packet = Packet::default();
     packet.meta.size = shred.len() + size_of_nonce;
     packet.meta.set_addr(dest);
+    println!("copying from slice");
     packet.data[..shred.len()].copy_from_slice(&shred);
+    println!("making from slice");
     let mut wr = io::Cursor::new(&mut packet.data[shred.len()..]);
+    println!("serializing");
     if let Some(nonce) = nonce {
         bincode::serialize_into(&mut wr, &nonce).expect("Buffer not large enough to fit nonce");
     }

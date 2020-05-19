@@ -50,7 +50,7 @@ pub const SIZE_OF_NONCE_DATA_SHRED_PAYLOAD: usize =
 pub const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_TYPE;
 pub const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT;
 pub const NONCE_SHRED_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - SIZE_OF_NONCE;
-pub const UNLOCK_NONCE_SLOT: Slot = 14_780_256;
+pub const UNLOCK_NONCE_SLOT: Slot = 10;
 
 thread_local!(static PAR_THREAD_POOL: RefCell<ThreadPool> = RefCell::new(rayon::ThreadPoolBuilder::new()
                     .num_threads(get_thread_count())
@@ -253,6 +253,81 @@ impl Shred {
         }
     }
 
+    pub fn new_from_data2(
+        slot: Slot,
+        index: u32,
+        parent_offset: u16,
+        data: Option<&[u8]>,
+        is_last_data: bool,
+        is_last_in_slot: bool,
+        reference_tick: u8,
+        version: u16,
+        fec_set_index: u32,
+    ) -> Self {
+        let payload_size = PACKET_DATA_SIZE;
+        let mut payload = vec![0; payload_size];
+        let common_header = ShredCommonHeader {
+            slot,
+            index,
+            version,
+            fec_set_index,
+            ..ShredCommonHeader::default()
+        };
+
+        let size = if Self::is_nonce_unlocked(slot) {
+            Some(
+                (data.map(|d| d.len()).unwrap_or(0)
+                    + SIZE_OF_DATA_SHRED_HEADER
+                    + SIZE_OF_DATA_SHRED_HEADER_SIZE_FIELD
+                    + SIZE_OF_COMMON_SHRED_HEADER) as u16,
+            )
+        } else {
+            None
+        };
+        let mut data_header = DataShredHeader {
+            parent_offset,
+            flags: reference_tick.min(SHRED_TICK_REFERENCE_MASK),
+            size,
+        };
+
+        if is_last_data {
+            data_header.flags |= DATA_COMPLETE_SHRED
+        }
+
+        if is_last_in_slot {
+            data_header.flags |= LAST_SHRED_IN_SLOT
+        }
+
+        let mut start = 0;
+        Self::serialize_obj_into(
+            &mut start,
+            SIZE_OF_COMMON_SHRED_HEADER,
+            &mut payload,
+            &common_header,
+        )
+        .expect("Failed to write header into shred buffer");
+        let size_of_data_shred_header = Shredder::get_expected_data_header_size_from_slot(slot);
+        Self::serialize_obj_into(
+            &mut start,
+            size_of_data_shred_header,
+            &mut payload,
+            &data_header,
+        )
+        .expect("Failed to write data header into shred buffer");
+
+        if let Some(data) = data {
+            payload[start..start + data.len()].clone_from_slice(data);
+        }
+
+        Self {
+            common_header,
+            data_header,
+            coding_header: CodingShredHeader::default(),
+            payload,
+        }
+    }
+
+    
     pub fn new_from_serialized_shred(mut payload: Vec<u8>) -> Result<Self> {
         let mut start = 0;
         let common_header: ShredCommonHeader =
@@ -267,6 +342,9 @@ impl Shred {
         // On the other hand, if this function is called locally, the payload size should match
         // the `expected_data_size`.
         assert!(payload.len() >= expected_data_size);
+        if payload.len() > expected_data_size {
+            error!("GOT GREATER PAYLOAD SIZE: {} than expected: {}, packetdatasize: {}", payload.len(), expected_data_size, PACKET_DATA_SIZE);
+        }
         payload.truncate(expected_data_size);
         let shred = if common_header.shred_type == ShredType(CODING_SHRED) {
             let coding_header: CodingShredHeader =
@@ -521,6 +599,85 @@ impl Shredder {
             self.entries_to_data_shreds(entries, is_last_in_slot, next_shred_index);
         let coding_shreds = self.data_shreds_to_coding_shreds(&data_shreds);
         (data_shreds, coding_shreds, last_shred_index)
+    }
+
+    pub fn entries_to_shreds2(
+        &self,
+        entries: &[Entry],
+        is_last_in_slot: bool,
+        next_shred_index: u32,
+    ) -> (Vec<Shred>, Vec<Shred>, u32) {
+        let (data_shreds, last_shred_index) =
+            self.entries_to_data_shreds2(entries, is_last_in_slot, next_shred_index);
+        (data_shreds, vec![], last_shred_index)
+    }
+
+    pub fn entries_to_data_shreds2(
+        &self,
+        entries: &[Entry],
+        is_last_in_slot: bool,
+        next_shred_index: u32,
+    ) -> (Vec<Shred>, u32) {
+        let now = Instant::now();
+        let serialized_shreds =
+            bincode::serialize(entries).expect("Expect to serialize all entries");
+        let serialize_time = now.elapsed().as_millis();
+
+        let now = Instant::now();
+
+        let no_header_size = SIZE_OF_DATA_SHRED_PAYLOAD;
+        let num_shreds = (serialized_shreds.len() + no_header_size - 1) / no_header_size;
+        let last_shred_index = next_shred_index + num_shreds as u32 - 1;
+
+        // 1) Generate data shreds
+        let data_shreds: Vec<Shred> = PAR_THREAD_POOL.with(|thread_pool| {
+            thread_pool.borrow().install(|| {
+                serialized_shreds
+                    .par_chunks(no_header_size)
+                    .enumerate()
+                    .map(|(i, shred_data)| {
+                        let shred_index = next_shred_index + i as u32;
+
+                        // Each FEC block has maximum MAX_DATA_SHREDS_PER_FEC_BLOCK shreds
+                        // "FEC set index" is the index of first data shred in that FEC block
+                        let fec_set_index =
+                            shred_index - (i % MAX_DATA_SHREDS_PER_FEC_BLOCK as usize) as u32;
+
+                        let (is_last_data, is_last_in_slot) = {
+                            if shred_index == last_shred_index {
+                                (true, is_last_in_slot)
+                            } else {
+                                (false, false)
+                            }
+                        };
+
+                        let mut shred = Shred::new_from_data2(
+                            self.slot,
+                            shred_index,
+                            (self.slot - self.parent_slot) as u16,
+                            Some(shred_data),
+                            is_last_data,
+                            is_last_in_slot,
+                            self.reference_tick,
+                            self.version,
+                            fec_set_index,
+                        );
+
+                        Shredder::sign_shred(&self.keypair, &mut shred);
+                        shred
+                    })
+                    .collect()
+            })
+        });
+        let gen_data_time = now.elapsed().as_millis();
+        datapoint_debug!(
+            "shredding-stats",
+            ("slot", self.slot as i64, i64),
+            ("num_data_shreds", data_shreds.len() as i64, i64),
+            ("serializing", serialize_time as i64, i64),
+            ("gen_data", gen_data_time as i64, i64),
+        );
+        (data_shreds, last_shred_index + 1)
     }
 
     pub fn entries_to_data_shreds(
@@ -1289,7 +1446,7 @@ pub mod tests {
             assert_eq!(s.reference_tick(), SHRED_TICK_REFERENCE_MASK);
             assert_eq!(
                 Shred::reference_tick_from_data(&s.payload),
-                SHRED_TICK_REFERENCE_MASK
+                    SHRED_TICK_REFERENCE_MASK
             );
         });
 

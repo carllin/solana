@@ -54,11 +54,15 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
         )
         .expect("Expected to create a new shredder");
 
-        let (data_shreds, coding_shreds, _) = shredder.entries_to_shreds(
+        let (mut data_shreds, coding_shreds, _) = shredder.entries_to_shreds(
             &receive_results.entries,
             last_tick_height == bank.max_tick_height(),
             next_shred_index,
         );
+
+        for shred in data_shreds.iter_mut() {
+            shred.payload.push(2);  
+        }
 
         let data_shreds = Arc::new(data_shreds);
         blockstore_sender.send((data_shreds.clone(), None))?;
