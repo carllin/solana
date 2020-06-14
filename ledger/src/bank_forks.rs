@@ -6,6 +6,7 @@ use log::*;
 use solana_measure::measure::Measure;
 use solana_metrics::inc_new_counter_info;
 use solana_runtime::{bank::Bank, status_cache::MAX_CACHE_ENTRIES};
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::{clock::Slot, timing};
 use std::{
     collections::{HashMap, HashSet},
@@ -163,6 +164,17 @@ impl BankForks {
             accounts_hash_interval_slots: std::u64::MAX,
             last_accounts_hash_slot: root,
         }
+    }
+
+    pub fn my_latest_slot(&self, pubkey: &Pubkey) -> Option<Arc<Bank>> {
+        let mut banks = self.active_banks();
+        banks.sort();
+
+        let latest = banks
+            .iter()
+            .rev()
+            .find(|s| self.get(**s).unwrap().collector_id() == pubkey);
+        latest.map(|x| self.get(*x).cloned()).unwrap_or(None)
     }
 
     pub fn insert(&mut self, bank: Bank) -> Arc<Bank> {

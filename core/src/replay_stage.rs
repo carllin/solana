@@ -401,6 +401,7 @@ impl ReplayStage {
                         }
 
                         Self::handle_votable_bank(
+                            &my_pubkey,
                             &vote_bank,
                             switch_fork_decision,
                             &bank_forks,
@@ -426,7 +427,32 @@ impl ReplayStage {
 
                     // Reset onto a fork
                     if let Some(reset_bank) = reset_bank {
-                        if last_reset != reset_bank.last_blockhash() {
+                        let should_interrupt = {
+                            let my_latest_bank =
+                                bank_forks.read().unwrap().my_latest_slot(&my_pubkey);
+
+                            let res = tpu_has_bank
+                                && my_latest_bank
+                                    .as_ref()
+                                    .map(|b| b.slot() % 2 == 0)
+                                    .unwrap_or(false);
+                            &&my_latest_bank
+                                .as_ref()
+                                .map(|b| b.tick_height() > b.max_tick_height().saturating_sub(30))
+                                .unwrap_or(false);
+
+                            if res {
+                                error!(
+                                    "{} interrupting bank {}, reset to {}",
+                                    my_pubkey,
+                                    my_latest_bank.unwrap().slot(),
+                                    reset_bank.slot()
+                                );
+                            }
+                            res
+                        };
+                        // Cause an interrupt
+                        if last_reset != reset_bank.last_blockhash() || should_interrupt {
                             info!(
                                 "vote bank: {:?} reset bank: {:?}",
                                 vote_bank.as_ref().map(|(b, switch_fork_decision)| (
@@ -829,6 +855,7 @@ impl ReplayStage {
     }
 
     fn replay_blockstore_into_bank(
+        my_pubkey: &Pubkey,
         bank: &Arc<Bank>,
         blockstore: &Blockstore,
         bank_progress: &mut ForkProgress,
@@ -856,6 +883,7 @@ impl ReplayStage {
             let slot = bank.slot();
             warn!("Fatal replay error in slot: {}, err: {:?}", slot, err);
             if let BlockstoreProcessorError::InvalidBlock(BlockError::InvalidTickCount) = err {
+                error!("{} Invalid tick count in slot {}", my_pubkey, slot);
                 datapoint_info!(
                     "replay-stage-mark_dead_slot",
                     ("error", format!("error: {:?}", err), String),
@@ -880,6 +908,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn handle_votable_bank(
+        my_pubkey: &Pubkey,
         bank: &Arc<Bank>,
         switch_fork_decision: &SwitchForkDecision,
         bank_forks: &Arc<RwLock<BankForks>>,
@@ -943,7 +972,7 @@ impl ReplayStage {
                     trace!("latest root send failed: {:?}", e);
                 }
             });
-            info!("new root {}", new_root);
+            println!("{} new root {}", my_pubkey, new_root);
         }
 
         Self::update_commitment_cache(
@@ -1144,6 +1173,7 @@ impl ReplayStage {
             });
             if bank.collector_id() != my_pubkey {
                 let replay_result = Self::replay_blockstore_into_bank(
+                    &my_pubkey,
                     &bank,
                     &blockstore,
                     bank_progress,
@@ -2272,6 +2302,7 @@ pub(crate) mod tests {
             let shreds = shred_to_insert(&mint_keypair, bank0.clone());
             blockstore.insert_shreds(shreds, None, false).unwrap();
             let res = ReplayStage::replay_blockstore_into_bank(
+                &Pubkey::default(),
                 &bank0,
                 &blockstore,
                 &mut bank0_progress,
