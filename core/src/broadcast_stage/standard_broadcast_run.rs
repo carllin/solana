@@ -305,7 +305,14 @@ impl StandardBroadcastRun {
         broadcast_shred_batch_info: Option<BroadcastShredBatchInfo>,
     ) -> Result<()> {
         const BROADCAST_PEER_UPDATE_INTERVAL_MS: u64 = 1000;
-        trace!("Broadcasting {:?} shreds", shreds.len());
+        debug!("Broadcasting {:?} shreds", shreds.len());
+        for shred in shreds.iter() {
+            info!(
+                "Broadcasting shred slot: {}, index: {}",
+                shred.slot(),
+                shred.index()
+            );
+        }
         // Get the list of peers to broadcast to
         let mut get_peers_time = Measure::start("broadcast::get_peers");
         let now = timestamp();

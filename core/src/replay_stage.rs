@@ -438,7 +438,15 @@ impl ReplayStage {
                                     .unwrap_or(false);
                             &&my_latest_bank
                                 .as_ref()
-                                .map(|b| b.tick_height() > b.max_tick_height().saturating_sub(30))
+                                .map(|b| {
+                                    info!(
+                                        "{} th: {}, mth: {}",
+                                        b.slot(),
+                                        b.tick_height(),
+                                        b.max_tick_height()
+                                    );
+                                    b.tick_height() > b.max_tick_height().saturating_sub(30)
+                                })
                                 .unwrap_or(false);
 
                             if res {
