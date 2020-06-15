@@ -741,6 +741,7 @@ impl AccountsDB {
     }
 
     fn handle_reclaims(&self, reclaims: SlotSlice<AccountInfo>) {
+        info!("handle_reclaims()");
         let mut dead_accounts = Measure::start("reclaims::remove_dead_accounts");
         let dead_slots = self.remove_dead_accounts(reclaims);
         dead_accounts.stop();
@@ -750,11 +751,13 @@ impl AccountsDB {
             dead_slots_w.len()
         };
         if dead_slots_len > 5000 {
+            info!("handle_reclaims() -> process_dead_slots()");
             self.process_dead_slots();
         }
     }
 
     pub fn process_dead_slots(&self) {
+        info!("process_dead_slots()");
         let empty = HashSet::new();
         let mut dead_slots_w = self.dead_slots.write().unwrap();
         let dead_slots = std::mem::replace(&mut *dead_slots_w, empty);
@@ -765,6 +768,7 @@ impl AccountsDB {
         clean_dead_slots.stop();
 
         let mut purge_slots = Measure::start("reclaims::purge_slots");
+        info!("process_dead_slots() -> purge_slots: {:?}", dead_slots);
         self.purge_slots(&dead_slots);
         purge_slots.stop();
 
@@ -777,10 +781,15 @@ impl AccountsDB {
     }
 
     fn shrink_stale_slot(&self, slot: Slot) -> usize {
+        info!("shrink_stale_slot() -> do_shrink_slot() for slot: {}", slot);
         self.do_shrink_slot(slot, false)
     }
 
     fn shrink_slot_forced(&self, slot: Slot) {
+        info!(
+            "shrink_slot_forced() -> do_shrink_slot() for slot: {}",
+            slot
+        );
         self.do_shrink_slot(slot, true);
     }
 
@@ -880,6 +889,10 @@ impl AccountsDB {
                 write_versions.push(*write_version);
             }
 
+            info!(
+                "do_shrink_slot() -> create_and_insert_store() for slot: {}",
+                slot
+            );
             let shrunken_store = self.create_and_insert_store(slot, aligned_total);
 
             // here, we're writing back alive_accounts. That should be an atomic operation
@@ -1114,6 +1127,7 @@ impl AccountsDB {
                         let ret = store.clone();
                         drop(stores);
                         if create_extra {
+                            info!("find_storage_candidate() -> create_and_insert_store() for slot: {}", slot);
                             self.create_and_insert_store(slot, self.file_size);
                         }
                         return ret;
@@ -1128,6 +1142,10 @@ impl AccountsDB {
 
         drop(stores);
 
+        info!(
+            "find_storage_candidate() -> create_and_insert_store() for slot: {}",
+            slot
+        );
         let store = self.create_and_insert_store(slot, self.file_size);
         store.try_available();
         store
@@ -1140,6 +1158,7 @@ impl AccountsDB {
         let store_for_index = store.clone();
 
         let mut stores = self.storage.write().unwrap();
+        info!("create_and_insert_store inserting for slot: {}", slot);
         let slot_storage = stores.0.entry(slot).or_insert_with(HashMap::new);
         slot_storage.insert(store.id, store_for_index);
         store
@@ -1161,6 +1180,7 @@ impl AccountsDB {
         drop(accounts_index);
         let mut storage = self.storage.write().unwrap();
         for slot in non_roots {
+            info!("purge_slot {}", slot);
             storage.0.remove(&slot);
         }
     }
@@ -1670,6 +1690,7 @@ impl AccountsDB {
                     );
                     let count = store.remove_account();
                     if count == 0 {
+                        info!("remove_dead_accounts(), dead_slots.insert {}", slot);
                         dead_slots.insert(*slot);
                     }
                 }
@@ -1680,6 +1701,10 @@ impl AccountsDB {
             if let Some(slot_storage) = storage.0.get(&slot) {
                 for x in slot_storage.values() {
                     if x.count() != 0 {
+                        info!(
+                            "remove_dead_accounts(), dead slot {} nonzero storage entry",
+                            slot
+                        );
                         return false;
                     }
                 }

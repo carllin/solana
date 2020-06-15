@@ -294,6 +294,10 @@ where
 
     {
         let mut stores = accounts_db.storage.write().unwrap();
+        info!(
+            "context_accountsdb_from_fields() slots: {:?}",
+            storage.keys()
+        );
         stores.0.extend(storage);
     }
 
