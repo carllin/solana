@@ -138,6 +138,7 @@ impl ReplayStage {
             rewards_recorder_sender,
         } = config;
 
+        info!("starting replay: {}", my_pubkey);
         let (root_bank_sender, root_bank_receiver) = channel();
         trace!("replay stage");
         let mut tower = Tower::new(&my_pubkey, &vote_account, &bank_forks.read().unwrap());
@@ -375,7 +376,8 @@ impl ReplayStage {
                         if let Some(reset_bank) = reset_bank {
                             if last_reset != reset_bank.last_blockhash() {
                                 info!(
-                                    "vote bank: {:?} reset bank: {:?}",
+                                    "{} vote bank: {:?} reset bank: {:?}",
+                                    my_pubkey,
                                     vote_bank.as_ref().map(|b| b.slot()),
                                     reset_bank.slot(),
                                 );
@@ -1137,7 +1139,7 @@ impl ReplayStage {
                     bank_progress.replay_progress.num_shreds,
                 );
                 did_complete_bank = true;
-                info!("bank frozen: {}", bank.slot());
+                info!("{} bank frozen: {}", my_pubkey, bank.slot());
                 bank.freeze();
             } else {
                 trace!(
