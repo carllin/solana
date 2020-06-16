@@ -78,7 +78,7 @@ impl EntryVerifyService {
                         parent must exist",
                         );
                         let parent_slot = parent_bank.slot();
-                        let parent_hash = parent_bank.hash();
+                        let parent_hash = parent_bank.last_blockhash();
                         unverified_blocks.add_unverified_block(
                             slot,
                             parent_slot,
@@ -99,6 +99,12 @@ impl EntryVerifyService {
                     .unverified_blocks
                     .remove(heaviest_slot)
                     .unwrap();
+                info!(
+                    "Verifying slot: {}, num_entries: {}, start_hash: {}",
+                    heaviest_slot,
+                    block_info.entries.len(),
+                    block_info.parent_hash
+                );
                 let verify_result = block_info
                     .entries
                     .start_verify(&block_info.parent_hash, VerifyRecyclers::default())
@@ -108,10 +114,12 @@ impl EntryVerifyService {
                     ("slot", *heaviest_slot, i64),
                     ("elapsed_micros", start.elapsed().as_micros(), i64)
                 );
+                info!("writing result: {}", heaviest_slot);
                 slot_verify_results
                     .write()
                     .unwrap()
                     .insert(*heaviest_slot, verify_result);
+                info!("finished writing result: {}", heaviest_slot);
             }
         }
         Ok(())
