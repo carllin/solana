@@ -23,9 +23,9 @@ use solana_vote_program::{
 };
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, File},
-    io::BufReader,
+    io::{BufRead, BufReader},
     ops::{
         Bound::{Included, Unbounded},
         Deref,
@@ -117,6 +117,7 @@ pub struct Tower {
     stray_restored_slot: Option<Slot>,
     #[serde(skip)]
     pub last_switch_threshold_check: Option<(Slot, SwitchForkDecision)>,
+    start_root: u64,
 }
 
 impl Default for Tower {
@@ -132,6 +133,7 @@ impl Default for Tower {
             tmp_path: PathBuf::default(),
             stray_restored_slot: Option::default(),
             last_switch_threshold_check: Option::default(),
+            start_root: 0,
         };
         // VoteState::root_slot is ensured to be Some in Tower
         tower.lockouts.root_slot = Some(Slot::default());
@@ -153,10 +155,24 @@ impl Tower {
             node_pubkey: *node_pubkey,
             path,
             tmp_path,
+            start_root: bank.slot(),
             ..Tower::default()
         };
         tower.initialize_lockouts_from_bank(vote_account_pubkey, root, bank);
+        println!("start root: {}", bank.slot());
+        tower
+    }
 
+    pub fn new_debug(node_pubkey: &Pubkey, start_root: Slot) -> Self {
+        let mut tower = Self {
+            node_pubkey: *node_pubkey,
+            lockouts: VoteState::default(),
+            last_vote: Vote::default(),
+            last_timestamp: BlockTimestamp::default(),
+            start_root,
+            ..Tower::default()
+        };
+        println!("start root: {}", start_root);
         tower
     }
 
@@ -413,7 +429,6 @@ impl Tower {
         }
     }
 
-    #[cfg(test)]
     pub fn record_vote(&mut self, slot: Slot, hash: Hash) -> Option<Slot> {
         let vote = Vote::new(vec![slot], hash);
         self.record_bank_vote(vote)
@@ -489,7 +504,11 @@ impl Tower {
         let mut lockouts = self.lockouts.clone();
         lockouts.process_slot_vote_unchecked(slot);
         for vote in &lockouts.votes {
-            if vote.slot == slot {
+            // Don't check on slots earlier than the start root, because
+            // the !ancestors[&slot].contains(&vote.slot), will always return
+            // true since those slots were simulated from the log, and don't
+            // actually exist in BankForks
+            if vote.slot == slot || vote.slot < self.start_root {
                 continue;
             }
             if !ancestors[&slot].contains(&vote.slot) {
@@ -499,7 +518,8 @@ impl Tower {
         if let Some(root_slot) = lockouts.root_slot {
             // This case should never happen because bank forks purges all
             // non-descendants of the root every time root is set
-            if slot != root_slot {
+            if slot != root_slot && root_slot >= self.start_root {
+                println!("current root slot: {}", root_slot);
                 assert!(
                     ancestors[&slot].contains(&root_slot),
                     "ancestors: {:?}, slot: {} root: {}",
@@ -746,13 +766,20 @@ impl Tower {
         voted_stakes: &VotedStakes,
         total_stake: Stake,
     ) -> bool {
+        println!("checking threshold on slot: {}", slot);
         let mut lockouts = self.lockouts.clone();
         lockouts.process_slot_vote_unchecked(slot);
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
         if let Some(vote) = vote {
+            // Account for threshold checks on slots earlier in the tower
+            // from before the root, should automatically allow for voting.
+            if vote.slot < self.start_root {
+                println!("vote.slot: {} < start_root: {}", slot, self.start_root);
+                return true;
+            }
             if let Some(fork_stake) = voted_stakes.get(&vote.slot) {
                 let lockout = *fork_stake as f64 / total_stake as f64;
-                trace!(
+                println!(
                     "fork_stake slot: {}, vote slot: {}, lockout: {} fork_stake: {} total_stake: {}",
                     slot, vote.slot, lockout, fork_stake, total_stake
                 );
@@ -770,6 +797,7 @@ impl Tower {
                 false
             }
         } else {
+            println!("No need for threshold check");
             true
         }
     }
@@ -1103,6 +1131,28 @@ impl Tower {
         inc_new_counter_info!("tower_save-ms", measure.as_ms() as usize);
 
         Ok(())
+    }
+
+    pub fn from_debug_votes_file(
+        my_pubkey: &Pubkey,
+        votes_file: &Path,
+        start_root: Slot,
+    ) -> (Self, VecDeque<Slot>) {
+        let mut tower = Tower::new_debug(my_pubkey, start_root);
+        let f = File::open(votes_file).unwrap();
+        let r = BufReader::new(f);
+        let mut votes = VecDeque::new();
+        for line in r.lines() {
+            if let Ok(num) = line {
+                let v = num.parse::<u64>().unwrap();
+                if v > start_root {
+                    votes.push_back(v);
+                } else {
+                    tower.record_vote(v, Hash::default());
+                }
+            }
+        }
+        (tower, votes)
     }
 
     pub fn restore(path: &Path, node_pubkey: &Pubkey) -> Result<Self> {

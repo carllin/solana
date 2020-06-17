@@ -43,8 +43,9 @@ use solana_sdk::{
 };
 use std::{
     boxed::Box,
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     net::UdpSocket,
+    path::{Path, PathBuf},
     sync::{
         atomic::AtomicBool,
         mpsc::{channel, Receiver},
@@ -258,6 +259,7 @@ impl Tvu {
             retransmit_slots_sender,
             duplicate_slots_reset_receiver,
             replay_vote_sender,
+            VecDeque::new(),
         );
 
         let ledger_cleanup_service = tvu_config.max_ledger_shreds.map(|max_ledger_shreds| {

@@ -583,15 +583,15 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
     // switching proof to vote for)
     fn select_forks(
         &self,
-        _frozen_banks: &[Arc<Bank>],
+        frozen_banks: &[Arc<Bank>],
         tower: &Tower,
-        _progress: &ProgressMap,
+        progress: &ProgressMap,
         _ancestors: &HashMap<u64, HashSet<u64>>,
         bank_forks: &RwLock<BankForks>,
+        debug_vote_slots: &mut VecDeque<Slot>,
     ) -> (Arc<Bank>, Option<Arc<Bank>>) {
         let r_bank_forks = bank_forks.read().unwrap();
-
-        (
+        let real_return_value = (
             r_bank_forks.get(self.best_overall_slot()).unwrap().clone(),
             self.heaviest_slot_on_same_voted_fork(tower)
                 .map(|heaviest_slot_on_same_voted_fork| {
@@ -600,7 +600,49 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
                         .unwrap()
                         .clone()
                 }),
-        )
+        );
+        if !debug_vote_slots.is_empty() {
+            if let Some(pos) = frozen_banks
+                .iter()
+                .position(|b| b.slot() == *debug_vote_slots.front().unwrap())
+            {
+                let bank = frozen_banks[pos].clone();
+                let slot = debug_vote_slots.pop_front().unwrap();
+                println!("voting on predefined: {}", slot);
+                assert_eq!(slot, bank.slot());
+                if debug_vote_slots.is_empty() {
+                    println!("FINISHED SIMULATING VOTE HISTORY");
+                }
+
+                let fork_progress = progress
+                    .get(&slot)
+                    .expect("All frozen banks must exist in the Progress map")
+                    .fork_stats
+                    .clone();
+
+                assert!(!fork_progress.is_locked_out && fork_progress.vote_threshold);
+                return (bank, None);
+            } else {
+                let last_vote = tower.last_voted_slot();
+                println!(
+                    "waiting to vote on slot {}, returning last vote {:?} instead",
+                    debug_vote_slots.front().unwrap(),
+                    last_vote
+                );
+                return (
+                    bank_forks
+                        .read()
+                        .unwrap()
+                        .get(last_vote.unwrap_or(tower.root()))
+                        .cloned()
+                        .unwrap(),
+                    None,
+                );
+            }
+        } else {
+            // Doesn't matter at this point
+            real_return_value
+        }
     }
 }
 

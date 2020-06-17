@@ -27,7 +27,7 @@ use {
         collections::HashMap,
         fs::remove_dir_all,
         net::{IpAddr, Ipv4Addr, SocketAddr},
-        path::PathBuf,
+        path::{Path, PathBuf},
         sync::Arc,
         thread::sleep,
         time::Duration,
@@ -398,6 +398,7 @@ impl TestValidator {
         };
 
         let validator = Some(Validator::new(
+            PathBuf::from(Path::new("")),
             node,
             &Arc::new(validator_identity),
             &ledger_path,

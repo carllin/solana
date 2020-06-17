@@ -43,8 +43,11 @@ use solana_sdk::{
 };
 use solana_vote_program::{vote_instruction, vote_state::Vote};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
+    fs::File,
+    io::{BufRead, BufReader},
     ops::Deref,
+    path::PathBuf,
     result,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -223,6 +226,7 @@ impl ReplayStage {
         retransmit_slots_sender: RetransmitSlotsSender,
         duplicate_slots_reset_receiver: DuplicateSlotsResetReceiver,
         replay_vote_sender: ReplayVoteSender,
+        mut debug_votes: VecDeque<Slot>,
     ) -> Self {
         let ReplayStageConfig {
             my_pubkey,
@@ -380,7 +384,7 @@ impl ReplayStage {
                     let fork_choice: &mut dyn ForkChoice =
                             &mut heaviest_subtree_fork_choice;
                     let (heaviest_bank, heaviest_bank_on_same_voted_fork) = fork_choice
-                        .select_forks(&frozen_banks, &tower, &progress, &ancestors, &bank_forks);
+                        .select_forks(&frozen_banks, &tower, &progress, &ancestors, &bank_forks, &mut debug_votes);
                     select_forks_time.stop();
 
                     Self::report_memory(&allocated, "select_fork", start);
@@ -1121,7 +1125,7 @@ impl ReplayStage {
             progress.get_fork_stats(bank.slot()).unwrap().total_stake,
             lockouts_sender,
         );
-        Self::push_vote(
+        /*Self::push_vote(
             cluster_info,
             bank,
             vote_account_pubkey,
@@ -1129,7 +1133,7 @@ impl ReplayStage {
             last_vote,
             &tower_slots,
             switch_fork_decision,
-        );
+        );*/
     }
 
     fn push_vote(
@@ -1285,7 +1289,7 @@ impl ReplayStage {
         for bank_slot in &active_banks {
             // If the fork was marked as dead, don't replay it
             if progress.get(bank_slot).map(|p| p.is_dead).unwrap_or(false) {
-                debug!("bank_slot {:?} is marked dead", *bank_slot);
+                println!("bank_slot {:?} is marked dead", *bank_slot);
                 continue;
             }
 
@@ -1874,7 +1878,7 @@ impl ReplayStage {
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_slot, Some(&parent_bank))
                     .unwrap();
-                info!(
+                println!(
                     "new fork:{} parent:{} root:{}",
                     child_slot,
                     parent_slot,

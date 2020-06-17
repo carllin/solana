@@ -8,6 +8,7 @@ use crate::{
         DEFAULT_CONTACT_SAVE_INTERVAL_MILLIS,
     },
     cluster_info_vote_listener::VoteTracker,
+    cluster_slots::ClusterSlots,
     completed_data_sets_service::CompletedDataSetsService,
     consensus::{reconcile_blockstore_roots_with_tower, Tower},
     contact_info::ContactInfo,
@@ -17,6 +18,7 @@ use crate::{
     },
     poh_recorder::{PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
     poh_service::{self, PohService},
+    replay_stage::{ReplayStage, ReplayStageConfig},
     rewards_recorder_service::{RewardsRecorderSender, RewardsRecorderService},
     rpc::JsonRpcConfig,
     rpc_pubsub_service::{PubSubConfig, PubSubService},
@@ -64,10 +66,12 @@ use solana_sdk::{
 use solana_vote_program::vote_state::VoteState;
 use std::time::Instant;
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     net::SocketAddr,
     ops::Deref,
     path::{Path, PathBuf},
+    process,
+    str::FromStr,
     sync::atomic::{AtomicBool, Ordering},
     sync::mpsc::Receiver,
     sync::{Arc, Mutex, RwLock},
@@ -208,7 +212,7 @@ struct RpcServices {
 pub struct Validator {
     pub id: Pubkey,
     validator_exit: Arc<RwLock<Option<ValidatorExit>>>,
-    rpc_service: Option<RpcServices>,
+    /*rpc_service: Option<RpcServices>,
     transaction_status_service: Option<TransactionStatusService>,
     rewards_recorder_service: Option<RewardsRecorderService>,
     cache_block_time_service: Option<CacheBlockTimeService>,
@@ -216,12 +220,12 @@ pub struct Validator {
     gossip_service: GossipService,
     serve_repair_service: ServeRepairService,
     completed_data_sets_service: CompletedDataSetsService,
-    snapshot_packager_service: Option<SnapshotPackagerService>,
+    snapshot_packager_service: Option<SnapshotPackagerService>,*/
     poh_recorder: Arc<Mutex<PohRecorder>>,
     poh_service: PohService,
-    tpu: Tpu,
-    tvu: Tvu,
-    ip_echo_server: solana_net_utils::IpEchoServer,
+    //tpu: Tpu,
+    //tvu: Tvu,
+    //ip_echo_server: solana_net_utils::IpEchoServer,
 }
 
 // in the distant future, get rid of ::new()/exit() and use Result properly...
@@ -240,6 +244,7 @@ pub(crate) fn abort() -> ! {
 
 impl Validator {
     pub fn new(
+        debug_votes_file: PathBuf,
         mut node: Node,
         identity_keypair: &Arc<Keypair>,
         ledger_path: &Path,
@@ -331,8 +336,10 @@ impl Validator {
                 cache_block_time_service,
             },
             tower,
+            debug_votes,
         ) = new_banks_from_ledger(
             &id,
+            &debug_votes_file,
             vote_account,
             config,
             ledger_path,
@@ -447,7 +454,7 @@ impl Validator {
         }
         let poh_recorder = Arc::new(Mutex::new(poh_recorder));
 
-        let rpc_override_health_check = Arc::new(AtomicBool::new(false));
+        /*let rpc_override_health_check = Arc::new(AtomicBool::new(false));
         let (rpc_service, bank_notification_sender) = if let Some((rpc_addr, rpc_pubsub_addr)) =
             config.rpc_addrs
         {
@@ -559,7 +566,7 @@ impl Validator {
 
         if wait_for_supermajority(config, &bank, &cluster_info, rpc_override_health_check) {
             abort();
-        }
+        }*/
 
         let poh_service = PohService::new(
             poh_recorder.clone(),
@@ -574,7 +581,7 @@ impl Validator {
             "New shred signal for the TVU should be the same as the clear bank signal."
         );
 
-        let vote_tracker = Arc::new(VoteTracker::new(
+        /*let vote_tracker = Arc::new(VoteTracker::new(
             bank_forks.read().unwrap().root_bank().deref(),
         ));
 
@@ -662,12 +669,54 @@ impl Validator {
             replay_vote_receiver,
             replay_vote_sender,
             bank_notification_sender,
+        );*/
+
+        let vote_tracker = Arc::new(VoteTracker::new(&bank_forks.read().unwrap().root_bank()));
+        let cluster_slots = Arc::new(ClusterSlots::default());
+        let (retransmit_slots_sender, retransmit_slots_receiver) = unbounded();
+        let (duplicate_slots_reset_sender, duplicate_slots_reset_receiver) = unbounded();
+        let accounts_background_request_sender =
+            solana_runtime::accounts_background_service::ABSRequestSender::default();
+        // TEST
+        //let (ledger_cleanup_slot_sender, ledger_cleanup_slot_receiver) = unbounded();
+        let replay_stage_config = ReplayStageConfig {
+            my_pubkey: cluster_info.keypair.pubkey(),
+            vote_account: *vote_account,
+            authorized_voter_keypairs,
+            exit: exit.clone(),
+            subscriptions: subscriptions.clone(),
+            leader_schedule_cache: leader_schedule_cache.clone(),
+            latest_root_senders: vec![],
+            accounts_background_request_sender,
+            block_commitment_cache,
+            transaction_status_sender: None,
+            rewards_recorder_sender: None,
+            cache_block_time_sender: None,
+            bank_notification_sender: None,
+        };
+
+        let replay_stage = ReplayStage::new(
+            replay_stage_config,
+            blockstore.clone(),
+            bank_forks.clone(),
+            cluster_info.clone(),
+            ledger_signal_receiver,
+            poh_recorder.clone(),
+            tower,
+            vote_tracker,
+            cluster_slots,
+            retransmit_slots_sender,
+            duplicate_slots_reset_receiver,
+            replay_vote_sender,
+            debug_votes,
         );
+
+        loop {}
 
         datapoint_info!("validator-new", ("id", id.to_string(), String));
         Self {
             id,
-            gossip_service,
+            /*gossip_service,
             serve_repair_service,
             rpc_service,
             transaction_status_service,
@@ -677,10 +726,10 @@ impl Validator {
             snapshot_packager_service,
             completed_data_sets_service,
             tpu,
-            tvu,
+            tvu,*/
             poh_service,
             poh_recorder,
-            ip_echo_server,
+            //ip_echo_server,
             validator_exit,
         }
     }
@@ -725,7 +774,7 @@ impl Validator {
     pub fn join(self) {
         self.poh_service.join().expect("poh_service");
         drop(self.poh_recorder);
-        if let Some(RpcServices {
+        /*if let Some(RpcServices {
             json_rpc_service,
             pubsub_service,
             optimistically_confirmed_bank_tracker,
@@ -774,7 +823,7 @@ impl Validator {
         self.completed_data_sets_service
             .join()
             .expect("completed_data_sets_service");
-        self.ip_echo_server.shutdown_background();
+        self.ip_echo_server.shutdown_background();*/
     }
 }
 
@@ -910,6 +959,7 @@ fn post_process_restored_tower(
 #[allow(clippy::type_complexity)]
 fn new_banks_from_ledger(
     validator_identity: &Pubkey,
+    debug_votes_file: &Path,
     vote_account: &Pubkey,
     config: &ValidatorConfig,
     ledger_path: &Path,
@@ -926,6 +976,7 @@ fn new_banks_from_ledger(
     Option<(Slot, Hash)>,
     TransactionHistoryServices,
     Tower,
+    VecDeque<Slot>,
 ) {
     info!("loading ledger from {:?}...", ledger_path);
     let genesis_config = open_genesis_config(ledger_path, config.max_genesis_archive_unpacked_size);
@@ -960,14 +1011,6 @@ fn new_banks_from_ledger(
     )
     .expect("Failed to open ledger database");
     blockstore.set_no_compaction(config.no_rocksdb_compaction);
-
-    let restored_tower = Tower::restore(ledger_path, &validator_identity);
-    if let Ok(tower) = &restored_tower {
-        reconcile_blockstore_roots_with_tower(&tower, &blockstore).unwrap_or_else(|err| {
-            error!("Failed to reconcile blockstore with tower: {:?}", err);
-            abort()
-        });
-    }
 
     let process_options = blockstore_processor::ProcessOptions {
         bpf_jit: config.bpf_jit,
@@ -1004,6 +1047,9 @@ fn new_banks_from_ledger(
         error!("Failed to load ledger: {:?}", err);
         abort()
     });
+
+    let (tower, debug_votes) =
+        Tower::from_debug_votes_file(validator_identity, debug_votes_file, bank_forks.root());
 
     if let Some(warp_slot) = config.warp_slot {
         let snapshot_config = config.snapshot_config.as_ref().unwrap_or_else(|| {
@@ -1049,16 +1095,7 @@ fn new_banks_from_ledger(
         info!("created snapshot: {}", archive_file.display());
     }
 
-    let tower = post_process_restored_tower(
-        restored_tower,
-        &validator_identity,
-        &vote_account,
-        &config,
-        &ledger_path,
-        &bank_forks,
-    );
-
-    info!("Tower state: {:?}", tower);
+    info!("Starting tower state: {:?}", tower);
 
     leader_schedule_cache.set_fixed_leader_schedule(config.fixed_leader_schedule.clone());
 
@@ -1075,6 +1112,7 @@ fn new_banks_from_ledger(
         snapshot_hash,
         transaction_history_services,
         tower,
+        debug_votes,
     )
 }
 
