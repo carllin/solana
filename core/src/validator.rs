@@ -4,11 +4,13 @@ use crate::{
     broadcast_stage::BroadcastStageType,
     cluster_info::{ClusterInfo, Node},
     cluster_info_vote_listener::VoteTracker,
+    cluster_slots::ClusterSlots,
     commitment::BlockCommitmentCache,
     contact_info::ContactInfo,
     gossip_service::{discover_cluster, GossipService},
     poh_recorder::{PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
     poh_service::PohService,
+    replay_stage::{ReplayStage, ReplayStageConfig},
     rewards_recorder_service::RewardsRecorderService,
     rpc::JsonRpcConfig,
     rpc_pubsub_service::PubSubService,
@@ -49,6 +51,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process,
+    str::FromStr,
     sync::atomic::{AtomicBool, Ordering},
     sync::mpsc::Receiver,
     sync::{mpsc::channel, Arc, Mutex, RwLock},
@@ -129,22 +132,23 @@ impl ValidatorExit {
 pub struct Validator {
     pub id: Pubkey,
     validator_exit: Arc<RwLock<Option<ValidatorExit>>>,
-    rpc_service: Option<(JsonRpcService, PubSubService)>,
-    transaction_status_service: Option<TransactionStatusService>,
-    rewards_recorder_service: Option<RewardsRecorderService>,
-    gossip_service: GossipService,
-    serve_repair_service: ServeRepairService,
-    snapshot_packager_service: Option<SnapshotPackagerService>,
+    //rpc_service: Option<(JsonRpcService, PubSubService)>,
+    //transaction_status_service: Option<TransactionStatusService>,
+    //rewards_recorder_service: Option<RewardsRecorderService>,
+    //gossip_service: GossipService,
+    //serve_repair_service: ServeRepairService,
+    //snapshot_packager_service: Option<SnapshotPackagerService>,
     poh_recorder: Arc<Mutex<PohRecorder>>,
     poh_service: PohService,
-    tpu: Tpu,
-    tvu: Tvu,
-    ip_echo_server: solana_net_utils::IpEchoServer,
+    //tpu: Tpu,
+    //tvu: Tvu,
+    //ip_echo_server: solana_net_utils::IpEchoServer,
 }
 
 impl Validator {
     #[allow(clippy::cognitive_complexity)]
     pub fn new(
+        votes_file: PathBuf,
         mut node: Node,
         keypair: &Arc<Keypair>,
         ledger_path: &Path,
@@ -155,7 +159,6 @@ impl Validator {
         config: &ValidatorConfig,
     ) -> Self {
         let id = keypair.pubkey();
-        assert_eq!(id, node.info.id);
 
         warn!("identity: {}", id);
         warn!("vote account: {}", vote_account);
@@ -234,6 +237,7 @@ impl Validator {
             block_commitment_cache.clone(),
         ));
 
+        /*
         let rpc_override_health_check = Arc::new(AtomicBool::new(false));
         let rpc_service = config.rpc_ports.map(|(rpc_port, rpc_pubsub_port)| {
             if ContactInfo::is_valid_address(&node.info.rpc) {
@@ -316,7 +320,7 @@ impl Validator {
             // Park with the RPC service running, ready for inspection!
             warn!("Validator halted");
             std::thread::park();
-        }
+        }*/
 
         let poh_config = Arc::new(genesis_config.poh_config);
         let (mut poh_recorder, entry_receiver) = PohRecorder::new_with_clear_signal(
@@ -342,7 +346,7 @@ impl Validator {
         }
         let poh_recorder = Arc::new(Mutex::new(poh_recorder));
 
-        let ip_echo_server = solana_net_utils::ip_echo_server(node.sockets.ip_echo.unwrap());
+        /*let ip_echo_server = solana_net_utils::ip_echo_server(node.sockets.ip_echo.unwrap());
 
         let gossip_service = GossipService::new(
             &cluster_info,
@@ -363,7 +367,7 @@ impl Validator {
         // is the bootstrap validator
         if let Some(entrypoint_info) = entrypoint_info_option {
             cluster_info.set_entrypoint(entrypoint_info.clone());
-        }
+        }*/
 
         let (snapshot_packager_service, snapshot_package_sender) =
             if config.snapshot_config.is_some() {
@@ -376,7 +380,7 @@ impl Validator {
                 (None, None)
             };
 
-        wait_for_supermajority(config, &bank, &cluster_info, rpc_override_health_check);
+        //wait_for_supermajority(config, &bank, &cluster_info, rpc_override_health_check);
 
         let poh_service = PohService::new(poh_recorder.clone(), &poh_config, &exit);
         assert_eq!(
@@ -386,9 +390,43 @@ impl Validator {
         );
 
         let vote_tracker = Arc::new(VoteTracker::new(bank_forks.read().unwrap().root_bank()));
-
+        let cluster_slots = Arc::new(ClusterSlots::default());
         let (retransmit_slots_sender, retransmit_slots_receiver) = unbounded();
-        let tvu = Tvu::new(
+        let (duplicate_slots_reset_sender, duplicate_slots_reset_receiver) = unbounded();
+        // TEST
+        let (ledger_cleanup_slot_sender, ledger_cleanup_slot_receiver) = channel();
+        let pubkey =
+            Pubkey::from_str("5KTouxSFVt5d6DyN4oCMASQXzvaeXdwqLNuptRfWAJGH").expect("valid pubkey");
+        let replay_stage_config = ReplayStageConfig {
+            my_pubkey: pubkey,
+            vote_account: Pubkey::default(),
+            exit: exit.clone(),
+            subscriptions: subscriptions.clone(),
+            leader_schedule_cache: leader_schedule_cache.clone(),
+            latest_root_senders: vec![ledger_cleanup_slot_sender],
+            block_commitment_cache,
+            transaction_status_sender: None,
+            rewards_recorder_sender: None,
+            accounts_hash_sender: None,
+            authorized_voter_keypairs,
+            votes_file,
+        };
+
+        let replay_stage = ReplayStage::new(
+            replay_stage_config,
+            blockstore.clone(),
+            bank_forks.clone(),
+            cluster_info.clone(),
+            ledger_signal_receiver,
+            poh_recorder.clone(),
+            vote_tracker.clone(),
+            cluster_slots.clone(),
+            retransmit_slots_sender,
+            duplicate_slots_reset_receiver,
+        );
+
+        loop {}
+        /*let tvu = Tvu::new(
             vote_account,
             authorized_voter_keypairs,
             &bank_forks,
@@ -458,22 +496,20 @@ impl Validator {
             node.info.shred_version,
             vote_tracker,
             bank_forks,
-        );
+        );*/
 
         datapoint_info!("validator-new", ("id", id.to_string(), String));
         Self {
             id,
-            gossip_service,
-            serve_repair_service,
-            rpc_service,
-            transaction_status_service,
-            rewards_recorder_service,
-            snapshot_packager_service,
-            tpu,
-            tvu,
+            //gossip_service,
+            //rpc_service,
+            //rpc_pubsub_service,
+            //transaction_status_service,
+            //tpu,
+            //tvu,
             poh_service,
             poh_recorder,
-            ip_echo_server,
+            //ip_echo_server,
             validator_exit,
         }
     }
@@ -518,7 +554,7 @@ impl Validator {
     pub fn join(self) -> Result<()> {
         self.poh_service.join()?;
         drop(self.poh_recorder);
-        if let Some((rpc_service, rpc_pubsub_service)) = self.rpc_service {
+        /*if let Some((rpc_service, rpc_pubsub_service)) = self.rpc_service {
             rpc_service.join()?;
             rpc_pubsub_service.join()?;
         }
@@ -538,7 +574,7 @@ impl Validator {
         self.serve_repair_service.join()?;
         self.tpu.join()?;
         self.tvu.join()?;
-        self.ip_echo_server.shutdown_now();
+        self.ip_echo_server.shutdown_now();*/
 
         Ok(())
     }
@@ -726,6 +762,7 @@ impl TestValidator {
             ..ValidatorConfig::default()
         };
         let node = Validator::new(
+            PathBuf::from(Path::new("")),
             node,
             &node_keypair,
             &ledger_path,

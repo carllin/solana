@@ -879,6 +879,7 @@ fn test_snapshot_restart_tower() {
 
     // Restart validator from snapshot, the validator's tower state in this snapshot
     // will contain slots < the root bank of the snapshot. Validator should not panic.
+    println!("Restarting node from snapshot");
     cluster.restart_node(&validator_id, validator_info);
 
     // Test cluster can still make progress and get confirmations in tower

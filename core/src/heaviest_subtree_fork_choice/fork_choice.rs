@@ -6,8 +6,9 @@ use crate::{
 };
 use solana_ledger::bank_forks::BankForks;
 use solana_runtime::bank::Bank;
+use solana_sdk::clock::Slot;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, RwLock},
 };
 
@@ -46,6 +47,7 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
         _progress: &ProgressMap,
         _ancestors: &HashMap<u64, HashSet<u64>>,
         bank_forks: &RwLock<BankForks>,
+        vote_slots: &mut VecDeque<Slot>,
     ) -> (Arc<Bank>, Option<Arc<Bank>>) {
         let last_vote = tower.last_vote().slots.last().cloned();
         let heaviest_slot_on_same_voted_fork = last_vote.map(|last_vote| {

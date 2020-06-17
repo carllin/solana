@@ -305,7 +305,7 @@ pub fn process_blockstore_from_root(
     opts: &ProcessOptions,
     recyclers: &VerifyRecyclers,
 ) -> BlockstoreProcessorResult {
-    info!("processing ledger from slot {}...", bank.slot());
+    println!("processing ledger from root slot {}...", bank.slot());
     let allocated = thread_mem_usage::Allocatedp::default();
     let initial_allocation = allocated.get();
 
@@ -353,7 +353,7 @@ pub fn process_blockstore_from_root(
 
     // Iterate and replay slots from blockstore starting from `start_slot`
     let (initial_forks, leader_schedule_cache) = {
-        if let Some(meta) = blockstore
+        /*if let Some(meta) = blockstore
             .meta(start_slot)
             .unwrap_or_else(|_| panic!("Failed to get meta for slot {}", start_slot))
         {
@@ -372,13 +372,13 @@ pub fn process_blockstore_from_root(
                 recyclers,
             )?;
             (initial_forks, leader_schedule_cache)
-        } else {
-            // If there's no meta for the input `start_slot`, then we started from a snapshot
-            // and there's no point in processing the rest of blockstore and implies blockstore
-            // should be empty past this point.
-            let leader_schedule_cache = LeaderScheduleCache::new_from_bank(&bank);
-            (vec![bank], leader_schedule_cache)
-        }
+        } else {*/
+        // If there's no meta for the input `start_slot`, then we started from a snapshot
+        // and there's no point in processing the rest of blockstore and implies blockstore
+        // should be empty past this point.
+        let leader_schedule_cache = LeaderScheduleCache::new_from_bank(&bank);
+        (vec![bank], leader_schedule_cache)
+        //}
     };
     if initial_forks.is_empty() {
         return Err(BlockstoreProcessorError::NoValidForksFound);

@@ -5,8 +5,9 @@ use crate::{
 };
 use solana_ledger::bank_forks::BankForks;
 use solana_runtime::bank::Bank;
+use solana_sdk::clock::Slot;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, RwLock},
 };
 
@@ -36,5 +37,6 @@ pub(crate) trait ForkChoice {
         progress: &ProgressMap,
         ancestors: &HashMap<u64, HashSet<u64>>,
         bank_forks: &RwLock<BankForks>,
+        vote_slots: &mut VecDeque<Slot>,
     ) -> (Arc<Bank>, Option<Arc<Bank>>);
 }

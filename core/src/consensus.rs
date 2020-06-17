@@ -94,6 +94,7 @@ pub struct Tower {
     lockouts: VoteState,
     last_vote: Vote,
     last_timestamp: BlockTimestamp,
+    start_root: u64,
 }
 
 impl Default for Tower {
@@ -105,20 +106,23 @@ impl Default for Tower {
             lockouts: VoteState::default(),
             last_vote: Vote::default(),
             last_timestamp: BlockTimestamp::default(),
+            start_root: 0,
         }
     }
 }
 
 impl Tower {
-    pub fn new(
-        node_pubkey: &Pubkey,
-        vote_account_pubkey: &Pubkey,
-        root: Slot,
-        heaviest_bank: &Bank,
-    ) -> Self {
-        let mut tower = Self::new_with_key(node_pubkey);
-        tower.initialize_lockouts_from_bank_forks(vote_account_pubkey, root, heaviest_bank);
-
+    pub fn new(node_pubkey: &Pubkey, vote_account_pubkey: &Pubkey, bank_forks: &BankForks) -> Self {
+        let mut tower = Self {
+            node_pubkey: *node_pubkey,
+            threshold_depth: VOTE_THRESHOLD_DEPTH,
+            threshold_size: VOTE_THRESHOLD_SIZE,
+            lockouts: VoteState::default(),
+            last_vote: Vote::default(),
+            last_timestamp: BlockTimestamp::default(),
+            start_root: bank_forks.root(),
+        };
+        println!("start root: {}", bank_forks.root());
         tower
     }
 
@@ -318,9 +322,13 @@ impl Tower {
         trace!("{} record_vote for {}", self.node_pubkey, slot);
         let root_slot = self.lockouts.root_slot;
         self.lockouts.process_vote_unchecked(&vote);
-        self.last_vote = vote;
 
-        datapoint_info!(
+        println!("Vote state after vote on: {:?}", vote.slots);
+        let votes: Vec<_> = self.lockouts.votes.iter().collect();
+        println!("Vote state: {:#?}", votes);
+
+        self.last_vote = vote;
+        datapoint_debug!(
             "tower-vote",
             ("latest", slot, i64),
             ("root", self.lockouts.root_slot.unwrap_or(0), i64)
@@ -381,7 +389,7 @@ impl Tower {
         let mut lockouts = self.lockouts.clone();
         lockouts.process_slot_vote_unchecked(slot);
         for vote in &lockouts.votes {
-            if vote.slot == slot {
+            if vote.slot == slot || vote.slot < self.start_root {
                 continue;
             }
             if !ancestors[&slot].contains(&vote.slot) {
@@ -391,7 +399,8 @@ impl Tower {
         if let Some(root_slot) = lockouts.root_slot {
             // This case should never happen because bank forks purges all
             // non-descendants of the root every time root is set
-            if slot != root_slot {
+            if slot > root_slot && root_slot >= self.start_root {
+                println!("slot {}", slot);
                 assert!(ancestors[&slot].contains(&root_slot));
             }
         }
@@ -505,13 +514,18 @@ impl Tower {
         stake_lockouts: &HashMap<u64, StakeLockout>,
         total_staked: u64,
     ) -> bool {
+        println!("checking threshold on slot: {}", slot);
         let mut lockouts = self.lockouts.clone();
         lockouts.process_slot_vote_unchecked(slot);
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
         if let Some(vote) = vote {
+            if vote.slot < self.start_root {
+                println!("vote.slot: {} < start_root: {}", slot, self.start_root);
+                return true;
+            }
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {
                 let lockout = fork_stake.stake as f64 / total_staked as f64;
-                trace!(
+                println!(
                     "fork_stake slot: {}, vote slot: {}, lockout: {} fork_stake: {} total_stake: {}",
                     slot, vote.slot, lockout, fork_stake.stake, total_staked
                 );
@@ -529,6 +543,7 @@ impl Tower {
                 false
             }
         } else {
+            println!("No need for threshold check");
             true
         }
     }

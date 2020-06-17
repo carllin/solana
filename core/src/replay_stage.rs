@@ -45,8 +45,11 @@ use solana_vote_program::{
     vote_state::{Vote, VoteState},
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
+    fs::File,
+    io::{BufRead, BufReader},
     ops::Deref,
+    path::PathBuf,
     result,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -106,6 +109,7 @@ pub struct ReplayStageConfig {
     pub block_commitment_cache: Arc<RwLock<BlockCommitmentCache>>,
     pub transaction_status_sender: Option<TransactionStatusSender>,
     pub rewards_recorder_sender: Option<RewardsRecorderSender>,
+    pub votes_file: PathBuf,
 }
 
 #[derive(Default)]
@@ -175,6 +179,7 @@ impl ReplayStage {
             block_commitment_cache,
             transaction_status_sender,
             rewards_recorder_sender,
+            votes_file,
         } = config;
 
         trace!("replay stage");
@@ -225,20 +230,21 @@ impl ReplayStage {
                 let mut heaviest_subtree_fork_choice =
                     HeaviestSubtreeForkChoice::new_from_frozen_banks(root, &frozen_banks);
                 let mut bank_weight_fork_choice = BankWeightForkChoice::default();
-                let heaviest_bank = if root > unlock_heaviest_subtree_fork_choice_slot {
-                    bank_forks
-                        .read()
-                        .unwrap()
-                        .get(heaviest_subtree_fork_choice.best_overall_slot())
-                        .expect(
-                            "The best overall slot must be one of `frozen_banks` which all
-                    exist in bank_forks",
-                        )
-                        .clone()
-                } else {
-                    Tower::find_heaviest_bank(&bank_forks, &my_pubkey).unwrap_or(root_bank)
-                };
-                let mut tower = Tower::new(&my_pubkey, &vote_account, root, &heaviest_bank);
+                let mut tower = Tower::new(&my_pubkey, &vote_account, &bank_forks.read().unwrap());
+                let f = File::open(votes_file).unwrap();
+                let r = BufReader::new(f);
+                let mut votes = VecDeque::new();
+                let root = bank_forks.read().unwrap().root();
+                for line in r.lines() {
+                    if let Ok(num) = line {
+                        let v = num.parse::<u64>().unwrap();
+                        if v > root {
+                            votes.push_back(v);
+                        } else {
+                            tower.record_vote(v, Hash::default());
+                        }
+                    }
+                }
                 let mut current_leader = None;
                 let mut last_reset = Hash::default();
                 let mut partition = false;
@@ -344,7 +350,14 @@ impl ReplayStage {
                             &mut bank_weight_fork_choice
                         };
                     let (heaviest_bank, heaviest_bank_on_same_voted_fork) = fork_choice
-                        .select_forks(&frozen_banks, &tower, &progress, &ancestors, &bank_forks);
+                        .select_forks(
+                            &frozen_banks,
+                            &tower,
+                            &progress,
+                            &ancestors,
+                            &bank_forks,
+                            &mut votes,
+                        );
 
                     Self::report_memory(&allocated, "select_fork", start);
 
@@ -952,7 +965,7 @@ impl ReplayStage {
             progress.get_fork_stats(bank.slot()).unwrap().total_staked,
             lockouts_sender,
         );
-        Self::push_vote(
+        /*Self::push_vote(
             cluster_info,
             bank,
             vote_account_pubkey,
@@ -960,7 +973,7 @@ impl ReplayStage {
             tower.last_vote_and_timestamp(),
             tower_index,
             switch_fork_decision,
-        );
+        );*/
         Ok(())
     }
 
@@ -1112,7 +1125,7 @@ impl ReplayStage {
         for bank_slot in &active_banks {
             // If the fork was marked as dead, don't replay it
             if progress.get(bank_slot).map(|p| p.is_dead).unwrap_or(false) {
-                debug!("bank_slot {:?} is marked dead", *bank_slot);
+                println!("bank_slot {:?} is marked dead", *bank_slot);
                 continue;
             }
 
@@ -1686,7 +1699,7 @@ impl ReplayStage {
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_slot, Some(&parent_bank))
                     .unwrap();
-                info!(
+                println!(
                     "new fork:{} parent:{} root:{}",
                     child_slot,
                     parent_slot,

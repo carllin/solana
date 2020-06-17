@@ -5,10 +5,10 @@ use crate::{
 };
 use solana_ledger::bank_forks::BankForks;
 use solana_runtime::bank::Bank;
-use solana_sdk::timing;
+use solana_sdk::{clock::Slot, timing};
 use std::time::Instant;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, RwLock},
 };
 
@@ -52,7 +52,8 @@ impl ForkChoice for BankWeightForkChoice {
         tower: &Tower,
         progress: &ProgressMap,
         ancestors: &HashMap<u64, HashSet<u64>>,
-        _bank_forks: &RwLock<BankForks>,
+        bank_forks: &RwLock<BankForks>,
+        vote_slots: &mut VecDeque<Slot>,
     ) -> (Arc<Bank>, Option<Arc<Bank>>) {
         let tower_start = Instant::now();
         assert!(!frozen_banks.is_empty());
@@ -147,6 +148,42 @@ impl ForkChoice for BankWeightForkChoice {
             ("tower_duration", ms as i64, i64),
         );
 
-        (rv.0.clone(), heaviest_bank_on_same_fork)
+        if !vote_slots.is_empty() {
+            if let Some(pos) = frozen_banks
+                .iter()
+                .position(|b| b.slot() == *vote_slots.front().unwrap())
+            {
+                let bank = frozen_banks[pos].clone();
+                let slot = vote_slots.pop_front().unwrap();
+                println!("voting on predefined: {}", slot);
+                assert_eq!(slot, bank.slot());
+                if vote_slots.is_empty() {
+                    println!("FINISHED SIMULATING VOTE HISTORY");
+                }
+
+                let fork_progress = progress
+                    .get(&slot)
+                    .expect("All frozen banks must exist in the Progress map")
+                    .fork_stats
+                    .clone();
+
+                assert!(!fork_progress.is_locked_out && fork_progress.vote_threshold);
+                return (bank, None);
+            } else {
+                println!("waiting to vote on slot {}", vote_slots.front().unwrap());
+                return (
+                    bank_forks
+                        .read()
+                        .unwrap()
+                        .get(last_vote.unwrap_or(tower.root().unwrap_or(0)))
+                        .cloned()
+                        .unwrap(),
+                    None,
+                );
+            }
+        } else {
+            // Doesn't matter at this point
+            (rv.0.clone(), heaviest_bank_on_same_fork)
+        }
     }
 }

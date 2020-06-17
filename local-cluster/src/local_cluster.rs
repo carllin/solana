@@ -39,6 +39,7 @@ use std::{
     collections::HashMap,
     io::{Error, ErrorKind, Result},
     iter,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -173,6 +174,7 @@ impl LocalCluster {
             leader_node.info.rpc_pubsub.port(),
         ));
         let leader_server = Validator::new(
+            PathBuf::from(Path::new("")),
             leader_node,
             &leader_keypair,
             &leader_ledger_path,
@@ -301,6 +303,7 @@ impl LocalCluster {
         ));
         let voting_keypair = Arc::new(voting_keypair);
         let validator_server = Validator::new(
+            PathBuf::from(Path::new("")),
             validator_node,
             &validator_keypair,
             &ledger_path,
@@ -556,6 +559,7 @@ impl Cluster for LocalCluster {
         let validator_info = &cluster_validator_info.info;
 
         let restarted_node = Validator::new(
+            PathBuf::from(Path::new("")),
             node,
             &validator_info.keypair,
             &validator_info.ledger_path,

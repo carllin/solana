@@ -34,6 +34,7 @@ use solana_sdk::{
 use std::collections::HashSet;
 use std::{
     net::UdpSocket,
+    path::{Path, PathBuf},
     sync::{
         atomic::AtomicBool,
         mpsc::{channel, Receiver},
@@ -171,6 +172,7 @@ impl Tvu {
         );
 
         let replay_stage_config = ReplayStageConfig {
+            votes_file: PathBuf::from(Path::new("")),
             my_pubkey: keypair.pubkey(),
             vote_account: *vote_account,
             authorized_voter_keypairs,

@@ -48,6 +48,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher>(
     let cluster_nodes = discover_cluster(&entry_point_info.gossip, nodes).unwrap();
     assert!(cluster_nodes.len() >= nodes);
     for ingress_node in &cluster_nodes {
+        println!("checking {}", ingress_node.id);
         if ignore_nodes.contains(&ingress_node.id) {
             continue;
         }
