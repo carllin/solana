@@ -113,16 +113,20 @@ impl Default for Tower {
 
 impl Tower {
     pub fn new(node_pubkey: &Pubkey, vote_account_pubkey: &Pubkey, bank_forks: &BankForks) -> Self {
+        println!("start root: {}", bank_forks.root());
+        let root = bank_forks.root();
+        let mut last_vote = Vote::default();
+        last_vote.slots = vec![root];
         let mut tower = Self {
             node_pubkey: *node_pubkey,
             threshold_depth: VOTE_THRESHOLD_DEPTH,
             threshold_size: VOTE_THRESHOLD_SIZE,
             lockouts: VoteState::default(),
-            last_vote: Vote::default(),
+            last_vote,
             last_timestamp: BlockTimestamp::default(),
             start_root: bank_forks.root(),
         };
-        println!("start root: {}", bank_forks.root());
+        tower.lockouts.root_slot = Some(root);
         tower
     }
 
@@ -520,7 +524,7 @@ impl Tower {
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
         if let Some(vote) = vote {
             if vote.slot < self.start_root {
-                println!("vote.slot: {} < start_root: {}", slot, self.start_root);
+                println!("vote.slot: {} < start_root: {}", vote.slot, self.start_root);
                 return true;
             }
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {

@@ -240,8 +240,6 @@ impl ReplayStage {
                         let v = num.parse::<u64>().unwrap();
                         if v > root {
                             votes.push_back(v);
-                        } else {
-                            tower.record_vote(v, Hash::default());
                         }
                     }
                 }
