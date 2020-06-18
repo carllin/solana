@@ -99,16 +99,17 @@ impl EntryVerifyService {
                     .unverified_blocks
                     .remove(heaviest_slot)
                     .unwrap();
-                info!(
-                    "Verifying slot: {}, num_entries: {}, start_hash: {}",
-                    heaviest_slot,
-                    block_info.entries.len(),
-                    block_info.parent_hash
-                );
                 let verify_result = block_info
                     .entries
                     .start_verify(&block_info.parent_hash, VerifyRecyclers::default())
                     .finish_verify(&block_info.entries);
+                info!(
+                    "Verifying slot: {}, num_entries: {}, start_hash: {}, result: {}",
+                    heaviest_slot,
+                    block_info.entries.len(),
+                    block_info.parent_hash,
+                    verify_result,
+                );
                 datapoint_info!(
                     "verify_poh_elapsed",
                     ("slot", *heaviest_slot, i64),

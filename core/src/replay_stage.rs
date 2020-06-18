@@ -438,6 +438,10 @@ impl ReplayStage {
                         }
                         Self::report_memory(&allocated, "reset_bank", start);
                     } else {
+                        info!(
+                            "{} failed poh verify slot {:?}, purging slots",
+                            my_pubkey, candidate_slot
+                        );
                         assert!(candidate_slot.is_some());
                         let candidate_slot = candidate_slot.unwrap();
                         Self::handle_block_failed_poh(
@@ -571,6 +575,13 @@ impl ReplayStage {
                     (*res, Some(timing), Some(reset_bank.slot()))
                 } else {
                     // Poll for result of verification of `reset_bank`'s slot
+                    let res = Self::poll_verify_result(slot_verify_results, reset_bank.slot());
+                    info!(
+                        "{} poll slot {} result: {}",
+                        my_pubkey,
+                        reset_bank.slot(),
+                        res
+                    );
                     (
                         Self::poll_verify_result(slot_verify_results, reset_bank.slot()),
                         Some(timing),
