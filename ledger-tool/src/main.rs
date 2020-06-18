@@ -1268,56 +1268,10 @@ fn main() {
         }
         ("list-roots", Some(arg_matches)) => {
             let blockstore = open_blockstore(&ledger_path, AccessType::TryPrimaryThenSecondary);
-            let max_height = if let Some(height) = arg_matches.value_of("max_height") {
-                usize::from_str(height).expect("Maximum height must be a number")
-            } else {
-                panic!("Maximum height must be provided");
-            };
-            let num_roots = if let Some(roots) = arg_matches.value_of("num_roots") {
-                usize::from_str(roots).expect("Number of roots must be a number")
-            } else {
-                usize::from_str(DEFAULT_ROOT_COUNT).unwrap()
-            };
-
-            let iter = RootedSlotIterator::new(0, &blockstore).expect("Failed to get rooted slot");
-
-            let slot_hash: Vec<_> = iter
-                .filter_map(|(slot, _meta)| {
-                    if slot <= max_height as u64 {
-                        let blockhash = blockstore
-                            .get_slot_entries(slot, 0)
-                            .unwrap()
-                            .last()
-                            .unwrap()
-                            .hash;
-                        Some((slot, blockhash))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            let mut output_file: Box<dyn Write> =
-                if let Some(path) = arg_matches.value_of("slot_list") {
-                    match File::create(path) {
-                        Ok(file) => Box::new(file),
-                        _ => Box::new(stdout()),
-                    }
-                } else {
-                    Box::new(stdout())
-                };
-
-            slot_hash
-                .into_iter()
-                .rev()
-                .enumerate()
-                .for_each(|(i, (slot, hash))| {
-                    if i < num_roots {
-                        output_file
-                            .write_all(format!("{:?}: {:?}\n", slot, hash).as_bytes())
-                            .expect("failed to write");
-                    }
-                });
+            println!(
+                "last root: {:?}",
+                blockstore.rooted_slot_iterator(0).unwrap().last()
+            );
         }
         ("bounds", Some(arg_matches)) => {
             match open_blockstore(&ledger_path, AccessType::TryPrimaryThenSecondary)
