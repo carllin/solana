@@ -75,21 +75,31 @@ impl UnverifiedBlocks {
     pub fn next_heaviest_leaf(&self) -> Option<Slot> {
         // Take heaviest bank, greatest slot, should be a leaf.
         self.fork_weights
-            .values()
+            .iter()
             .rev()
             .next()
-            .map(|slots| {
+            .map(|(weight, slots)| {
                 slots
                     .iter()
                     .find(|slot| {
-                        self.unverified_blocks
+                        let children = self
+                            .unverified_blocks
                             .get(&slot)
                             .expect(
                                 "If exists in `fork_weights`, must
             exist in `unverified blocks` as both are in sync",
                             )
                             .children
-                            .is_empty()
+                            .clone();
+
+                        for child_slot in &children {
+                            let child = self.unverified_blocks.get(&child_slot).unwrap();
+                            println!(
+                                "parent: {}, child: {:?}, parent weight: {}, child weight: {}",
+                                slot, child_slot, weight, child.fork_weight
+                            );
+                        }
+                        children.is_empty()
                     })
                     .expect("at least one heaviest fork must be a leaf")
             })
