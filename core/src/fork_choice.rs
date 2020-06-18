@@ -31,7 +31,7 @@ pub(crate) trait ForkChoice {
     // 2) The heavest bank on the same fork as the last vote (doesn't require a
     // switching proof to vote for)
     fn select_forks(
-        &self,
+        &mut self,
         frozen_banks: &[Arc<Bank>],
         tower: &Tower,
         progress: &ProgressMap,

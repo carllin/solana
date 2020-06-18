@@ -199,6 +199,8 @@ pub(crate) struct ForkStats {
     pub(crate) is_recent: bool,
     pub(crate) is_empty: bool,
     pub(crate) vote_threshold: bool,
+    pub(crate) vote_threshold_fail_slot: Option<Slot>,
+    pub(crate) missing_stake: HashMap<Slot, HashSet<Pubkey>>,
     pub(crate) is_locked_out: bool,
     pub(crate) stake_lockouts: HashMap<u64, StakeLockout>,
     pub(crate) confirmation_reported: bool,

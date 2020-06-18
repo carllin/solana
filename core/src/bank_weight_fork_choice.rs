@@ -5,6 +5,7 @@ use crate::{
 };
 use solana_ledger::bank_forks::BankForks;
 use solana_runtime::bank::Bank;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::{clock::Slot, timing};
 use std::time::Instant;
 use std::{
@@ -13,7 +14,11 @@ use std::{
 };
 
 #[derive(Default)]
-pub struct BankWeightForkChoice {}
+pub struct BankWeightForkChoice {
+    processed_slots: HashSet<Slot>,
+    total_processed_slots: u64,
+    pubkey_misses: HashMap<Pubkey, u64>,
+}
 
 impl ForkChoice for BankWeightForkChoice {
     fn compute_bank_stats(
@@ -47,7 +52,7 @@ impl ForkChoice for BankWeightForkChoice {
     // 2) The heavest bank on the same fork as the last vote (doesn't require a
     // switching proof to vote for)
     fn select_forks(
-        &self,
+        &mut self,
         frozen_banks: &[Arc<Bank>],
         tower: &Tower,
         progress: &ProgressMap,
@@ -124,6 +129,38 @@ impl ForkChoice for BankWeightForkChoice {
             .iter()
             .map(|x| (x.1.weight, x.0.slot(), x.1.block_height))
             .collect();
+        {
+            if !self.processed_slots.contains(&rv.0.slot()) {
+                self.processed_slots.insert(rv.0.slot());
+                let heaviest_stats = rv.1;
+                if !heaviest_stats.vote_threshold {
+                    self.total_processed_slots += 1;
+                    if let Some(fail_slot) = heaviest_stats.vote_threshold_fail_slot {
+                        for pubkey in heaviest_stats.missing_stake.get(&fail_slot).unwrap() {
+                            *self.pubkey_misses.entry(*pubkey).or_default() += 1;
+                        }
+                    }
+
+                    if self.total_processed_slots % 10 == 0 {
+                        let mut failed_map: Vec<_> = self
+                            .pubkey_misses
+                            .iter()
+                            .map(|(pk, misses)| (pk, misses))
+                            .collect();
+                        failed_map.sort_by(|a, b| a.1.cmp(&b.1).reverse());
+                        println!(
+                            "Total misses: {}, failures: {:#?}",
+                            self.total_processed_slots,
+                            failed_map
+                                .iter()
+                                .map(|(pk, misses)| **misses as f64
+                                    / self.total_processed_slots as f64),
+                        );
+                    }
+                }
+            }
+        }
+
         debug!(
             "@{:?} tower duration: {:?} len: {}/{} weights: {:?}",
             timing::timestamp(),

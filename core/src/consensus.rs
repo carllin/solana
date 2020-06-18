@@ -85,6 +85,7 @@ pub(crate) struct ComputedBankState {
     pub bank_weight: u128,
     pub lockout_intervals: LockoutIntervals,
     pub pubkey_votes: Vec<(Pubkey, Slot)>,
+    pub missing_stake: HashMap<Slot, HashSet<Pubkey>>,
 }
 
 pub struct Tower {
@@ -163,6 +164,7 @@ impl Tower {
         // keyed by end of the range
         let mut lockout_intervals = BTreeMap::new();
         let mut pubkey_votes = vec![];
+        let mut missing_stake: HashMap<Slot, HashSet<Pubkey>> = HashMap::new();
         for (key, (lamports, account)) in vote_accounts {
             if lamports == 0 {
                 continue;
@@ -254,14 +256,26 @@ impl Tower {
                 vote_state.nth_recent_vote(0).map(|l| l.slot),
                 Some(bank_slot)
             );
-            if let Some(vote) = vote_state.nth_recent_vote(1) {
+            let earliest_missing_slot = if let Some(vote) = vote_state.nth_recent_vote(1) {
                 // Update all the parents of this last vote with the stake of this vote account
                 Self::update_ancestor_stakes(&mut stake_lockouts, vote.slot, lamports, ancestors);
+                vote.slot
+            } else {
+                0
+            };
+
+            for a in ancestors.get(&bank_slot).unwrap() {
+                if *a > earliest_missing_slot {
+                    let slot_missing = missing_stake.entry(*a).or_default();
+                    slot_missing.insert(vote_state.node_pubkey);
+                }
             }
+
             total_staked += lamports;
         }
 
         ComputedBankState {
+            missing_stake,
             stake_lockouts,
             total_staked,
             bank_weight,
@@ -517,7 +531,7 @@ impl Tower {
         slot: Slot,
         stake_lockouts: &HashMap<u64, StakeLockout>,
         total_staked: u64,
-    ) -> bool {
+    ) -> (bool, Option<Slot>) {
         println!("checking threshold on slot: {}", slot);
         let mut lockouts = self.lockouts.clone();
         lockouts.process_slot_vote_unchecked(slot);
@@ -525,7 +539,7 @@ impl Tower {
         if let Some(vote) = vote {
             if vote.slot < self.start_root {
                 println!("vote.slot: {} < start_root: {}", vote.slot, self.start_root);
-                return true;
+                return (true, None);
             }
             if let Some(fork_stake) = stake_lockouts.get(&vote.slot) {
                 let lockout = fork_stake.stake as f64 / total_staked as f64;
@@ -538,17 +552,17 @@ impl Tower {
                         if old_vote.slot == vote.slot
                             && old_vote.confirmation_count == vote.confirmation_count
                         {
-                            return true;
+                            return (true, None);
                         }
                     }
                 }
-                lockout > self.threshold_size
+                (lockout > self.threshold_size, Some(vote.slot))
             } else {
-                false
+                (false, None)
             }
         } else {
             println!("No need for threshold check");
-            true
+            (true, None)
         }
     }
 

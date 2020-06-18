@@ -1246,6 +1246,7 @@ impl ReplayStage {
                         stake_lockouts,
                         total_staked,
                         lockout_intervals,
+                        missing_stake,
                         ..
                     } = computed_bank_state;
                     let stats = progress
@@ -1256,6 +1257,7 @@ impl ReplayStage {
                     stats.lockout_intervals = lockout_intervals;
                     stats.block_height = bank.block_height();
                     stats.computed = true;
+                    stats.missing_stake = missing_stake;
                     new_stats.push(bank_slot);
                     datapoint_info!(
                         "bank_weight",
@@ -1287,11 +1289,13 @@ impl ReplayStage {
                 .get_fork_stats_mut(bank_slot)
                 .expect("All frozen banks must exist in the Progress map");
 
-            stats.vote_threshold = tower.check_vote_stake_threshold(
+            let res = tower.check_vote_stake_threshold(
                 bank_slot,
                 &stats.stake_lockouts,
                 stats.total_staked,
             );
+            stats.vote_threshold = res.0;
+            stats.vote_threshold_fail_slot = res.1;
             stats.is_locked_out = tower.is_locked_out(bank_slot, &ancestors);
             stats.has_voted = tower.has_voted(bank_slot);
             stats.is_recent = tower.is_recent(bank_slot);

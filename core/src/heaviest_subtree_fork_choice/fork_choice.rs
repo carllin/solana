@@ -37,11 +37,11 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
     }
 
     // Returns:
-    // 1) The heaviest overall bbank
+    // 1) The heaviest overall bank
     // 2) The heavest bank on the same fork as the last vote (doesn't require a
     // switching proof to vote for)
     fn select_forks(
-        &self,
+        &mut self,
         _frozen_banks: &[Arc<Bank>],
         tower: &Tower,
         _progress: &ProgressMap,
