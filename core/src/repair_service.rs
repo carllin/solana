@@ -15,6 +15,7 @@ use solana_ledger::{
     blockstore::{Blockstore, CompletedSlotsReceiver, SlotMeta},
     shred::Nonce,
 };
+use solana_measure::measure::Measure;
 use solana_runtime::{bank::Bank, bank_forks::BankForks, commitment::VOTE_THRESHOLD_SIZE};
 use solana_sdk::{clock::Slot, epoch_schedule::EpochSchedule, pubkey::Pubkey, timing::timestamp};
 use std::{
@@ -69,6 +70,7 @@ pub struct RepairStats {
     pub shred: RepairStatsGroup,
     pub highest_shred: RepairStatsGroup,
     pub orphan: RepairStatsGroup,
+    add_votes_elapsed_us: u64,
 }
 
 pub const MAX_REPAIR_LENGTH: usize = 512;
@@ -191,13 +193,17 @@ impl RepairService {
                     &mut repair_stats,
                     &repair_socket,
                 );*/
-                Self::generate_repairs(
+                let mut add_votes_elapsed = Measure::start("add_votes");
+                let r = Self::generate_repairs(
                     blockstore,
                     root_bank.slot(),
                     MAX_REPAIR_LENGTH,
                     &duplicate_slot_repair_statuses,
                     &vote_tracker,
-                )
+                );
+                add_votes_elapsed.stop();
+                repair_stats.add_votes_elapsed_us += add_votes_elapsed.as_us();
+                r
             };
 
             if let Ok(repairs) = repairs {
@@ -231,6 +237,7 @@ impl RepairService {
                         ("orphan-count", repair_stats.orphan.count, i64),
                         ("repair-highest-slot", repair_stats.highest_shred.max, i64),
                         ("repair-orphan", repair_stats.orphan.max, i64),
+                        ("add-votes-us", repair_stats.add_votes_elapsed_us, i64),
                     );
                 }
                 repair_stats = RepairStats::default();
@@ -260,7 +267,6 @@ impl RepairService {
                     slot,
                     ..SlotMeta::default()
                 });
-
             let new_repairs = Self::generate_repairs_for_slot(
                 blockstore,
                 slot,
