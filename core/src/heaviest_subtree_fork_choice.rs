@@ -173,6 +173,40 @@ impl HeaviestSubtreeForkChoice {
         self.best_overall_slot()
     }
 
+    pub fn remove_branch(&mut self, slot_to_remove: Slot) -> HashSet<Slot> {
+        if !self.contains_slot(slot_to_remove) {
+            return HashSet::new();
+        }
+
+        // Generate aggregate operations for all parents of `slot_to_remove`
+        let mut update_operations = BTreeMap::new();
+        self.insert_aggregate_operations(&mut update_operations, slot_to_remove);
+
+        let parent = self
+            .parent(slot_to_remove)
+            .expect("Passed contains_slot() check, must exist");
+
+        // Remove the branch starting at `slot_to_remove`
+        let slots_to_remove = self.subtree_diff(slot_to_remove, 0);
+        for slot in &slots_to_remove {
+            self.fork_infos
+                .remove(slot)
+                .expect("must exist based on subtree diff");
+        }
+
+        // Clear the removed child from the list of children
+        self.fork_infos
+            .get_mut(&parent)
+            .unwrap()
+            .children
+            .retain(|child| *child != slot_to_remove);
+
+        // Update all the parents of `slot_to_remove`
+        self.process_update_operations(update_operations);
+
+        slots_to_remove
+    }
+
     pub fn set_root(&mut self, new_root: Slot) {
         // Remove everything reachable from `self.root` but not `new_root`,
         // as those are now unrooted.
@@ -1495,6 +1529,43 @@ mod test {
 
         // Zero no longer exists, set reachable from 0 is empty
         assert!(heaviest_subtree_fork_choice.subtree_diff(0, 6).is_empty());
+    }
+
+    #[test]
+    fn test_remove_branch() {
+        let mut heaviest_subtree_fork_choice = setup_forks();
+        let stake = 100;
+        let (bank, vote_pubkeys) = bank_utils::setup_bank_and_vote_pubkeys(3, stake);
+
+        // Vote on one branch
+        let pubkey_votes: Vec<(Pubkey, Slot)> = vec![
+            (vote_pubkeys[0], 1),
+            (vote_pubkeys[1], 2),
+            (vote_pubkeys[2], 4),
+        ];
+        heaviest_subtree_fork_choice.add_votes(
+            &pubkey_votes,
+            bank.epoch_stakes_map(),
+            bank.epoch_schedule(),
+        );
+        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot(), 4);
+
+        // Remove the voted branch
+        let res = heaviest_subtree_fork_choice.remove_branch(2);
+        assert_eq!(res.len(), 2);
+        assert!(res.contains(&2));
+        assert!(res.contains(&4));
+
+        // Check that the weights are updated
+        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot(), 6);
+        assert_eq!(
+            heaviest_subtree_fork_choice.stake_voted_subtree(1).unwrap(),
+            stake
+        );
+
+        // Removed slots should no longer exist
+        assert!(heaviest_subtree_fork_choice.stake_voted_at(2).is_none());
+        assert!(heaviest_subtree_fork_choice.stake_voted_at(4).is_none());
     }
 
     fn setup_forks() -> HeaviestSubtreeForkChoice {
