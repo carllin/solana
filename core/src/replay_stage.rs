@@ -2150,8 +2150,8 @@ pub(crate) mod tests {
         transaction_status_service::TransactionStatusService,
     };
     use solana_ledger::{
-        blockstore::make_slot_entries,
         blockstore::{entries_to_test_shreds, BlockstoreError},
+        blockstore::{make_chaining_slot_entries, make_slot_entries},
         create_new_tmp_ledger,
         entry::{self, next_entry, Entry},
         genesis_utils::{create_genesis_config, create_genesis_config_with_leader},
@@ -2235,6 +2235,7 @@ pub(crate) mod tests {
             );
 
         let bank0 = Bank::new(&genesis_config);
+        bank0.freeze();
 
         // ProgressMap
         let mut progress = ProgressMap::default();
@@ -4010,6 +4011,91 @@ pub(crate) mod tests {
         // Only remaining keys should be ones < root
         for k in descendants.keys() {
             assert!(*k < 3);
+        }
+    }
+
+    #[test]
+    fn test_handle_blocks_failed_poh_not_replayed() {
+        let ReplayBlockstoreComponents {
+            blockstore,
+            mut progress,
+            bank_forks,
+            leader_schedule_cache,
+            rpc_subscriptions,
+            ..
+        } = replay_blockstore_components();
+
+        // Insert shreds for `num_slots` number of slots chaining to slot 0
+        let num_slots = 8;
+        let all_shreds =
+            make_chaining_slot_entries(&(1..=num_slots).into_iter().collect::<Vec<_>>(), 10);
+        for (shreds, _) in all_shreds {
+            blockstore.insert_shreds(shreds, None, false).unwrap();
+        }
+
+        for i in 1..=num_slots {
+            ReplayStage::generate_new_bank_forks(
+                &blockstore,
+                &bank_forks,
+                &leader_schedule_cache,
+                &rpc_subscriptions,
+                None,
+                &mut progress,
+                &mut PubkeyReferences::default(),
+                &Pubkey::default(),
+                &Pubkey::default(),
+            );
+            let bank = bank_forks.read().unwrap().get(i).cloned().unwrap();
+            bank.freeze();
+        }
+
+        let mut ancestors = bank_forks.read().unwrap().ancestors();
+        let mut descendants = bank_forks.read().unwrap().descendants();
+        let dead_slot = 3;
+        let verify_slot_failures: HashSet<Slot> = vec![dead_slot].into_iter().collect();
+        let heaviest_subtree_fork_choice = RwLock::new(
+            HeaviestSubtreeForkChoice::new_from_bank_forks(&bank_forks.read().unwrap()),
+        );
+
+        // Signal PoH failed on slot 3 onwards
+        ReplayStage::handle_blocks_failed_poh(
+            &blockstore,
+            &mut ancestors,
+            &mut descendants,
+            &mut progress,
+            &verify_slot_failures,
+            &bank_forks,
+            &heaviest_subtree_fork_choice,
+        );
+
+        for i in 0..=num_slots {
+            if i >= dead_slot {
+                assert!(bank_forks.read().unwrap().get(i).is_none());
+            } else {
+                assert!(bank_forks.read().unwrap().get(i).is_some());
+            }
+        }
+
+        // Check generate_new_bank_forks() doesn't find the dead slots
+        for _ in 0..=num_slots {
+            ReplayStage::generate_new_bank_forks(
+                &blockstore,
+                &bank_forks,
+                &leader_schedule_cache,
+                &rpc_subscriptions,
+                None,
+                &mut progress,
+                &mut PubkeyReferences::default(),
+                &Pubkey::default(),
+                &Pubkey::default(),
+            );
+        }
+        for i in 0..=num_slots {
+            if i >= dead_slot {
+                assert!(bank_forks.read().unwrap().get(i).is_none());
+            } else {
+                assert!(bank_forks.read().unwrap().get(i).is_some());
+            }
         }
     }
 
