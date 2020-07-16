@@ -385,6 +385,7 @@ impl ReplayStage {
                         &mut descendants,
                         &mut progress,
                         &bank_forks,
+                        &heaviest_subtree_fork_choice,
                     );
                     reset_duplicate_slots_time.stop();
 
@@ -651,9 +652,12 @@ impl ReplayStage {
 
                     Self::handle_blocks_failed_poh(
                         &blockstore,
+                        &mut ancestors,
+                        &mut descendants,
                         &mut progress,
                         &verify_slot_failures,
-                        &descendants
+                        &bank_forks,
+                        &heaviest_subtree_fork_choice,
                     );
 
                     let start = allocated.get();
@@ -735,9 +739,12 @@ impl ReplayStage {
 
     fn handle_blocks_failed_poh(
         blockstore: &Blockstore,
+        ancestors: &mut HashMap<Slot, HashSet<Slot>>,
+        descendants: &mut HashMap<Slot, HashSet<Slot>>,
         progress: &mut ProgressMap,
         verify_slot_failures: &HashSet<Slot>,
-        descendants: &HashMap<Slot, HashSet<Slot>>,
+        bank_forks: &RwLock<BankForks>,
+        heaviest_subtree_fork_choice: &RwLock<HeaviestSubtreeForkChoice>,
     ) {
         for failed_slot in verify_slot_failures {
             // Might not exist in `descendants` if we got the results after the slot
@@ -747,7 +754,7 @@ impl ReplayStage {
             for failed_slot_descendant in
                 std::iter::once(failed_slot).chain(slot_descendants.iter())
             {
-                let bank_progress = progress.get_mut(&failed_slot).expect(
+                let bank_progress = progress.get_mut(&failed_slot_descendant).expect(
                     "Anything in BankForks must exist
                 in progress map, guaranteed by `generate_new_bank_forks()`",
                 );
@@ -758,6 +765,15 @@ impl ReplayStage {
                     &BlockstoreProcessorError::InvalidBlock(BlockError::InvalidEntryHash),
                 );
             }
+
+            Self::purge_branch(
+                *failed_slot,
+                ancestors,
+                descendants,
+                progress,
+                bank_forks,
+                heaviest_subtree_fork_choice,
+            );
         }
     }
 
@@ -875,27 +891,30 @@ impl ReplayStage {
         descendants: &mut HashMap<Slot, HashSet<Slot>>,
         progress: &mut ProgressMap,
         bank_forks: &RwLock<BankForks>,
+        heaviest_subtree_fork_choice: &RwLock<HeaviestSubtreeForkChoice>,
     ) {
         for duplicate_slot in duplicate_slots_reset_receiver.try_iter() {
-            Self::purge_unconfirmed_duplicate_slot(
+            Self::purge_branch(
                 duplicate_slot,
                 ancestors,
                 descendants,
                 progress,
                 bank_forks,
+                heaviest_subtree_fork_choice,
             );
         }
     }
 
-    fn purge_unconfirmed_duplicate_slot(
-        duplicate_slot: Slot,
+    fn purge_branch(
+        slot: Slot,
         ancestors: &mut HashMap<Slot, HashSet<Slot>>,
         descendants: &mut HashMap<Slot, HashSet<Slot>>,
         progress: &mut ProgressMap,
         bank_forks: &RwLock<BankForks>,
+        heaviest_subtree_fork_choice: &RwLock<HeaviestSubtreeForkChoice>,
     ) {
-        warn!("purging slot {}", duplicate_slot);
-        let slot_descendants = descendants.get(&duplicate_slot).cloned();
+        warn!("purging branch at slot {}", slot);
+        let slot_descendants = descendants.get(&slot).cloned();
         if slot_descendants.is_none() {
             // Root has already moved past this slot, no need to purge it
             return;
@@ -904,21 +923,13 @@ impl ReplayStage {
         // Clear the ancestors/descendants map to keep them
         // consistent
         let slot_descendants = slot_descendants.unwrap();
-        Self::purge_ancestors_descendants(
-            duplicate_slot,
-            &slot_descendants,
-            ancestors,
-            descendants,
-        );
+        Self::purge_ancestors_descendants(slot, &slot_descendants, ancestors, descendants);
 
-        for d in slot_descendants
-            .iter()
-            .chain(std::iter::once(&duplicate_slot))
-        {
+        for d in slot_descendants.iter().chain(std::iter::once(&slot)) {
             // Clear the progress map of these forks
             let _ = progress.remove(d);
 
-            // Clear the duplicate banks from BankForks
+            // Clear the banks from BankForks
             {
                 let mut w_bank_forks = bank_forks.write().unwrap();
                 // Purging should have already been taken care of by logic
@@ -930,6 +941,12 @@ impl ReplayStage {
                 w_bank_forks.remove(*d);
             }
         }
+
+        // Clear `heaviest_subtree_fork_choice`
+        heaviest_subtree_fork_choice
+            .write()
+            .unwrap()
+            .remove_branch(slot);
     }
 
     // Purge given slot and all its descendants from the `ancestors` and
@@ -2179,7 +2196,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_is_partition_detected() {
-        let (bank_forks, _) = setup_forks();
+        let VoteSimulator { bank_forks, .. } = setup_forks();
         let ancestors = bank_forks.read().unwrap().ancestors();
         // Last vote 1 is an ancestor of the heaviest slot 3, no partition
         assert!(!ReplayStage::is_partition_detected(&ancestors, 1, 3));
@@ -3822,68 +3839,106 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_purge_unconfirmed_duplicate_slot() {
-        let (bank_forks, mut progress) = setup_forks();
+    fn test_purge_branch() {
+        let VoteSimulator {
+            bank_forks,
+            mut progress,
+            heaviest_subtree_fork_choice,
+            ..
+        } = setup_forks();
         let mut descendants = bank_forks.read().unwrap().descendants();
         let mut ancestors = bank_forks.read().unwrap().ancestors();
 
         // Purging slot 5 should purge only slots 5 and its descendant 6
-        ReplayStage::purge_unconfirmed_duplicate_slot(
+        ReplayStage::purge_branch(
             5,
             &mut ancestors,
             &mut descendants,
             &mut progress,
             &bank_forks,
+            &heaviest_subtree_fork_choice,
         );
         for i in 5..=6 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
             assert!(progress.get(&i).is_none());
+            assert!(heaviest_subtree_fork_choice
+                .read()
+                .unwrap()
+                .stake_voted_subtree(i)
+                .is_none());
         }
         for i in 0..=4 {
             assert!(bank_forks.read().unwrap().get(i).is_some());
             assert!(progress.get(&i).is_some());
+            assert!(heaviest_subtree_fork_choice
+                .read()
+                .unwrap()
+                .stake_voted_subtree(i)
+                .is_some());
         }
 
         // Purging slot 4 should purge only slot 4
         let mut descendants = bank_forks.read().unwrap().descendants();
         let mut ancestors = bank_forks.read().unwrap().ancestors();
-        ReplayStage::purge_unconfirmed_duplicate_slot(
+        ReplayStage::purge_branch(
             4,
             &mut ancestors,
             &mut descendants,
             &mut progress,
             &bank_forks,
+            &heaviest_subtree_fork_choice,
         );
         for i in 4..=6 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
             assert!(progress.get(&i).is_none());
+            assert!(heaviest_subtree_fork_choice
+                .read()
+                .unwrap()
+                .stake_voted_subtree(i)
+                .is_none());
         }
         for i in 0..=3 {
             assert!(bank_forks.read().unwrap().get(i).is_some());
             assert!(progress.get(&i).is_some());
+            assert!(heaviest_subtree_fork_choice
+                .read()
+                .unwrap()
+                .stake_voted_subtree(i)
+                .is_some());
         }
 
         // Purging slot 1 should purge both forks 2 and 3
         let mut descendants = bank_forks.read().unwrap().descendants();
         let mut ancestors = bank_forks.read().unwrap().ancestors();
-        ReplayStage::purge_unconfirmed_duplicate_slot(
+        ReplayStage::purge_branch(
             1,
             &mut ancestors,
             &mut descendants,
             &mut progress,
             &bank_forks,
+            &heaviest_subtree_fork_choice,
         );
         for i in 1..=6 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
             assert!(progress.get(&i).is_none());
+            assert!(heaviest_subtree_fork_choice
+                .read()
+                .unwrap()
+                .stake_voted_subtree(i)
+                .is_none());
         }
         assert!(bank_forks.read().unwrap().get(0).is_some());
         assert!(progress.get(&0).is_some());
+        assert!(heaviest_subtree_fork_choice
+            .read()
+            .unwrap()
+            .stake_voted_subtree(0)
+            .is_some());
     }
 
     #[test]
     fn test_purge_ancestors_descendants() {
-        let (bank_forks, _) = setup_forks();
+        let VoteSimulator { bank_forks, .. } = setup_forks();
 
         // Purge branch rooted at slot 2
         let mut descendants = bank_forks.read().unwrap().descendants();
@@ -3930,7 +3985,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn setup_forks() -> (RwLock<BankForks>, ProgressMap) {
+    fn setup_forks() -> VoteSimulator {
         /*
             Build fork structure:
                  slot 0
@@ -3949,7 +4004,7 @@ pub(crate) mod tests {
         let mut vote_simulator = VoteSimulator::new(1);
         vote_simulator.fill_bank_forks(forks, &HashMap::new());
 
-        (vote_simulator.bank_forks, vote_simulator.progress)
+        vote_simulator
     }
 
     fn check_map_eq<K: Eq + std::hash::Hash + std::fmt::Debug, T: PartialEq + std::fmt::Debug>(
