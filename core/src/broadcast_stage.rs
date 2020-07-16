@@ -54,7 +54,7 @@ pub enum BroadcastStageReturnType {
 #[derive(PartialEq, Clone, Debug)]
 pub enum BroadcastStageType {
     Standard,
-    FailEntryVerification,
+    FailEntryVerification(Slot),
     BroadcastFakeShreds,
 }
 
@@ -81,14 +81,14 @@ impl BroadcastStageType {
                 StandardBroadcastRun::new(keypair, shred_version),
             ),
 
-            BroadcastStageType::FailEntryVerification => BroadcastStage::new(
+            BroadcastStageType::FailEntryVerification(resolve_slot) => BroadcastStage::new(
                 sock,
                 cluster_info,
                 receiver,
                 retransmit_slots_receiver,
                 exit_sender,
                 blockstore,
-                FailEntryVerificationBroadcastRun::new(keypair, shred_version),
+                FailEntryVerificationBroadcastRun::new(keypair, shred_version, *resolve_slot),
             ),
 
             BroadcastStageType::BroadcastFakeShreds => BroadcastStage::new(

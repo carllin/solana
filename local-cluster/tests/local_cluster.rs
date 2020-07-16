@@ -1074,27 +1074,38 @@ fn test_snapshots_restart_validity() {
 #[allow(unused_attributes)]
 #[ignore]
 fn test_fail_entry_verification_leader() {
-    test_faulty_node(BroadcastStageType::FailEntryVerification);
+    let mut error_bootstrap = ValidatorConfig::default();
+    error_bootstrap.broadcast_stage_type = BroadcastStageType::FailEntryVerification(32);
+    let correct_validator = ValidatorConfig::default();
+    test_faulty_node(vec![error_bootstrap, correct_validator]);
 }
 
 #[test]
 #[allow(unused_attributes)]
 #[ignore]
 fn test_fake_shreds_broadcast_leader() {
-    test_faulty_node(BroadcastStageType::BroadcastFakeShreds);
+    let mut error_bootstrap = ValidatorConfig::default();
+    error_bootstrap.broadcast_stage_type = BroadcastStageType::BroadcastFakeShreds;
+    let correct_validator = ValidatorConfig::default();
+    test_faulty_node(vec![error_bootstrap, correct_validator]);
 }
 
-fn test_faulty_node(faulty_node_type: BroadcastStageType) {
+#[test]
+#[allow(unused_attributes)]
+fn test_handle_poh_failure() {
+    let correct_bootstrap = ValidatorConfig::default();
+    let mut error_validator = ValidatorConfig::default();
+    error_validator.broadcast_stage_type = BroadcastStageType::FailEntryVerification(std::u64::MAX);
+
+    // Only the bootstrap leader should continue to make roots, despite the validator
+    // constantly throwing bad PoH
+    test_faulty_node(vec![correct_bootstrap, error_validator]);
+}
+
+fn test_faulty_node(validator_configs: Vec<ValidatorConfig>) {
     solana_logger::setup();
-    let num_nodes = 2;
-    let validator_config = ValidatorConfig::default();
-    let mut error_validator_config = ValidatorConfig::default();
-    error_validator_config.broadcast_stage_type = faulty_node_type;
-    let mut validator_configs = vec![validator_config; num_nodes - 1];
-    // Push a faulty_bootstrap = vec![error_validator_config];
-    validator_configs.insert(0, error_validator_config);
     let node_stakes = vec![300, 100];
-    assert_eq!(node_stakes.len(), num_nodes);
+    assert_eq!(node_stakes.len(), 2);
     let cluster_config = ClusterConfig {
         cluster_lamports: 10_000,
         node_stakes,
