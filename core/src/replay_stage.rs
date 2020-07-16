@@ -749,22 +749,16 @@ impl ReplayStage {
         for failed_slot in verify_slot_failures {
             // Might not exist in `descendants` if we got the results after the slot
             // had already been purged by set root
-            let empty = HashSet::new();
-            let slot_descendants = descendants.get(failed_slot).unwrap_or(&empty);
-            for failed_slot_descendant in
-                std::iter::once(failed_slot).chain(slot_descendants.iter())
-            {
-                let bank_progress = progress.get_mut(&failed_slot_descendant).expect(
-                    "Anything in BankForks must exist
-                in progress map, guaranteed by `generate_new_bank_forks()`",
-                );
-                Self::mark_dead_slot(
-                    *failed_slot_descendant,
-                    bank_progress,
-                    blockstore,
-                    &BlockstoreProcessorError::InvalidBlock(BlockError::InvalidEntryHash),
-                );
-            }
+            let bank_progress = progress.get_mut(&failed_slot).expect(
+                "Anything in BankForks must exist
+            in progress map, guaranteed by `generate_new_bank_forks()`",
+            );
+            Self::mark_dead_slot(
+                *failed_slot,
+                bank_progress,
+                blockstore,
+                &BlockstoreProcessorError::InvalidBlock(BlockError::InvalidEntryHash),
+            );
 
             Self::purge_branch(
                 *failed_slot,
