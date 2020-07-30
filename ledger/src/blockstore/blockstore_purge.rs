@@ -133,6 +133,10 @@ impl Blockstore {
             & self
                 .db
                 .delete_range_cf::<cf::Rewards>(&mut write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
+                .db
+                .delete_range_cf::<cf::Votes>(&mut write_batch, from_slot, to_slot)
                 .is_ok();
         let mut w_active_transaction_status_index =
             self.active_transaction_status_index.write().unwrap();
@@ -222,6 +226,10 @@ impl Blockstore {
                 .unwrap_or(false)
             && self
                 .rewards_cf
+                .compact_range(from_slot, to_slot)
+                .unwrap_or(false)
+            && self
+                .votes_cf
                 .compact_range(from_slot, to_slot)
                 .unwrap_or(false);
         compact_timer.stop();
@@ -398,6 +406,13 @@ pub mod tests {
                 .unwrap()
                 .next()
                 .map(|(slot, _)| slot >= min_slot)
+                .unwrap_or(true)
+            & blockstore
+                .db
+                .iter::<cf::Votes>(IteratorMode::Start)
+                .unwrap()
+                .next()
+                .map(|((slot, _, _), _)| slot >= min_slot)
                 .unwrap_or(true);
         assert!(condition_met);
     }

@@ -10,7 +10,12 @@ use rocksdb::{
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use solana_runtime::hardened_unpack::UnpackError;
-use solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Signature};
+use solana_sdk::{
+    clock::Slot,
+    hash::{Hash, HASH_BYTES},
+    pubkey::{Pubkey, PUBKEY_BYTES},
+    signature::Signature,
+};
 use solana_transaction_status::{Rewards, TransactionStatusMeta};
 use std::{collections::HashMap, fs, marker::PhantomData, path::Path, sync::Arc};
 use thiserror::Error;
@@ -44,6 +49,8 @@ const ADDRESS_SIGNATURES_CF: &str = "address_signatures";
 const TRANSACTION_STATUS_INDEX_CF: &str = "transaction_status_index";
 /// Column family for Rewards
 const REWARDS_CF: &str = "rewards";
+/// Column family for Votes
+const VOTES_CF: &str = "votes";
 
 #[derive(Error, Debug)]
 pub enum BlockstoreError {
@@ -125,6 +132,10 @@ pub mod columns {
     #[derive(Debug)]
     /// The rewards column
     pub struct Rewards;
+
+    #[derive(Debug)]
+    /// The votes column
+    pub struct Votes;
 }
 
 pub enum AccessType {
@@ -185,7 +196,7 @@ impl Rocks {
     ) -> Result<Rocks> {
         use columns::{
             AddressSignatures, DeadSlots, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards,
-            Root, ShredCode, ShredData, SlotMeta, TransactionStatus, TransactionStatusIndex,
+            Root, ShredCode, ShredData, SlotMeta, TransactionStatus, TransactionStatusIndex, Votes,
         };
 
         fs::create_dir_all(&path)?;
@@ -218,6 +229,7 @@ impl Rocks {
         let transaction_status_index_cf_descriptor =
             ColumnFamilyDescriptor::new(TransactionStatusIndex::NAME, get_cf_options());
         let rewards_cf_descriptor = ColumnFamilyDescriptor::new(Rewards::NAME, get_cf_options());
+        let votes_cf_descriptor = ColumnFamilyDescriptor::new(Votes::NAME, get_cf_options());
 
         let cfs = vec![
             (SlotMeta::NAME, meta_cf_descriptor),
@@ -236,6 +248,7 @@ impl Rocks {
                 transaction_status_index_cf_descriptor,
             ),
             (Rewards::NAME, rewards_cf_descriptor),
+            (Votes::NAME, votes_cf_descriptor),
         ];
 
         // Open the database
@@ -274,7 +287,7 @@ impl Rocks {
     fn columns(&self) -> Vec<&'static str> {
         use columns::{
             AddressSignatures, DeadSlots, DuplicateSlots, ErasureMeta, Index, Orphans, Rewards,
-            Root, ShredCode, ShredData, SlotMeta, TransactionStatus, TransactionStatusIndex,
+            Root, ShredCode, ShredData, SlotMeta, TransactionStatus, TransactionStatusIndex, Votes,
         };
 
         vec![
@@ -291,6 +304,7 @@ impl Rocks {
             AddressSignatures::NAME,
             TransactionStatusIndex::NAME,
             Rewards::NAME,
+            Votes::NAME,
         ]
     }
 
@@ -514,6 +528,45 @@ impl ColumnName for columns::Rewards {
 }
 impl TypedColumn for columns::Rewards {
     type Type = Rewards;
+}
+
+impl ColumnName for columns::Votes {
+    const NAME: &'static str = VOTES_CF;
+}
+impl TypedColumn for columns::Votes {
+    type Type = blockstore_meta::VoteTransactionInfo;
+}
+
+impl Column for columns::Votes {
+    type Index = (Slot, Hash, Pubkey);
+
+    fn key((slot, bank_hash, vote_key): (Slot, Hash, Pubkey)) -> Vec<u8> {
+        let mut key = vec![0; 8 + HASH_BYTES + PUBKEY_BYTES]; // size_of u64 + size_of Hash + size_of Pubkey
+        BigEndian::write_u64(&mut key[0..8], slot);
+        key[8..8 + HASH_BYTES].clone_from_slice(&bank_hash.as_ref()[0..64]);
+        key[8 + HASH_BYTES..8 + HASH_BYTES + PUBKEY_BYTES]
+            .clone_from_slice(&vote_key.as_ref()[0..64]);
+        key
+    }
+
+    fn index(key: &[u8]) -> (Slot, Hash, Pubkey) {
+        if key.len() != 8 + HASH_BYTES + PUBKEY_BYTES {
+            Self::as_index(0)
+        } else {
+            let slot = BigEndian::read_u64(&key[0..8]);
+            let hash = Hash::new(&key[8..8 + HASH_BYTES]);
+            let pubkey = Pubkey::new(&key[8 + HASH_BYTES..8 + HASH_BYTES + PUBKEY_BYTES]);
+            (slot, hash, pubkey)
+        }
+    }
+
+    fn primary_index(index: Self::Index) -> Slot {
+        index.0
+    }
+
+    fn as_index(index: u64) -> Self::Index {
+        (index, Hash::default(), Pubkey::default())
+    }
 }
 
 impl Column for columns::ShredCode {

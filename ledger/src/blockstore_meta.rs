@@ -1,6 +1,6 @@
 use crate::erasure::ErasureConfig;
 use serde::{Deserialize, Serialize};
-use solana_sdk::clock::Slot;
+use solana_sdk::{clock::Slot, transaction::Transaction};
 use std::{collections::BTreeSet, ops::RangeBounds};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
@@ -65,6 +65,13 @@ pub struct DuplicateSlotProof {
     pub shred1: Vec<u8>,
     #[serde(with = "serde_bytes")]
     pub shred2: Vec<u8>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct VoteTransactionInfo {
+    vote_transaction: Transaction,
+    prev_vote: Slot,
+    next_votes: Vec<Slot>,
 }
 
 #[derive(Debug, PartialEq)]

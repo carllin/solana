@@ -11,6 +11,7 @@ pub use bs58;
 
 /// maximum length of derived pubkey seed
 pub const MAX_SEED_LEN: usize = 32;
+pub const PUBKEY_BYTES: usize = 32;
 
 #[derive(Error, Debug, Serialize, Clone, PartialEq, FromPrimitive, ToPrimitive)]
 pub enum PubkeyError {
@@ -30,7 +31,7 @@ impl<T> DecodeError<T> for PubkeyError {
 #[derive(
     Serialize, Deserialize, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Hash, AbiExample,
 )]
-pub struct Pubkey([u8; 32]);
+pub struct Pubkey([u8; PUBKEY_BYTES]);
 
 impl crate::sanitize::Sanitize for Pubkey {}
 
