@@ -110,6 +110,8 @@ pub fn load(
             &blockstore,
             account_paths,
             process_options,
+            replay_vote_sender,
+            replay_transaction_sender,
         ),
         None,
     )
