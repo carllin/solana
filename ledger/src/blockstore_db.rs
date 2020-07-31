@@ -10,7 +10,7 @@ use rocksdb::{
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use solana_runtime::hardened_unpack::UnpackError;
-use solana_sdk::{clock::Slot, signature::Signature, transaction::Transaction};
+use solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Signature, transaction::Transaction};
 use solana_transaction_status::{Rewards, TransactionStatusMeta};
 use std::{collections::HashMap, fs, marker::PhantomData, path::Path, sync::Arc};
 use thiserror::Error;

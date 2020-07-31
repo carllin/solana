@@ -3765,6 +3765,7 @@ dependencies = [
  "ed25519-dalek",
  "fs_extra",
  "itertools 0.9.0",
+ "indexmap",
  "lazy_static",
  "libc",
  "log 0.4.8",

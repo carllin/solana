@@ -2,7 +2,7 @@ use crate::{
     blockstore::Blockstore,
     blockstore_processor::{
         self, BlockstoreProcessorError, BlockstoreProcessorResult, ProcessOptions,
-        ReplayVotesSender, TransactionStatusSender,
+        ReplayTransactionSender, ReplayVoteSender, TransactionStatusSender,
     },
     entry::VerifyRecyclers,
     leader_schedule_cache::LeaderScheduleCache,
@@ -36,7 +36,8 @@ pub fn load(
     snapshot_config: Option<&SnapshotConfig>,
     process_options: ProcessOptions,
     transaction_status_sender: Option<TransactionStatusSender>,
-    replay_votes_sender: Option<&ReplayVotesSender>,
+    replay_vote_sender: Option<&ReplayVoteSender>,
+    replay_transaction_sender: Option<&ReplayTransactionSender>,
 ) -> LoadResult {
     if let Some(snapshot_config) = snapshot_config.as_ref() {
         info!(
@@ -90,7 +91,8 @@ pub fn load(
                         &process_options,
                         &VerifyRecyclers::default(),
                         transaction_status_sender,
-                        replay_votes_sender,
+                        replay_vote_sender,
+                        replay_transaction_sender,
                     ),
                     Some(deserialized_snapshot_hash),
                 );

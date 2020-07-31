@@ -17,7 +17,7 @@ use itertools::izip;
 use log::*;
 use solana_ledger::{
     blockstore::Blockstore,
-    blockstore_processor::{ReplayVotesReceiver, ReplayedVote},
+    blockstore_processor::{ReplayVoteReceiver, ReplayedVote},
 };
 use solana_metrics::inc_new_counter_debug;
 use solana_perf::packet::{self, Packets};
@@ -248,7 +248,7 @@ impl ClusterInfoVoteListener {
         bank_forks: Arc<RwLock<BankForks>>,
         subscriptions: Arc<RpcSubscriptions>,
         verified_vote_sender: VerifiedVoteSender,
-        replay_votes_receiver: ReplayVotesReceiver,
+        replay_vote_receiver: ReplayVoteReceiver,
         blockstore: Arc<Blockstore>,
     ) -> Self {
         let exit_ = exit.clone();
@@ -293,7 +293,7 @@ impl ClusterInfoVoteListener {
                     bank_forks,
                     subscriptions,
                     verified_vote_sender,
-                    replay_votes_receiver,
+                    replay_vote_receiver,
                     blockstore,
                 );
             })
@@ -420,7 +420,7 @@ impl ClusterInfoVoteListener {
         bank_forks: Arc<RwLock<BankForks>>,
         subscriptions: Arc<RpcSubscriptions>,
         verified_vote_sender: VerifiedVoteSender,
-        replay_votes_receiver: ReplayVotesReceiver,
+        replay_vote_receiver: ReplayVoteReceiver,
         blockstore: Arc<Blockstore>,
     ) -> Result<()> {
         let mut optimistic_confirmation_verifier =
@@ -452,7 +452,7 @@ impl ClusterInfoVoteListener {
                 &root_bank,
                 &subscriptions,
                 &verified_vote_sender,
-                &replay_votes_receiver,
+                &replay_vote_receiver,
             );
 
             if let Err(e) = optimistic_confirmed_slots {
@@ -478,7 +478,7 @@ impl ClusterInfoVoteListener {
         root_bank: &Bank,
         subscriptions: &RpcSubscriptions,
         verified_vote_sender: &VerifiedVoteSender,
-        replay_votes_receiver: &ReplayVotesReceiver,
+        replay_vote_receiver: &ReplayVoteReceiver,
     ) -> Result<Vec<(Slot, Hash)>> {
         Self::get_and_process_votes(
             gossip_vote_txs_receiver,
@@ -486,7 +486,7 @@ impl ClusterInfoVoteListener {
             root_bank,
             subscriptions,
             verified_vote_sender,
-            replay_votes_receiver,
+            replay_vote_receiver,
         )
     }
 
@@ -496,11 +496,11 @@ impl ClusterInfoVoteListener {
         root_bank: &Bank,
         subscriptions: &RpcSubscriptions,
         verified_vote_sender: &VerifiedVoteSender,
-        replay_votes_receiver: &ReplayVotesReceiver,
+        replay_vote_receiver: &ReplayVoteReceiver,
     ) -> Result<Vec<(Slot, Hash)>> {
         let mut sel = Select::new();
         sel.recv(gossip_vote_txs_receiver);
-        sel.recv(replay_votes_receiver);
+        sel.recv(replay_vote_receiver);
         let mut remaining_wait_time = 200;
         loop {
             if remaining_wait_time == 0 {
@@ -516,7 +516,7 @@ impl ClusterInfoVoteListener {
             // Should not early return from this point onwards until `process_votes()`
             // returns below to avoid missing any potential `optimistic_confirmed_slots`
             let gossip_vote_txs: Vec<_> = gossip_vote_txs_receiver.try_iter().flatten().collect();
-            let replay_votes: Vec<_> = replay_votes_receiver.try_iter().collect();
+            let replay_votes: Vec<_> = replay_vote_receiver.try_iter().collect();
             if !gossip_vote_txs.is_empty() || !replay_votes.is_empty() {
                 return Ok(Self::process_votes(
                     vote_tracker,
@@ -772,7 +772,7 @@ impl ClusterInfoVoteListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solana_ledger::blockstore_processor::ReplayVotesSender;
+    use solana_ledger::blockstore_processor::ReplayVoteSender;
     use solana_perf::packet;
     use solana_runtime::{
         bank::Bank,
@@ -967,7 +967,7 @@ mod tests {
         let (vote_tracker, _, validator_voting_keypairs, subscriptions) = setup();
         let (votes_sender, votes_receiver) = unbounded();
         let (verified_vote_sender, _verified_vote_receiver) = unbounded();
-        let (replay_votes_sender, replay_votes_receiver) = unbounded();
+        let (replay_vote_sender, replay_vote_receiver) = unbounded();
 
         let GenesisConfigInfo { genesis_config, .. } =
             genesis_utils::create_genesis_config_with_vote_accounts(
@@ -990,7 +990,7 @@ mod tests {
             &validator_voting_keypairs,
             None,
             &votes_sender,
-            &replay_votes_sender,
+            &replay_vote_sender,
         );
         ClusterInfoVoteListener::get_and_process_votes(
             &votes_receiver,
@@ -998,7 +998,7 @@ mod tests {
             &bank3,
             &subscriptions,
             &verified_vote_sender,
-            &replay_votes_receiver,
+            &replay_vote_receiver,
         )
         .unwrap();
 
@@ -1018,7 +1018,7 @@ mod tests {
             &validator_voting_keypairs,
             None,
             &votes_sender,
-            &replay_votes_sender,
+            &replay_vote_sender,
         );
         ClusterInfoVoteListener::get_and_process_votes(
             &votes_receiver,
@@ -1026,7 +1026,7 @@ mod tests {
             &bank3,
             &subscriptions,
             &verified_vote_sender,
-            &replay_votes_receiver,
+            &replay_vote_receiver,
         )
         .unwrap();
 
@@ -1040,7 +1040,7 @@ mod tests {
         validator_voting_keypairs: &[ValidatorVoteKeypairs],
         switch_proof_hash: Option<Hash>,
         votes_sender: &VerifiedVoteTransactionsSender,
-        replay_votes_sender: &ReplayVotesSender,
+        replay_vote_sender: &ReplayVoteSender,
     ) {
         validator_voting_keypairs.iter().for_each(|keypairs| {
             let node_keypair = &keypairs.node_keypair;
@@ -1058,7 +1058,7 @@ mod tests {
             let replay_vote = Vote::new(replay_vote_slots.clone(), Hash::default());
             // Send same vote twice, but should only notify once
             for _ in 0..2 {
-                replay_votes_sender
+                replay_vote_sender
                     .send((
                         vote_keypair.pubkey(),
                         replay_vote.clone(),
@@ -1074,7 +1074,7 @@ mod tests {
         let stake_per_validator = 100;
         let (vote_tracker, _, validator_voting_keypairs, subscriptions) = setup();
         let (votes_txs_sender, votes_txs_receiver) = unbounded();
-        let (replay_votes_sender, replay_votes_receiver) = unbounded();
+        let (replay_vote_sender, replay_vote_receiver) = unbounded();
         let (verified_vote_sender, verified_vote_receiver) = unbounded();
 
         let GenesisConfigInfo { genesis_config, .. } =
@@ -1093,7 +1093,7 @@ mod tests {
             &validator_voting_keypairs,
             hash,
             &votes_txs_sender,
-            &replay_votes_sender,
+            &replay_vote_sender,
         );
 
         // Check that all the votes were registered for each validator correctly
@@ -1103,7 +1103,7 @@ mod tests {
             &bank0,
             &subscriptions,
             &verified_vote_sender,
-            &replay_votes_receiver,
+            &replay_vote_receiver,
         )
         .unwrap();
 
@@ -1185,7 +1185,7 @@ mod tests {
         // Send some votes to process
         let (votes_txs_sender, votes_txs_receiver) = unbounded();
         let (verified_vote_sender, verified_vote_receiver) = unbounded();
-        let (_replay_votes_sender, replay_votes_receiver) = unbounded();
+        let (_replay_vote_sender, replay_vote_receiver) = unbounded();
 
         let mut expected_votes = vec![];
         let num_voters_per_slot = 2;
@@ -1221,7 +1221,7 @@ mod tests {
             &bank0,
             &subscriptions,
             &verified_vote_sender,
-            &replay_votes_receiver,
+            &replay_vote_receiver,
         )
         .unwrap();
 
@@ -1264,7 +1264,7 @@ mod tests {
     fn run_test_process_votes3(switch_proof_hash: Option<Hash>) {
         let (votes_sender, votes_receiver) = unbounded();
         let (verified_vote_sender, _verified_vote_receiver) = unbounded();
-        let (replay_votes_sender, replay_votes_receiver) = unbounded();
+        let (replay_vote_sender, replay_vote_receiver) = unbounded();
 
         let vote_slot = 1;
         let vote_bank_hash = Hash::default();
@@ -1301,7 +1301,7 @@ mod tests {
                     votes_sender.send(vec![vote_tx.clone()]).unwrap();
                 }
                 if e == 1 || e == 2 {
-                    replay_votes_sender
+                    replay_vote_sender
                         .send((
                             vote_keypair.pubkey(),
                             Vote::new(vec![vote_slot], Hash::default()),
@@ -1315,7 +1315,7 @@ mod tests {
                     &bank,
                     &subscriptions,
                     &verified_vote_sender,
-                    &replay_votes_receiver,
+                    &replay_vote_receiver,
                 );
             }
             let slot_vote_tracker = vote_tracker.get_slot_vote_tracker(vote_slot).unwrap();

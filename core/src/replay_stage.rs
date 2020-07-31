@@ -22,7 +22,8 @@ use solana_ledger::{
     block_error::BlockError,
     blockstore::Blockstore,
     blockstore_processor::{
-        self, BlockstoreProcessorError, ReplayVotesSender, TransactionStatusSender,
+        self, BlockstoreProcessorError, ReplayTransactionSender, ReplayVoteSender,
+        TransactionStatusSender,
     },
     entry::VerifyRecyclers,
     leader_schedule_cache::LeaderScheduleCache,
@@ -223,7 +224,8 @@ impl ReplayStage {
         cluster_slots: Arc<ClusterSlots>,
         retransmit_slots_sender: RetransmitSlotsSender,
         duplicate_slots_reset_receiver: DuplicateSlotsResetReceiver,
-        replay_votes_sender: ReplayVotesSender,
+        replay_vote_sender: ReplayVoteSender,
+        replay_transaction_sender: ReplayTransactionSender,
     ) -> Self {
         let ReplayStageConfig {
             my_pubkey,
@@ -344,7 +346,8 @@ impl ReplayStage {
                         &verify_recyclers,
                         &mut heaviest_subtree_fork_choice,
                         &subscriptions,
-                        &replay_votes_sender,
+                        &replay_vote_sender,
+                        &replay_transaction_sender,
                     );
                     replay_active_banks_time.stop();
                     Self::report_memory(&allocated, "replay_active_banks", start);
@@ -940,7 +943,8 @@ impl ReplayStage {
         blockstore: &Blockstore,
         bank_progress: &mut ForkProgress,
         transaction_status_sender: Option<TransactionStatusSender>,
-        replay_votes_sender: &ReplayVotesSender,
+        replay_vote_sender: &ReplayVoteSender,
+        replay_transaction_sender: &ReplayTransactionSender,
         verify_recyclers: &VerifyRecyclers,
     ) -> result::Result<usize, BlockstoreProcessorError> {
         let tx_count_before = bank_progress.replay_progress.num_txs;
@@ -951,7 +955,8 @@ impl ReplayStage {
             &mut bank_progress.replay_progress,
             false,
             transaction_status_sender,
-            Some(replay_votes_sender),
+            Some(replay_vote_sender),
+            Some(replay_transaction_sender),
             None,
             verify_recyclers,
         );
@@ -1214,7 +1219,8 @@ impl ReplayStage {
         verify_recyclers: &VerifyRecyclers,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
         subscriptions: &Arc<RpcSubscriptions>,
-        replay_votes_sender: &ReplayVotesSender,
+        replay_vote_sender: &ReplayVoteSender,
+        replay_transaction_sender: &ReplayTransactionSender,
     ) -> bool {
         let mut did_complete_bank = false;
         let mut tx_count = 0;
@@ -1260,7 +1266,8 @@ impl ReplayStage {
                     &blockstore,
                     bank_progress,
                     transaction_status_sender.clone(),
-                    replay_votes_sender,
+                    replay_vote_sender,
+                    replay_transaction_sender,
                     verify_recyclers,
                 );
                 match replay_result {
@@ -2417,7 +2424,8 @@ pub(crate) mod tests {
         F: Fn(&Keypair, Arc<Bank>) -> Vec<Shred>,
     {
         let ledger_path = get_tmp_ledger_path!();
-        let (replay_votes_sender, _replay_votes_receiver) = unbounded();
+        let (replay_vote_sender, _replay_vote_receiver) = unbounded();
+        let (replay_transaction_sender, _replay_transaction_receiver) = unbounded();
         let res = {
             let blockstore = Arc::new(
                 Blockstore::open(&ledger_path)
@@ -2442,7 +2450,8 @@ pub(crate) mod tests {
                 &blockstore,
                 &mut bank0_progress,
                 None,
-                &replay_votes_sender,
+                &replay_vote_sender,
+                &replay_transaction_sender,
                 &VerifyRecyclers::default(),
             );
 
@@ -2606,7 +2615,8 @@ pub(crate) mod tests {
         blockstore.set_roots(&[slot]).unwrap();
 
         let (transaction_status_sender, transaction_status_receiver) = unbounded();
-        let (replay_votes_sender, _replay_votes_receiver) = unbounded();
+        let (replay_vote_sender, _replay_vote_receiver) = unbounded();
+        let (replay_transaction_sender, _replay_transaction_receiver) = unbounded();
         let transaction_status_service = TransactionStatusService::new(
             transaction_status_receiver,
             blockstore,
@@ -2620,7 +2630,8 @@ pub(crate) mod tests {
             &entries,
             true,
             Some(transaction_status_sender),
-            Some(&replay_votes_sender),
+            Some(&replay_vote_sender),
+            Some(&replay_transaction_sender),
         );
 
         transaction_status_service.join().unwrap();
