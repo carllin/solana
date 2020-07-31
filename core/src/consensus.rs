@@ -194,7 +194,7 @@ impl Tower {
                 pubkey_votes.push((key, last_voted_slot));
             }
 
-            vote_state.process_slot_vote_unchecked(bank_slot);
+            let _ = vote_state.process_slot_vote_unchecked(bank_slot);
 
             for vote in &vote_state.votes {
                 bank_weight += vote.lockout() as u128 * lamports as u128;
@@ -275,7 +275,7 @@ impl Tower {
     ) -> (Vote, usize) {
         let mut local_vote_state = local_vote_state.clone();
         let vote = Vote::new(vec![slot], hash);
-        local_vote_state.process_vote_unchecked(&vote);
+        let _ = local_vote_state.process_vote_unchecked(&vote);
         let slots = if let Some(last_voted_slot_in_bank) = last_voted_slot_in_bank {
             local_vote_state
                 .votes
@@ -310,7 +310,7 @@ impl Tower {
         let slot = vote.last_voted_slot().unwrap_or(0);
         trace!("{} record_vote for {}", self.node_pubkey, slot);
         let root_slot = self.lockouts.root_slot;
-        self.lockouts.process_vote_unchecked(&vote);
+        let _ = self.lockouts.process_vote_unchecked(&vote);
         self.last_vote = vote;
 
         datapoint_info!(
@@ -376,7 +376,7 @@ impl Tower {
         }
 
         let mut lockouts = self.lockouts.clone();
-        lockouts.process_slot_vote_unchecked(slot);
+        let _ = lockouts.process_slot_vote_unchecked(slot);
         for vote in &lockouts.votes {
             if vote.slot == slot {
                 continue;
@@ -514,7 +514,7 @@ impl Tower {
         total_stake: Stake,
     ) -> bool {
         let mut lockouts = self.lockouts.clone();
-        lockouts.process_slot_vote_unchecked(slot);
+        let _ = lockouts.process_slot_vote_unchecked(slot);
         let vote = lockouts.nth_recent_vote(self.threshold_depth);
         if let Some(vote) = vote {
             if let Some(fork_stake) = voted_stakes.get(&vote.slot) {
@@ -1009,7 +1009,7 @@ pub mod test {
             account.lamports = *lamports;
             let mut vote_state = VoteState::default();
             for slot in *votes {
-                vote_state.process_slot_vote_unchecked(*slot);
+                vote_state.process_slot_vote_unchecked(*slot).unwrap();
             }
             VoteState::serialize(
                 &VoteStateVersions::Current(Box::new(vote_state)),
@@ -1710,7 +1710,7 @@ pub mod test {
             hash: Hash::default(),
             timestamp: None,
         };
-        local.process_vote_unchecked(&vote);
+        local.process_vote_unchecked(&vote).unwrap();
         assert_eq!(local.votes.len(), 1);
         let vote = Tower::new_vote(&local, 1, Hash::default(), Some(0));
         assert_eq!(vote.0.slots, vec![1]);
@@ -1725,7 +1725,7 @@ pub mod test {
             hash: Hash::default(),
             timestamp: None,
         };
-        local.process_vote_unchecked(&vote);
+        local.process_vote_unchecked(&vote).unwrap();
         assert_eq!(local.votes.len(), 1);
         let vote = Tower::new_vote(&local, 3, Hash::default(), Some(0));
         //first vote expired, so index should be 0

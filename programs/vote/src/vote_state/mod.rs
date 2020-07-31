@@ -18,7 +18,7 @@ use solana_sdk::{
     sysvar::clock::Clock,
 };
 use std::boxed::Box;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 mod vote_state_0_23_5;
 pub mod vote_state_versions;
@@ -26,6 +26,7 @@ pub use vote_state_versions::*;
 
 // Maximum number of votes to keep around, tightly coupled with epoch_schedule::MIN_SLOTS_PER_EPOCH
 pub const MAX_LOCKOUT_HISTORY: usize = 31;
+pub const MAX_CONFIRMATIONS: u32 = MAX_LOCKOUT_HISTORY as u32 + 1;
 pub const INITIAL_LOCKOUT: usize = 2;
 
 // Maximum number of credits history to keep around
@@ -339,23 +340,32 @@ impl VoteState {
         vote: &Vote,
         slot_hashes: &[SlotHash],
         epoch: Epoch,
-    ) -> Result<(), VoteError> {
+    ) -> Result<HashMap<Slot, u32>, VoteError> {
         if vote.slots.is_empty() {
             return Err(VoteError::EmptySlots);
         }
         self.check_slots_are_valid(vote, slot_hashes)?;
 
-        vote.slots.iter().for_each(|s| self.process_slot(*s, epoch));
-        Ok(())
+        let mut increased_confirmation_votes: HashMap<Slot, u32> = vote
+            .slots
+            .iter()
+            .flat_map(|s| self.process_slot(*s, epoch))
+            .collect();
+
+        let existing_slots: HashSet<Slot> = self.votes.iter().map(|lockout| lockout.slot).collect();
+        increased_confirmation_votes.retain(|slot, num_confirmations| {
+            existing_slots.contains(slot) || *num_confirmations == MAX_CONFIRMATIONS
+        });
+        Ok(increased_confirmation_votes)
     }
 
-    pub fn process_slot(&mut self, slot: Slot, epoch: Epoch) {
+    pub fn process_slot(&mut self, slot: Slot, epoch: Epoch) -> Vec<(Slot, u32)> {
         // Ignore votes for slots earlier than we already have votes for
         if self
             .last_voted_slot()
             .map_or(false, |last_voted_slot| slot <= last_voted_slot)
         {
-            return;
+            return vec![];
         }
 
         let vote = Lockout::new(slot);
@@ -363,14 +373,16 @@ impl VoteState {
         self.pop_expired_votes(slot);
 
         // Once the stack is full, pop the oldest lockout and distribute rewards
+        let mut increased_confirmation_slots: Vec<(Slot, u32)> = vec![(slot, 1)];
         if self.votes.len() == MAX_LOCKOUT_HISTORY {
             let vote = self.votes.pop_front().unwrap();
             self.root_slot = Some(vote.slot);
-
+            increased_confirmation_slots.push((vote.slot, MAX_LOCKOUT_HISTORY as u32 + 1));
             self.increment_credits(epoch);
         }
         self.votes.push_back(vote);
-        self.double_lockouts();
+        increased_confirmation_slots.extend(self.double_lockouts());
+        increased_confirmation_slots
     }
 
     /// increment credits, record credits for last epoch if new epoch
@@ -403,12 +415,15 @@ impl VoteState {
     }
 
     /// "unchecked" functions used by tests and Tower
-    pub fn process_vote_unchecked(&mut self, vote: &Vote) {
+    pub fn process_vote_unchecked(&mut self, vote: &Vote) -> Result<HashMap<Slot, u32>, VoteError> {
         let slot_hashes: Vec<_> = vote.slots.iter().rev().map(|x| (*x, vote.hash)).collect();
-        let _ignored = self.process_vote(vote, &slot_hashes, self.current_epoch());
+        self.process_vote(vote, &slot_hashes, self.current_epoch())
     }
-    pub fn process_slot_vote_unchecked(&mut self, slot: Slot) {
-        self.process_vote_unchecked(&Vote::new(vec![slot], Hash::default()));
+    pub fn process_slot_vote_unchecked(
+        &mut self,
+        slot: Slot,
+    ) -> Result<HashMap<Slot, u32>, VoteError> {
+        self.process_vote_unchecked(&Vote::new(vec![slot], Hash::default()))
     }
 
     pub fn nth_recent_vote(&self, position: usize) -> Option<&Lockout> {
@@ -539,15 +554,19 @@ impl VoteState {
         }
     }
 
-    fn double_lockouts(&mut self) {
+    fn double_lockouts(&mut self) -> Vec<(Slot, u32)> {
         let stack_depth = self.votes.len();
+        let mut modified_slots = vec![];
         for (i, v) in self.votes.iter_mut().enumerate() {
             // Don't increase the lockout for this vote until we get more confirmations
             // than the max number of confirmations this vote has seen
             if stack_depth > i + v.confirmation_count as usize {
                 v.confirmation_count += 1;
+                modified_slots.push((v.slot, v.confirmation_count));
             }
         }
+
+        modified_slots
     }
 
     pub fn process_timestamp(
@@ -764,7 +783,7 @@ mod tests {
         account_utils::StateMut,
         hash::hash,
     };
-    use std::cell::RefCell;
+    use std::{cell::RefCell, collections::BTreeMap};
 
     const MAX_RECENT_VOTES: usize = 16;
 
@@ -1114,7 +1133,7 @@ mod tests {
             &vote,
             &signers,
         );
-        assert_eq!(res, Ok(()));
+        assert!(res.is_ok());
 
         // another voter, unsigned
         let keyed_accounts = &[KeyedAccount::new(&vote_pubkey, false, &vote_account)];
@@ -1146,7 +1165,7 @@ mod tests {
                 ..Clock::default()
             },
         );
-        assert_eq!(res, Ok(()));
+        assert!(res.is_ok());
 
         // Already set an authorized voter earlier for leader_schedule_epoch == 2
         let signers: HashSet<Pubkey> = get_signers(keyed_accounts);
@@ -1183,7 +1202,7 @@ mod tests {
                 ..Clock::default()
             },
         );
-        assert_eq!(res, Ok(()));
+        assert!(res.is_ok());
 
         // authorize another withdrawer
         // another voter
@@ -1201,7 +1220,7 @@ mod tests {
                 ..Clock::default()
             },
         );
-        assert_eq!(res, Ok(()));
+        assert!(res.is_ok());
 
         // verify authorized_withdrawer can authorize authorized_withdrawer ;)
         let withdrawer_account = RefCell::new(Account::default());
@@ -1221,7 +1240,7 @@ mod tests {
                 ..Clock::default()
             },
         );
-        assert_eq!(res, Ok(()));
+        assert!(res.is_ok());
 
         // not signed by authorized voter
         let keyed_accounts = &[KeyedAccount::new(&vote_pubkey, true, &vote_account)];
@@ -1259,7 +1278,7 @@ mod tests {
             &vote,
             &signers,
         );
-        assert_eq!(res, Ok(()));
+        assert!(res.is_ok());
     }
 
     #[test]
@@ -1276,6 +1295,93 @@ mod tests {
     }
 
     #[test]
+    fn test_new_increased_confirmed_slots() {
+        // Multiple small votes
+        let (_vote_pubkey, vote_account) = create_test_account();
+        let mut vote_state: VoteState =
+            StateMut::<VoteStateVersions>::state(&*vote_account.borrow())
+                .unwrap()
+                .convert_to_current();
+        for last_vote in 0..=MAX_LOCKOUT_HISTORY {
+            assert_eq!(
+                vote_state
+                    .process_slot_vote_unchecked((INITIAL_LOCKOUT as usize * last_vote) as u64)
+                    .unwrap()
+                    .into_iter()
+                    .collect::<BTreeMap<Slot, u32>>(),
+                (0..=last_vote)
+                    .map(|i| (
+                        INITIAL_LOCKOUT as u64 * i as u64,
+                        last_vote as u32 - i as u32 + 1
+                    ))
+                    .collect()
+            );
+        }
+
+        // Single big vote
+        let mut vote_state: VoteState =
+            StateMut::<VoteStateVersions>::state(&*vote_account.borrow())
+                .unwrap()
+                .convert_to_current();
+        let vote = Vote::new(
+            (0..MAX_CONFIRMATIONS as u64).collect::<Vec<_>>(),
+            Hash::default(),
+        );
+        let expected: BTreeMap<Slot, u32> = (0..MAX_CONFIRMATIONS)
+            .map(|i| (i as Slot, MAX_CONFIRMATIONS - i as u32))
+            .collect();
+        assert_eq!(
+            vote_state
+                .process_vote_unchecked(&vote)
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>(),
+            expected
+        );
+
+        // Votes for the next `MAX_CONFIRMATIONS` set of slots should root existing stack
+        let vote = Vote::new(
+            (MAX_CONFIRMATIONS as u64..2 * MAX_CONFIRMATIONS as u64).collect::<Vec<_>>(),
+            Hash::default(),
+        );
+
+        let expected: BTreeMap<Slot, u32> = (1..2 * MAX_CONFIRMATIONS)
+            .map(|i| {
+                if i < MAX_CONFIRMATIONS {
+                    // All current votes on the stack from 1..MAX_CONFIRMATIONS will be rooted
+                    (i as Slot, MAX_CONFIRMATIONS)
+                } else {
+                    (i as Slot, 2 * MAX_CONFIRMATIONS - i as u32)
+                }
+            })
+            .collect();
+        assert_eq!(
+            vote_state
+                .process_vote_unchecked(&vote)
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>(),
+            expected
+        );
+
+        // Test vote with slots that will be popped off
+        let mut vote_state: VoteState =
+            StateMut::<VoteStateVersions>::state(&*vote_account.borrow())
+                .unwrap()
+                .convert_to_current();
+        let vote = Vote::new(vec![0, 3, 6, 8], Hash::default());
+        let expected: BTreeMap<Slot, u32> = vec![(6, 2), (8, 1)].into_iter().collect();
+        assert_eq!(
+            vote_state
+                .process_vote_unchecked(&vote)
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>(),
+            expected
+        );
+    }
+
+    #[test]
     fn test_vote_lockout() {
         let (_vote_pubkey, vote_account) = create_test_account();
 
@@ -1284,8 +1390,10 @@ mod tests {
                 .unwrap()
                 .convert_to_current();
 
-        for i in 0..(MAX_LOCKOUT_HISTORY + 1) {
-            vote_state.process_slot_vote_unchecked((INITIAL_LOCKOUT as usize * i) as u64);
+        for i in 0..MAX_CONFIRMATIONS {
+            vote_state
+                .process_slot_vote_unchecked((INITIAL_LOCKOUT as usize * i as usize) as u64)
+                .unwrap();
         }
 
         // The last vote should have been popped b/c it reached a depth of MAX_LOCKOUT_HISTORY
@@ -1294,17 +1402,37 @@ mod tests {
         check_lockouts(&vote_state);
 
         // One more vote that confirms the entire stack,
-        // the root_slot should change to the
-        // second vote
+        // the root_slot should change to the second vote
+        let mut expected_modified: Vec<(Slot, u32)> = vote_state
+            .votes
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(i, vote)| (vote.slot, MAX_LOCKOUT_HISTORY as u32 - i as u32 + 1))
+            .collect();
+        let next_vote = vote_state.last_lockout().unwrap().expiration_slot();
+        expected_modified.push((next_vote, 1));
         let top_vote = vote_state.votes.front().unwrap().slot;
-        vote_state
-            .process_slot_vote_unchecked(vote_state.last_lockout().unwrap().expiration_slot());
+        assert_eq!(
+            vote_state
+                .process_slot_vote_unchecked(next_vote)
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>(),
+            expected_modified
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>()
+        );
         assert_eq!(Some(top_vote), vote_state.root_slot);
 
         // Expire everything except the first vote
-        vote_state.process_slot_vote_unchecked(vote_state.votes.front().unwrap().expiration_slot());
+        let next_vote = vote_state.votes.front().unwrap().expiration_slot();
+        assert_eq!(
+            vote_state.process_slot_vote_unchecked(next_vote).unwrap(),
+            vec![(next_vote, 1)].into_iter().collect()
+        );
         // First vote and new vote are both stored for a total of 2 votes
-        assert_eq!(vote_state.votes.len(), 2);
+        assert_eq!(vote_state.votes.len(), 2,);
     }
 
     #[test]
@@ -1312,8 +1440,19 @@ mod tests {
         let voter_pubkey = Pubkey::new_rand();
         let mut vote_state = VoteState::new_for_test(&voter_pubkey);
 
-        for i in 0..3 {
-            vote_state.process_slot_vote_unchecked(i as u64);
+        for vote_slot in 0..3 {
+            // All previous vote should be doubling, so all slots 0..=vote_slot
+            // should be in the change set
+            assert_eq!(
+                vote_state
+                    .process_slot_vote_unchecked(vote_slot as u64)
+                    .unwrap()
+                    .into_iter()
+                    .collect::<BTreeMap<Slot, u32>>(),
+                (0..=vote_slot as u32)
+                    .map(|i| (i as Slot, vote_slot - i + 1))
+                    .collect()
+            );
         }
 
         check_lockouts(&vote_state);
@@ -1321,17 +1460,53 @@ mod tests {
         // Expire the third vote (which was a vote for slot 2). The height of the
         // vote stack is unchanged, so none of the previous votes should have
         // doubled in lockout
-        vote_state.process_slot_vote_unchecked((2 + INITIAL_LOCKOUT + 1) as u64);
+        assert_eq!(
+            vote_state
+                .process_slot_vote_unchecked((2 + INITIAL_LOCKOUT + 1) as u64)
+                .unwrap(),
+            vec![((2 + INITIAL_LOCKOUT + 1) as u64, 1)]
+                .into_iter()
+                .collect()
+        );
         check_lockouts(&vote_state);
 
         // Vote again, this time the vote stack depth increases, so the votes should
         // double for everybody
-        vote_state.process_slot_vote_unchecked((2 + INITIAL_LOCKOUT + 2) as u64);
+        assert_eq!(
+            vote_state
+                .process_slot_vote_unchecked((2 + INITIAL_LOCKOUT + 2) as u64)
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>(),
+            vec![
+                (0, 4),
+                (1, 3),
+                ((2 + INITIAL_LOCKOUT + 1) as u64, 2),
+                ((2 + INITIAL_LOCKOUT + 2) as u64, 1),
+            ]
+            .into_iter()
+            .collect()
+        );
         check_lockouts(&vote_state);
 
         // Vote again, this time the vote stack depth increases, so the votes should
         // double for everybody
-        vote_state.process_slot_vote_unchecked((2 + INITIAL_LOCKOUT + 3) as u64);
+        assert_eq!(
+            vote_state
+                .process_slot_vote_unchecked((2 + INITIAL_LOCKOUT + 3) as u64)
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>(),
+            vec![
+                (0, 5),
+                (1, 4),
+                ((2 + INITIAL_LOCKOUT + 1) as u64, 3),
+                ((2 + INITIAL_LOCKOUT + 2) as u64, 2),
+                ((2 + INITIAL_LOCKOUT + 3) as u64, 1),
+            ]
+            .into_iter()
+            .collect()
+        );
         check_lockouts(&vote_state);
     }
 
@@ -1340,23 +1515,48 @@ mod tests {
         let voter_pubkey = Pubkey::new_rand();
         let mut vote_state = VoteState::new_for_test(&voter_pubkey);
 
-        for i in 0..3 {
-            vote_state.process_slot_vote_unchecked(i as u64);
+        for vote_slot in 0..3 {
+            // All previous vote should be doubling, so all slots 0..=vote_slot
+            // should be in the change set
+            assert_eq!(
+                vote_state
+                    .process_slot_vote_unchecked(vote_slot as u64)
+                    .unwrap()
+                    .into_iter()
+                    .collect::<BTreeMap<Slot, u32>>(),
+                (0..=vote_slot as u64)
+                    .map(|i| (i, vote_slot as u32 - i as u32 + 1))
+                    .collect()
+            );
         }
 
         assert_eq!(vote_state.votes[0].confirmation_count, 3);
 
-        // Expire the second and third votes
+        // Expire the second and third votes, so the only vote who's lockout changed
+        // was the voted slot at `expire_slot`
         let expire_slot = vote_state.votes[1].slot + vote_state.votes[1].lockout() + 1;
-        vote_state.process_slot_vote_unchecked(expire_slot);
+        assert_eq!(
+            vote_state.process_slot_vote_unchecked(expire_slot).unwrap(),
+            vec![(expire_slot, 1)].into_iter().collect()
+        );
         assert_eq!(vote_state.votes.len(), 2);
 
         // Check that the old votes expired
         assert_eq!(vote_state.votes[0].slot, 0);
         assert_eq!(vote_state.votes[1].slot, expire_slot);
 
-        // Process one more vote
-        vote_state.process_slot_vote_unchecked(expire_slot + 1);
+        // Process one more vote, the older first vote should remain unchanged,
+        // so the only vote who's lockout changed were `expire_slot` and expire_slot + 1`
+        assert_eq!(
+            vote_state
+                .process_slot_vote_unchecked(expire_slot + 1)
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>(),
+            vec![(expire_slot, 2), (expire_slot + 1, 1)]
+                .into_iter()
+                .collect()
+        );
 
         // Confirmation count for the older first vote should remain unchanged
         assert_eq!(vote_state.votes[0].confirmation_count, 3);
@@ -1372,16 +1572,22 @@ mod tests {
         let mut vote_state = VoteState::new_for_test(&voter_pubkey);
 
         for i in 0..MAX_LOCKOUT_HISTORY {
-            vote_state.process_slot_vote_unchecked(i as u64);
+            let _ = vote_state.process_slot_vote_unchecked(i as u64);
         }
 
         assert_eq!(vote_state.credits(), 0);
 
-        vote_state.process_slot_vote_unchecked(MAX_LOCKOUT_HISTORY as u64 + 1);
+        vote_state
+            .process_slot_vote_unchecked(MAX_LOCKOUT_HISTORY as u64 + 1)
+            .unwrap();
         assert_eq!(vote_state.credits(), 1);
-        vote_state.process_slot_vote_unchecked(MAX_LOCKOUT_HISTORY as u64 + 2);
+        vote_state
+            .process_slot_vote_unchecked(MAX_LOCKOUT_HISTORY as u64 + 2)
+            .unwrap();
         assert_eq!(vote_state.credits(), 2);
-        vote_state.process_slot_vote_unchecked(MAX_LOCKOUT_HISTORY as u64 + 3);
+        vote_state
+            .process_slot_vote_unchecked(MAX_LOCKOUT_HISTORY as u64 + 3)
+            .unwrap();
         assert_eq!(vote_state.credits(), 3);
     }
 
@@ -1389,9 +1595,10 @@ mod tests {
     fn test_duplicate_vote() {
         let voter_pubkey = Pubkey::new_rand();
         let mut vote_state = VoteState::new_for_test(&voter_pubkey);
-        vote_state.process_slot_vote_unchecked(0);
-        vote_state.process_slot_vote_unchecked(1);
-        vote_state.process_slot_vote_unchecked(0);
+        vote_state.process_slot_vote_unchecked(0).unwrap();
+        vote_state.process_slot_vote_unchecked(1).unwrap();
+        // Duplicate vote should error
+        assert!(vote_state.process_slot_vote_unchecked(0).is_err());
         assert_eq!(vote_state.nth_recent_vote(0).unwrap().slot, 1);
         assert_eq!(vote_state.nth_recent_vote(1).unwrap().slot, 0);
         assert!(vote_state.nth_recent_vote(2).is_none());
@@ -1402,7 +1609,7 @@ mod tests {
         let voter_pubkey = Pubkey::new_rand();
         let mut vote_state = VoteState::new_for_test(&voter_pubkey);
         for i in 0..MAX_LOCKOUT_HISTORY {
-            vote_state.process_slot_vote_unchecked(i as u64);
+            vote_state.process_slot_vote_unchecked(i as u64).unwrap();
         }
         for i in 0..(MAX_LOCKOUT_HISTORY - 1) {
             assert_eq!(
@@ -1436,7 +1643,9 @@ mod tests {
         let mut vote_state_b = VoteState::new_for_test(&account_b);
 
         // process some votes on account a
-        (0..5).for_each(|i| vote_state_a.process_slot_vote_unchecked(i as u64));
+        (0..5).for_each(|i| {
+            vote_state_a.process_slot_vote_unchecked(i as u64).unwrap();
+        });
         assert_ne!(recent_votes(&vote_state_a), recent_votes(&vote_state_b));
 
         // as long as b has missed less than "NUM_RECENT" votes both accounts should be in sync
@@ -1444,8 +1653,26 @@ mod tests {
         let vote = Vote::new(slots, Hash::default());
         let slot_hashes: Vec<_> = vote.slots.iter().rev().map(|x| (*x, vote.hash)).collect();
 
-        assert_eq!(vote_state_a.process_vote(&vote, &slot_hashes, 0), Ok(()));
-        assert_eq!(vote_state_b.process_vote(&vote, &slot_hashes, 0), Ok(()));
+        assert_eq!(
+            vote_state_a
+                .process_vote(&vote, &slot_hashes, 0)
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>(),
+            (0..MAX_RECENT_VOTES as u64)
+                .map(|i| (i, MAX_RECENT_VOTES as u32 - i as u32))
+                .collect::<BTreeMap<Slot, u32>>()
+        );
+        assert_eq!(
+            vote_state_b
+                .process_vote(&vote, &slot_hashes, 0)
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeMap<Slot, u32>>(),
+            (0..MAX_RECENT_VOTES as u64)
+                .map(|i| (i, MAX_RECENT_VOTES as u32 - i as u32))
+                .collect::<BTreeMap<Slot, u32>>()
+        );
         assert_eq!(recent_votes(&vote_state_a), recent_votes(&vote_state_b));
     }
 
@@ -1455,7 +1682,10 @@ mod tests {
 
         let vote = Vote::new(vec![0], Hash::default());
         let slot_hashes: Vec<_> = vec![(0, vote.hash)];
-        assert_eq!(vote_state.process_vote(&vote, &slot_hashes, 0), Ok(()));
+        assert_eq!(
+            vote_state.process_vote(&vote, &slot_hashes, 0).unwrap(),
+            vec![(0, 1)].into_iter().collect()
+        );
         let recent = recent_votes(&vote_state);
         assert_eq!(
             vote_state.process_vote(&vote, &slot_hashes, 0),
@@ -1517,7 +1747,10 @@ mod tests {
 
         let vote = Vote::new(vec![0], Hash::default());
         let slot_hashes: Vec<_> = vec![(*vote.slots.last().unwrap(), vote.hash)];
-        assert_eq!(vote_state.process_vote(&vote, &slot_hashes, 0), Ok(()));
+        assert_eq!(
+            vote_state.process_vote(&vote, &slot_hashes, 0).unwrap(),
+            vec![(0, 1)].into_iter().collect()
+        );
         assert_eq!(
             vote_state.check_slots_are_valid(&vote, &slot_hashes),
             Err(VoteError::VoteTooOld)
@@ -1530,7 +1763,10 @@ mod tests {
 
         let vote = Vote::new(vec![0], Hash::default());
         let slot_hashes: Vec<_> = vec![(*vote.slots.last().unwrap(), vote.hash)];
-        assert_eq!(vote_state.process_vote(&vote, &slot_hashes, 0), Ok(()));
+        assert_eq!(
+            vote_state.process_vote(&vote, &slot_hashes, 0).unwrap(),
+            vec![(0, 1)].into_iter().collect()
+        );
 
         let vote = Vote::new(vec![0, 1], Hash::default());
         let slot_hashes: Vec<_> = vec![(1, vote.hash), (0, vote.hash)];
@@ -1546,7 +1782,10 @@ mod tests {
 
         let vote = Vote::new(vec![0], Hash::default());
         let slot_hashes: Vec<_> = vec![(*vote.slots.last().unwrap(), vote.hash)];
-        assert_eq!(vote_state.process_vote(&vote, &slot_hashes, 0), Ok(()));
+        assert_eq!(
+            vote_state.process_vote(&vote, &slot_hashes, 0).unwrap(),
+            vec![(0, 1)].into_iter().collect()
+        );
 
         let vote = Vote::new(vec![1], Hash::default());
         let slot_hashes: Vec<_> = vec![(1, vote.hash), (0, vote.hash)];

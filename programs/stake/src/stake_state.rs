@@ -1132,7 +1132,7 @@ mod tests {
         let vote_pubkey = Pubkey::new_rand();
         let mut vote_state = VoteState::default();
         for i in 0..1000 {
-            vote_state.process_slot_vote_unchecked(i);
+            let _ = vote_state.process_slot_vote_unchecked(i);
         }
 
         let vote_account = RefCell::new(vote_state::create_account(
