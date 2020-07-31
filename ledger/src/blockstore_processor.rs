@@ -46,8 +46,8 @@ pub type BlockstoreProcessorResult =
 pub type ReplayedVote = (Pubkey, Vote, Option<Hash>);
 pub type ReplayVoteSender = Sender<ReplayedVote>;
 pub type ReplayVoteReceiver = Receiver<ReplayedVote>;
-pub type ReplayTransactionSender = Sender<Transaction>;
-pub type ReplayTransactionReceiver = Receiver<Transaction>;
+pub type ReplayTransactionSender = Sender<(Slot, Transaction)>;
+pub type ReplayTransactionReceiver = Receiver<(Slot, Transaction)>;
 
 thread_local!(static PAR_THREAD_POOL: RefCell<ThreadPool> = RefCell::new(rayon::ThreadPoolBuilder::new()
                     .num_threads(get_thread_count())
@@ -122,11 +122,14 @@ fn execute_batch(
         {
             if processing_result.is_ok() {
                 if let Some(parsed_vote) = vote_transaction::parse_vote_transaction(transaction) {
-                    if let Some(replay_vote_sender) = replay_vote_sender {
-                        let _ = replay_vote_sender.send(parsed_vote);
-                    }
-                    if let Some(replay_transaction_sender) = replay_transaction_sender {
-                        let _ = replay_transaction_sender.send(transaction.clone());
+                    if let Some(voted_slot) = parsed_vote.1.slots.last().copied() {
+                        if let Some(replay_vote_sender) = replay_vote_sender {
+                            let _ = replay_vote_sender.send(parsed_vote);
+                        }
+                        if let Some(replay_transaction_sender) = replay_transaction_sender {
+                            let _ =
+                                replay_transaction_sender.send((voted_slot, transaction.clone()));
+                        }
                     }
                 }
             }
@@ -2897,7 +2900,7 @@ pub mod tests {
                         &validator_keypairs.vote_keypair,
                         None,
                     );
-                    expected_successful_vote_txs.insert(tx.clone());
+                    expected_successful_vote_txs.insert((0, tx.clone()));
                     tx
                 } else if i % 3 == 1 {
                     // These have the wrong authorized voter
@@ -2940,7 +2943,8 @@ pub mod tests {
             .map(|(vote_pubkey, _, _)| vote_pubkey)
             .collect();
         assert_eq!(successes, expected_successful_voter_pubkeys);
-        let successes: IndexSet<Transaction> = replay_transaction_receiver.try_iter().collect();
+        let successes: IndexSet<(Slot, Transaction)> =
+            replay_transaction_receiver.try_iter().collect();
         assert_eq!(successes, expected_successful_vote_txs);
     }
 }

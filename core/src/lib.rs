@@ -32,6 +32,7 @@ pub mod fork_choice;
 pub mod gen_keys;
 pub mod gossip_service;
 pub mod heaviest_subtree_fork_choice;
+pub mod insert_vote_transactions_service;
 pub mod ledger_cleanup_service;
 pub mod local_vote_signer_service;
 pub mod non_circulating_supply;

@@ -6,6 +6,7 @@ use crate::{
     cluster_info_vote_listener::VoteTracker,
     contact_info::ContactInfo,
     gossip_service::{discover_cluster, GossipService},
+    insert_vote_transactions_service::InsertVoteTransactionsService,
     poh_recorder::{PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
     poh_service::PohService,
     rewards_recorder_service::{RewardsRecorderSender, RewardsRecorderService},
@@ -28,7 +29,8 @@ use solana_ledger::{
     blockstore::{Blockstore, CompletedSlotsReceiver, PurgeType},
     blockstore_db::BlockstoreRecoveryMode,
     blockstore_processor::{
-        self, ReplayTransactionSender, ReplayVoteSender, TransactionStatusSender,
+        self, ReplayTransactionReceiver, ReplayTransactionSender, ReplayVoteSender,
+        TransactionStatusSender,
     },
     create_new_tmp_ledger,
     leader_schedule::FixedSchedule,
@@ -153,6 +155,7 @@ pub struct Validator {
     rpc_service: Option<(JsonRpcService, PubSubService)>,
     transaction_status_service: Option<TransactionStatusService>,
     rewards_recorder_service: Option<RewardsRecorderService>,
+    insert_vote_transactions_service: InsertVoteTransactionsService,
     gossip_service: GossipService,
     serve_repair_service: ServeRepairService,
     snapshot_packager_service: Option<SnapshotPackagerService>,
@@ -242,6 +245,7 @@ impl Validator {
                 rewards_recorder_sender,
                 rewards_recorder_service,
             },
+            insert_vote_transactions_service,
         ) = new_banks_from_ledger(
             config,
             ledger_path,
@@ -249,6 +253,7 @@ impl Validator {
             &exit,
             &replay_vote_sender,
             &replay_transaction_sender,
+            &replay_transaction_receiver,
         );
 
         let leader_schedule_cache = Arc::new(leader_schedule_cache);
@@ -504,6 +509,7 @@ impl Validator {
             rpc_service,
             transaction_status_service,
             rewards_recorder_service,
+            insert_vote_transactions_service,
             snapshot_packager_service,
             tpu,
             tvu,
@@ -574,6 +580,7 @@ impl Validator {
         self.serve_repair_service.join()?;
         self.tpu.join()?;
         self.tvu.join()?;
+        self.insert_vote_transactions_service.join()?;
         self.ip_echo_server.shutdown_now();
 
         Ok(())
@@ -588,6 +595,7 @@ fn new_banks_from_ledger(
     exit: &Arc<AtomicBool>,
     replay_vote_sender: &ReplayVoteSender,
     replay_transaction_sender: &ReplayTransactionSender,
+    replay_transaction_receiver: &ReplayTransactionReceiver,
 ) -> (
     GenesisConfig,
     BankForks,
@@ -597,6 +605,7 @@ fn new_banks_from_ledger(
     LeaderScheduleCache,
     Option<(Slot, Hash)>,
     TransactionHistoryServices,
+    InsertVoteTransactionsService,
 ) {
     info!("loading ledger from {:?}...", ledger_path);
     let genesis_config = open_genesis_config(ledger_path, config.max_genesis_archive_unpacked_size);
@@ -639,6 +648,11 @@ fn new_banks_from_ledger(
         } else {
             TransactionHistoryServices::default()
         };
+    let insert_vote_transactions_service = InsertVoteTransactionsService::new(
+        replay_transaction_receiver.clone(),
+        blockstore.clone(),
+        exit,
+    );
 
     let (mut bank_forks, mut leader_schedule_cache, snapshot_hash) = bank_forks_utils::load(
         &genesis_config,
@@ -671,6 +685,7 @@ fn new_banks_from_ledger(
         leader_schedule_cache,
         snapshot_hash,
         transaction_history_services,
+        insert_vote_transactions_service,
     )
 }
 

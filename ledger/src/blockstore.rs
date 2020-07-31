@@ -925,6 +925,15 @@ impl Blockstore {
         )
     }
 
+    pub fn insert_vote_transaction(
+        &self,
+        slot: Slot,
+        vote_transaction: &Transaction,
+    ) -> Result<()> {
+        self.votes_cf
+            .put((slot, vote_transaction.signatures[0]), vote_transaction)
+    }
+
     fn check_insert_coding_shred(
         &self,
         shred: Shred,
