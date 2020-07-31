@@ -412,7 +412,7 @@ pub mod tests {
                 .iter::<cf::Votes>(IteratorMode::Start)
                 .unwrap()
                 .next()
-                .map(|((slot, _, _), _)| slot >= min_slot)
+                .map(|((slot, _), _)| slot >= min_slot)
                 .unwrap_or(true);
         assert!(condition_met);
     }

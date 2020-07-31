@@ -67,13 +67,6 @@ pub struct DuplicateSlotProof {
     pub shred2: Vec<u8>,
 }
 
-#[derive(Deserialize, Serialize)]
-pub struct VoteTransactionInfo {
-    vote_transaction: Transaction,
-    prev_vote: Slot,
-    next_votes: Vec<Slot>,
-}
-
 #[derive(Debug, PartialEq)]
 pub enum ErasureMetaStatus {
     CanRecover,

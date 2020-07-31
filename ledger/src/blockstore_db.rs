@@ -10,12 +10,7 @@ use rocksdb::{
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use solana_runtime::hardened_unpack::UnpackError;
-use solana_sdk::{
-    clock::Slot,
-    hash::{Hash, HASH_BYTES},
-    pubkey::{Pubkey, PUBKEY_BYTES},
-    signature::Signature,
-};
+use solana_sdk::{clock::Slot, signature::Signature, transaction::Transaction};
 use solana_transaction_status::{Rewards, TransactionStatusMeta};
 use std::{collections::HashMap, fs, marker::PhantomData, path::Path, sync::Arc};
 use thiserror::Error;
@@ -534,29 +529,26 @@ impl ColumnName for columns::Votes {
     const NAME: &'static str = VOTES_CF;
 }
 impl TypedColumn for columns::Votes {
-    type Type = blockstore_meta::VoteTransactionInfo;
+    type Type = Transaction;
 }
 
 impl Column for columns::Votes {
-    type Index = (Slot, Hash, Pubkey);
+    type Index = (Slot, Signature);
 
-    fn key((slot, bank_hash, vote_key): (Slot, Hash, Pubkey)) -> Vec<u8> {
-        let mut key = vec![0; 8 + HASH_BYTES + PUBKEY_BYTES]; // size_of u64 + size_of Hash + size_of Pubkey
-        BigEndian::write_u64(&mut key[0..8], slot);
-        key[8..8 + HASH_BYTES].clone_from_slice(&bank_hash.as_ref()[0..64]);
-        key[8 + HASH_BYTES..8 + HASH_BYTES + PUBKEY_BYTES]
-            .clone_from_slice(&vote_key.as_ref()[0..64]);
+    fn key((vote_slot, vote_transaction_signature): (Slot, Signature)) -> Vec<u8> {
+        let mut key = vec![0; 8 + 64]; // size_of u64 + size_of Signature
+        BigEndian::write_u64(&mut key[0..8], vote_slot);
+        key[8..72].clone_from_slice(&vote_transaction_signature.as_ref()[0..64]);
         key
     }
 
-    fn index(key: &[u8]) -> (Slot, Hash, Pubkey) {
-        if key.len() != 8 + HASH_BYTES + PUBKEY_BYTES {
+    fn index(key: &[u8]) -> (Slot, Signature) {
+        if key.len() != 72 {
             Self::as_index(0)
         } else {
             let slot = BigEndian::read_u64(&key[0..8]);
-            let hash = Hash::new(&key[8..8 + HASH_BYTES]);
-            let pubkey = Pubkey::new(&key[8 + HASH_BYTES..8 + HASH_BYTES + PUBKEY_BYTES]);
-            (slot, hash, pubkey)
+            let signature = Signature::new(&key[8..72]);
+            (slot, signature)
         }
     }
 
@@ -565,7 +557,7 @@ impl Column for columns::Votes {
     }
 
     fn as_index(index: u64) -> Self::Index {
-        (index, Hash::default(), Pubkey::default())
+        (index, Signature::default())
     }
 }
 
