@@ -45,6 +45,7 @@ symlink = "0.1.0"
 tar = "0.4.28"
 tempfile = "3.1.0"
 thiserror = "1.0"
+trees = "0.2.1"
 zstd = "0.5.1"
 
 [lib]

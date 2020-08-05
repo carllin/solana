@@ -6,7 +6,7 @@ use crate::{bank::Bank, status_cache::MAX_CACHE_ENTRIES};
 use log::*;
 use solana_measure::measure::Measure;
 use solana_metrics::inc_new_counter_info;
-use solana_sdk::{clock::Slot, timing};
+use solana_sdk::{clock::Slot, genesis_config::create_genesis_config, pubkey::Pubkey, timing};
 use std::{
     collections::{HashMap, HashSet},
     ops::Index,
@@ -15,6 +15,7 @@ use std::{
     time::Instant,
 };
 use thiserror::Error;
+use trees::{Tree, TreeWalk};
 
 pub use crate::snapshot_utils::SnapshotVersion;
 
@@ -74,6 +75,31 @@ impl BankForks {
     pub fn new(bank: Bank) -> Self {
         let root = bank.slot();
         Self::new_from_banks(&[Arc::new(bank)], root)
+    }
+
+    pub fn new_from_tree(forks: Tree<Slot>) -> BankForks {
+        assert_eq!(forks.root().data, 0);
+        let mut walk = TreeWalk::from(forks);
+        let (genesis_config, _) = create_genesis_config(10_000);
+        let bank0 = Bank::new(&genesis_config);
+        bank0.freeze();
+        let mut bank_forks = BankForks::new(bank0);
+
+        while let Some(visit) = walk.get() {
+            let slot = visit.node().data;
+            if bank_forks.get(slot).is_some() {
+                walk.forward();
+                continue;
+            }
+            let parent = walk.get_parent().unwrap().data;
+            let parent_bank = bank_forks.get(parent).unwrap().clone();
+            let new_bank = Bank::new_from_parent(&parent_bank, &Pubkey::default(), slot);
+            new_bank.freeze();
+            bank_forks.insert(new_bank);
+            walk.forward();
+        }
+
+        bank_forks
     }
 
     /// Create a map of bank slot id to the set of ancestors for the bank slot.
