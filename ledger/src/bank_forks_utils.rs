@@ -6,6 +6,7 @@ use crate::{
     },
     entry::VerifyRecyclers,
     leader_schedule_cache::LeaderScheduleCache,
+    validator_vote_history::ValidatorVoteHistory,
 };
 use log::*;
 use solana_runtime::{
@@ -17,7 +18,12 @@ use solana_sdk::{clock::Slot, genesis_config::GenesisConfig, hash::Hash};
 use std::{fs, path::PathBuf, process, result, sync::Arc};
 
 pub type LoadResult = result::Result<
-    (BankForks, LeaderScheduleCache, Option<(Slot, Hash)>),
+    (
+        BankForks,
+        LeaderScheduleCache,
+        Option<(Slot, Hash)>,
+        ValidatorVoteHistory,
+    ),
     BlockstoreProcessorError,
 >;
 
@@ -25,9 +31,16 @@ fn to_loadresult(
     brp: BlockstoreProcessorResult,
     snapshot_hash: Option<(Slot, Hash)>,
 ) -> LoadResult {
-    brp.map(|(bank_forks, leader_schedule_cache)| {
-        (bank_forks, leader_schedule_cache, snapshot_hash)
-    })
+    brp.map(
+        |(bank_forks, leader_schedule_cache, validator_vote_history)| {
+            (
+                bank_forks,
+                leader_schedule_cache,
+                snapshot_hash,
+                validator_vote_history,
+            )
+        },
+    )
 }
 
 pub fn load(

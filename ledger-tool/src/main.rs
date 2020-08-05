@@ -6,13 +6,13 @@ use log::*;
 use regex::Regex;
 use serde_json::json;
 use solana_clap_utils::input_validators::{is_parsable, is_slot};
-use solana_ledger::entry::Entry;
 use solana_ledger::{
     ancestor_iterator::AncestorIterator,
     bank_forks_utils,
     blockstore::{Blockstore, PurgeType},
     blockstore_db::{self, AccessType, BlockstoreRecoveryMode, Column, Database},
     blockstore_processor::ProcessOptions,
+    entry::Entry,
     rooted_slot_iterator::RootedSlotIterator,
 };
 use solana_runtime::{
@@ -1213,7 +1213,7 @@ fn main() {
                 wal_recovery_mode,
                 snapshot_archive_path,
             ) {
-                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash)) => {
+                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash, _vote_history)) => {
                     println!(
                         "{}",
                         compute_shred_version(
@@ -1358,7 +1358,7 @@ fn main() {
                 open_genesis_config_by(&ledger_path, arg_matches).hash()
             );
 
-            let (bank_forks, _, _) = load_bank_forks(
+            let (bank_forks, _, _, _) = load_bank_forks(
                 arg_matches,
                 &ledger_path,
                 &open_genesis_config_by(&ledger_path, arg_matches),
@@ -1396,7 +1396,7 @@ fn main() {
                 wal_recovery_mode,
                 snapshot_archive_path,
             ) {
-                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash)) => {
+                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash, _vote_history)) => {
                     let dot = graph_forks(&bank_forks, arg_matches.is_present("include_all_votes"));
 
                     let extension = Path::new(&output_file).extension();
@@ -1450,7 +1450,7 @@ fn main() {
                 wal_recovery_mode,
                 snapshot_archive_path,
             ) {
-                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash)) => {
+                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash, _vote_history)) => {
                     let bank = bank_forks
                         .get(snapshot_slot)
                         .unwrap_or_else(|| {
@@ -1549,7 +1549,7 @@ fn main() {
                 wal_recovery_mode,
                 snapshot_archive_path,
             ) {
-                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash)) => {
+                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash, _vote_history)) => {
                     let slot = bank_forks.working_bank().slot();
                     let bank = bank_forks.get(slot).unwrap_or_else(|| {
                         eprintln!("Error: Slot {} is not available", slot);
@@ -1599,7 +1599,7 @@ fn main() {
                 wal_recovery_mode,
                 snapshot_archive_path,
             ) {
-                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash)) => {
+                Ok((bank_forks, _leader_schedule_cache, _snapshot_hash, _vote_history)) => {
                     let slot = bank_forks.working_bank().slot();
                     let bank = bank_forks.get(slot).unwrap_or_else(|| {
                         eprintln!("Error: Slot {} is not available", slot);

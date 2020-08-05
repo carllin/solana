@@ -23,6 +23,7 @@ use solana_ledger::{
     blockstore::{Blockstore, CompletedSlotsReceiver},
     blockstore_processor::TransactionStatusSender,
     leader_schedule_cache::LeaderScheduleCache,
+    validator_vote_history::ValidatorVoteHistory,
 };
 use solana_runtime::{
     bank_forks::BankForks,
@@ -102,6 +103,7 @@ impl Tvu {
         verified_vote_receiver: VerifiedVoteReceiver,
         replay_vote_sender: ReplayVoteSender,
         replay_vote_transaction_sender: ReplayVoteTransactionSender,
+        vote_history: ValidatorVoteHistory,
         tvu_config: TvuConfig,
     ) -> Self {
         let keypair: Arc<Keypair> = cluster_info.keypair.clone();
@@ -204,6 +206,7 @@ impl Tvu {
             duplicate_slots_reset_receiver,
             replay_vote_sender,
             replay_vote_transaction_sender,
+            vote_history,
         );
 
         let ledger_cleanup_service = tvu_config.max_ledger_shreds.map(|max_ledger_shreds| {
@@ -326,6 +329,7 @@ pub mod tests {
             verified_vote_receiver,
             replay_vote_sender,
             replay_vote_transaction_sender,
+            ValidatorVoteHistory::new(0),
             TvuConfig::default(),
         );
         exit.store(true, Ordering::Relaxed);

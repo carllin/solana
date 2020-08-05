@@ -482,9 +482,11 @@ impl RetransmitStage {
 mod tests {
     use super::*;
     use crate::contact_info::ContactInfo;
-    use solana_ledger::blockstore_processor::{process_blockstore, ProcessOptions};
-    use solana_ledger::create_new_tmp_ledger;
-    use solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo};
+    use solana_ledger::{
+        blockstore_processor::{process_blockstore, ProcessOptions},
+        create_new_tmp_ledger,
+        genesis_utils::{create_genesis_config, GenesisConfigInfo},
+    };
     use solana_net_utils::find_available_port_in_range;
     use solana_perf::packet::{Meta, Packet, Packets};
     use solana_sdk::pubkey::Pubkey;
@@ -499,7 +501,7 @@ mod tests {
             full_leader_cache: true,
             ..ProcessOptions::default()
         };
-        let (bank_forks, cached_leader_schedule) =
+        let (bank_forks, cached_leader_schedule, _vote_history) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
         let leader_schedule_cache = Arc::new(cached_leader_schedule);
         let bank_forks = Arc::new(RwLock::new(bank_forks));

@@ -679,6 +679,7 @@ pub mod test {
         progress_map::ForkProgress,
         replay_stage::{HeaviestForkFailures, ReplayStage},
     };
+    use solana_ledger::validator_vote_history::ValidatorVoteHistory;
     use solana_runtime::{
         bank::Bank,
         bank_forks::BankForks,
@@ -852,6 +853,7 @@ pub mod test {
                 &mut PubkeyReferences::default(),
                 None,
                 &mut self.heaviest_subtree_fork_choice,
+                &mut ValidatorVoteHistory::new(0),
             )
         }
 

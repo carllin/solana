@@ -32,6 +32,7 @@ use solana_ledger::{
     create_new_tmp_ledger,
     leader_schedule::FixedSchedule,
     leader_schedule_cache::LeaderScheduleCache,
+    validator_vote_history::ValidatorVoteHistory,
 };
 use solana_measure::measure::Measure;
 use solana_metrics::datapoint_info;
@@ -230,6 +231,7 @@ impl Validator {
 
         let (replay_vote_sender, replay_vote_receiver) = unbounded();
         let (replay_vote_transaction_sender, replay_vote_transaction_receiver) = unbounded();
+
         let (
             genesis_config,
             bank_forks,
@@ -245,6 +247,7 @@ impl Validator {
                 rewards_recorder_service,
             },
             insert_vote_transactions_service,
+            vote_history,
         ) = new_banks_from_ledger(
             config,
             ledger_path,
@@ -470,6 +473,7 @@ impl Validator {
             verified_vote_receiver,
             replay_vote_sender.clone(),
             replay_vote_transaction_sender.clone(),
+            vote_history,
             TvuConfig {
                 max_ledger_shreds: config.max_ledger_shreds,
                 halt_on_trusted_validators_accounts_hash_mismatch: config
@@ -607,6 +611,7 @@ fn new_banks_from_ledger(
     Option<(Slot, Hash)>,
     TransactionHistoryServices,
     InsertVoteTransactionsService,
+    ValidatorVoteHistory,
 ) {
     info!("loading ledger from {:?}...", ledger_path);
     let genesis_config = open_genesis_config(ledger_path, config.max_genesis_archive_unpacked_size);
@@ -655,22 +660,23 @@ fn new_banks_from_ledger(
         exit,
     );
 
-    let (mut bank_forks, mut leader_schedule_cache, snapshot_hash) = bank_forks_utils::load(
-        &genesis_config,
-        &blockstore,
-        config.account_paths.clone(),
-        config.snapshot_config.as_ref(),
-        process_options,
-        transaction_history_services
-            .transaction_status_sender
-            .clone(),
-        Some(replay_vote_sender),
-        Some(replay_vote_transaction_sender),
-    )
-    .unwrap_or_else(|err| {
-        error!("Failed to load ledger: {:?}", err);
-        process::exit(1);
-    });
+    let (mut bank_forks, mut leader_schedule_cache, snapshot_hash, vote_history) =
+        bank_forks_utils::load(
+            &genesis_config,
+            &blockstore,
+            config.account_paths.clone(),
+            config.snapshot_config.as_ref(),
+            process_options,
+            transaction_history_services
+                .transaction_status_sender
+                .clone(),
+            Some(replay_vote_sender),
+            Some(replay_vote_transaction_sender),
+        )
+        .unwrap_or_else(|err| {
+            error!("Failed to load ledger: {:?}", err);
+            process::exit(1);
+        });
 
     leader_schedule_cache.set_fixed_leader_schedule(config.fixed_leader_schedule.clone());
 
@@ -687,6 +693,7 @@ fn new_banks_from_ledger(
         snapshot_hash,
         transaction_history_services,
         insert_vote_transactions_service,
+        vote_history,
     )
 }
 

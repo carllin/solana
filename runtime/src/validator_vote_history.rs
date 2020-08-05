@@ -6,7 +6,6 @@ use solana_vote_program::vote_state::{Vote, VoteState, MAX_LOCKOUT_HISTORY};
 use std::{
     collections::{BTreeMap, HashMap},
     ops::{Deref, DerefMut},
-    rc::Rc,
 };
 
 #[derive(Debug)]
@@ -44,10 +43,10 @@ struct ValidatorLandedVotes(
     HashMap<Slot, ValidatorVote>,
 );
 
-struct ValidatorVoteHistory {
+pub struct ValidatorVoteHistory {
     // Maps a slot for which validators voted to a map of information about those votes for
     // each such validator
-    slot_to_votes: HashMap<Slot, HashMap<Rc<Pubkey>, ValidatorLandedVotes>>,
+    slot_to_votes: HashMap<Slot, HashMap<Pubkey, ValidatorLandedVotes>>,
     root: Slot,
     initial_slots: HashMap<Pubkey, Slot>,
 }
@@ -167,7 +166,7 @@ impl ValidatorVoteHistory {
         // The slot in which the vote transaction landed
         vote_landed_slot: Slot,
         transaction_signature: Signature,
-        vote_pubkey: Rc<Pubkey>,
+        vote_pubkey: &Pubkey,
         // Ancestors used to find in which slot the previous vote
         // transaction for this validator, on this fork, landed
         ancestors: &dyn Contains<Slot>,
@@ -250,7 +249,7 @@ impl ValidatorVoteHistory {
                     representative_slot,
                     vote_landed_slot,
                     transaction_signature,
-                    vote_pubkey.clone(),
+                    *vote_pubkey,
                     ancestors,
                     cur_height,
                 );
@@ -473,7 +472,7 @@ impl ValidatorVoteHistory {
         representative_slot: Slot,
         reference_slot: Slot,
         transaction_signature: Signature,
-        vote_pubkey: Rc<Pubkey>,
+        vote_pubkey: Pubkey,
         ancestors: &dyn Contains<Slot>,
         height: usize,
     ) -> &mut ValidatorVote {
@@ -526,7 +525,7 @@ pub mod test {
         ancestors: HashMap<Slot, HashSet<Slot>>,
         descendants: HashMap<Slot, HashSet<Slot>>,
         validator_vote_history: ValidatorVoteHistory,
-        vote_pubkey: Rc<Pubkey>,
+        vote_pubkey: Pubkey,
         vote_account: Account,
     }
 
@@ -554,7 +553,7 @@ pub mod test {
 
             // Initialize an arbitrary validator vote pubkey
             let vote_keypair = Keypair::new();
-            let vote_pubkey = Rc::new(vote_keypair.pubkey());
+            let vote_pubkey = vote_keypair.pubkey();
 
             // Create ValidatorVoteHistory
             let validator_vote_history = ValidatorVoteHistory::new(bank_forks.root());
@@ -605,7 +604,7 @@ pub mod test {
             // The slot in which the vote transaction landed
             vote_landed_slot,
             transaction_signature,
-            vote_pubkey.clone(),
+            &vote_pubkey,
             ancestors.get(&vote_landed_slot).unwrap(),
         );
 
@@ -729,7 +728,7 @@ pub mod test {
                 // The slot in which the vote transaction landed
                 *vote_landed_fork,
                 transaction_signature1,
-                vote_pubkey.clone(),
+                &vote_pubkey,
                 ancestors.get(&vote_landed_fork).unwrap(),
             );
         }
@@ -772,7 +771,7 @@ pub mod test {
             // The slot in which the vote transaction landed
             vote_landed_slot,
             transaction_signature2,
-            vote_pubkey.clone(),
+            &vote_pubkey,
             ancestors.get(&vote_landed_slot).unwrap(),
         );
 
@@ -820,7 +819,7 @@ pub mod test {
             // The slot in which the vote transaction landed
             6,
             transaction_signature,
-            vote_pubkey.clone(),
+            &vote_pubkey,
             ancestors.get(&vote_landed_slot).unwrap(),
         );
 
@@ -883,7 +882,7 @@ pub mod test {
             // The slot in which the vote transaction landed
             vote_landed_slot,
             transaction_signature1,
-            vote_pubkey.clone(),
+            &vote_pubkey,
             ancestors.get(&vote_landed_slot).unwrap(),
         );
 
@@ -971,7 +970,7 @@ pub mod test {
             // The slot in which the vote transaction landed
             vote_landed_slot,
             transaction_signature2,
-            vote_pubkey.clone(),
+            &vote_pubkey,
             ancestors.get(&vote_landed_slot).unwrap(),
         );
 

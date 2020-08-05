@@ -5,6 +5,7 @@ use crate::{
     blockstore_meta::SlotMeta,
     entry::{create_ticks, Entry, EntrySlice, EntryVerificationStatus, VerifyRecyclers},
     leader_schedule_cache::LeaderScheduleCache,
+    validator_vote_history::ValidatorVoteHistory,
 };
 use crossbeam_channel::Sender;
 use itertools::Itertools;
@@ -33,16 +34,18 @@ use solana_sdk::{
 };
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     result,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 use thiserror::Error;
 
-pub type BlockstoreProcessorResult =
-    result::Result<(BankForks, LeaderScheduleCache), BlockstoreProcessorError>;
+pub type BlockstoreProcessorResult = result::Result<
+    (BankForks, LeaderScheduleCache, ValidatorVoteHistory),
+    BlockstoreProcessorError,
+>;
 
 thread_local!(static PAR_THREAD_POOL: RefCell<ThreadPool> = RefCell::new(rayon::ThreadPoolBuilder::new()
                     .num_threads(get_thread_count())
@@ -97,6 +100,8 @@ fn execute_batch(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
+    vote_history: &Arc<RwLock<&mut ValidatorVoteHistory>>,
+    ancestors: &Arc<&HashSet<Slot>>,
 ) -> Result<()> {
     let (tx_results, balances) = batch.bank().load_execute_and_commit_transactions(
         batch,
@@ -139,8 +144,12 @@ fn execute_batches(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
+    vote_history: &mut ValidatorVoteHistory,
+    ancestors: &HashSet<Slot>,
 ) -> Result<()> {
     inc_new_counter_debug!("bank-par_execute_entries-count", batches.len());
+    let vote_history = Arc::new(RwLock::new(vote_history));
+    let ancestors = Arc::new(ancestors);
     let results: Vec<Result<()>> = PAR_THREAD_POOL.with(|thread_pool| {
         thread_pool.borrow().install(|| {
             batches
@@ -152,6 +161,8 @@ fn execute_batches(
                         sender.clone(),
                         replay_vote_sender,
                         replay_vote_transaction_sender,
+                        &vote_history,
+                        &ancestors,
                     );
                     if let Some(entry_callback) = entry_callback {
                         entry_callback(bank);
@@ -177,6 +188,8 @@ pub fn process_entries(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
+    vote_history: &mut ValidatorVoteHistory,
+    ancestors: &HashSet<Slot>,
 ) -> Result<()> {
     process_entries_with_callback(
         bank,
@@ -186,6 +199,8 @@ pub fn process_entries(
         transaction_status_sender,
         replay_vote_sender,
         replay_vote_transaction_sender,
+        vote_history,
+        ancestors,
     )
 }
 
@@ -197,6 +212,8 @@ fn process_entries_with_callback(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
+    vote_history: &mut ValidatorVoteHistory,
+    ancestors: &HashSet<Slot>,
 ) -> Result<()> {
     // accumulator for entries that can be processed in parallel
     let mut batches = vec![];
@@ -215,6 +232,8 @@ fn process_entries_with_callback(
                     transaction_status_sender.clone(),
                     replay_vote_sender,
                     replay_vote_transaction_sender,
+                    vote_history,
+                    ancestors,
                 )?;
                 batches.clear();
                 for hash in &tick_hashes {
@@ -272,6 +291,8 @@ fn process_entries_with_callback(
                     transaction_status_sender.clone(),
                     replay_vote_sender,
                     replay_vote_transaction_sender,
+                    vote_history,
+                    ancestors,
                 )?;
                 batches.clear();
             }
@@ -284,6 +305,8 @@ fn process_entries_with_callback(
         transaction_status_sender,
         replay_vote_sender,
         replay_vote_transaction_sender,
+        vote_history,
+        ancestors,
     )?;
     for hash in tick_hashes {
         bank.register_tick(&hash);
@@ -384,6 +407,7 @@ pub fn process_blockstore_from_root(
     let start_slot = bank.slot();
     let now = Instant::now();
     let mut root = start_slot;
+    let mut vote_history = ValidatorVoteHistory::new_from_root_bank(&bank);
 
     bank.set_entered_epoch_callback(solana_genesis_programs::get_entered_epoch_callback(
         genesis_config.operating_mode,
@@ -441,6 +465,7 @@ pub fn process_blockstore_from_root(
                 transaction_status_sender,
                 replay_vote_sender,
                 replay_vote_transaction_sender,
+                &mut vote_history,
             )?;
             (initial_forks, leader_schedule_cache)
         } else {
@@ -476,7 +501,7 @@ pub fn process_blockstore_from_root(
     );
     assert!(bank_forks.active_banks().is_empty());
 
-    Ok((bank_forks, leader_schedule_cache))
+    Ok((bank_forks, leader_schedule_cache, vote_history))
 }
 
 /// Verify that a segment of entries has the correct number of ticks and hashes
@@ -523,6 +548,7 @@ pub fn verify_ticks(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn confirm_full_slot(
     blockstore: &Blockstore,
     bank: &Arc<Bank>,
@@ -532,6 +558,8 @@ fn confirm_full_slot(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
+    vote_history: &mut ValidatorVoteHistory,
+    ancestors: &HashSet<Slot>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let mut timing = ConfirmationTiming::default();
     let skip_verification = !opts.poh_verify;
@@ -546,6 +574,8 @@ fn confirm_full_slot(
         replay_vote_transaction_sender,
         opts.entry_callback.as_ref(),
         recyclers,
+        vote_history,
+        ancestors,
     )?;
 
     if !bank.is_complete() {
@@ -609,6 +639,8 @@ pub fn confirm_slot(
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
     entry_callback: Option<&ProcessCallback>,
     recyclers: &VerifyRecyclers,
+    vote_history: &mut ValidatorVoteHistory,
+    ancestors: &HashSet<Slot>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
 
@@ -676,6 +708,8 @@ pub fn confirm_slot(
         transaction_status_sender,
         replay_vote_sender,
         replay_vote_transaction_sender,
+        vote_history,
+        ancestors,
     )
     .map_err(BlockstoreProcessorError::from);
     replay_elapsed.stop();
@@ -721,6 +755,8 @@ fn process_bank_0(
         None,
         None,
         None,
+        &mut ValidatorVoteHistory::new(0),
+        &HashSet::new(),
     )
     .expect("processing for bank 0 must succeed");
     bank0.freeze();
@@ -798,6 +834,7 @@ fn load_frozen_forks(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
+    vote_history: &mut ValidatorVoteHistory,
 ) -> result::Result<Vec<Arc<Bank>>, BlockstoreProcessorError> {
     let mut initial_forks = HashMap::new();
     let mut last_status_report = Instant::now();
@@ -857,6 +894,8 @@ fn load_frozen_forks(
             transaction_status_sender.clone(),
             replay_vote_sender,
             replay_vote_transaction_sender,
+            vote_history,
+            &bank.ancestors.keys().cloned().collect(),
         )
         .is_err()
         {
@@ -871,6 +910,7 @@ fn load_frozen_forks(
             pending_slots.clear();
             initial_forks.clear();
             last_root_slot = slot;
+            vote_history.set_root(slot);
         }
         slots_elapsed += 1;
 
@@ -898,6 +938,7 @@ fn load_frozen_forks(
     Ok(initial_forks.values().cloned().collect::<Vec<_>>())
 }
 
+#[allow(clippy::too_many_arguments)]
 // Processes and replays the contents of a single slot, returns Error
 // if failed to play the slot
 fn process_single_slot(
@@ -909,10 +950,13 @@ fn process_single_slot(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
+    vote_history: &mut ValidatorVoteHistory,
+    ancestors: &HashSet<Slot>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     // Mark corrupt slots as dead so validators don't replay this slot and
     // see DuplicateSignature errors later in ReplayStage
-    confirm_full_slot(blockstore, bank, opts, recyclers, progress, transaction_status_sender, replay_vote_sender, replay_vote_transaction_sender).map_err(|err| {
+    confirm_full_slot(blockstore, bank, opts, recyclers, progress, transaction_status_sender, replay_vote_sender, replay_vote_transaction_sender,
+        vote_history, ancestors).map_err(|err| {
         let slot = bank.slot();
         warn!("slot {} failed to verify: {}", slot, err);
         if blockstore.is_primary_access() {
@@ -1055,7 +1099,7 @@ pub mod tests {
             Ok(_)
         );
 
-        let (bank_forks, _leader_schedule) = process_blockstore(
+        let (bank_forks, _leader_schedule, _) = process_blockstore(
             &genesis_config,
             &blockstore,
             Vec::new(),
@@ -1101,7 +1145,7 @@ pub mod tests {
         );
 
         // Should return slot 0, the last slot on the fork that is valid
-        let (bank_forks, _leader_schedule) = process_blockstore(
+        let (bank_forks, _leader_schedule, _) = process_blockstore(
             &genesis_config,
             &blockstore,
             Vec::new(),
@@ -1119,7 +1163,7 @@ pub mod tests {
         let _last_slot2_entry_hash =
             fill_blockstore_slot_with_ticks(&blockstore, ticks_per_slot, 2, 0, blockhash);
 
-        let (bank_forks, _leader_schedule) = process_blockstore(
+        let (bank_forks, _leader_schedule, _) = process_blockstore(
             &genesis_config,
             &blockstore,
             Vec::new(),
@@ -1183,7 +1227,7 @@ pub mod tests {
             poh_verify: true,
             ..ProcessOptions::default()
         };
-        let (bank_forks, _leader_schedule) =
+        let (bank_forks, _leader_schedule, _) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
         assert_eq!(frozen_bank_slots(&bank_forks), vec![0]);
     }
@@ -1248,7 +1292,7 @@ pub mod tests {
             poh_verify: true,
             ..ProcessOptions::default()
         };
-        let (bank_forks, _leader_schedule) =
+        let (bank_forks, _leader_schedule, _) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
 
         assert_eq!(frozen_bank_slots(&bank_forks), vec![0]); // slot 1 isn't "full", we stop at slot zero
@@ -1267,7 +1311,7 @@ pub mod tests {
         };
         fill_blockstore_slot_with_ticks(&blockstore, ticks_per_slot, 3, 0, blockhash);
         // Slot 0 should not show up in the ending bank_forks_info
-        let (bank_forks, _leader_schedule) =
+        let (bank_forks, _leader_schedule, _) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
 
         // slot 1 isn't "full", we stop at slot zero
@@ -1334,7 +1378,7 @@ pub mod tests {
             poh_verify: true,
             ..ProcessOptions::default()
         };
-        let (bank_forks, _leader_schedule) =
+        let (bank_forks, _leader_schedule, _) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
 
         // One fork, other one is ignored b/c not a descendant of the root
@@ -1413,7 +1457,7 @@ pub mod tests {
             poh_verify: true,
             ..ProcessOptions::default()
         };
-        let (bank_forks, _leader_schedule) =
+        let (bank_forks, _leader_schedule, _) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
 
         assert_eq!(frozen_bank_slots(&bank_forks), vec![1, 2, 3, 4]);
@@ -1469,7 +1513,7 @@ pub mod tests {
         blockstore.set_dead_slot(2).unwrap();
         fill_blockstore_slot_with_ticks(&blockstore, ticks_per_slot, 3, 1, slot1_blockhash);
 
-        let (bank_forks, _leader_schedule) = process_blockstore(
+        let (bank_forks, _leader_schedule, _) = process_blockstore(
             &genesis_config,
             &blockstore,
             Vec::new(),
@@ -1520,7 +1564,7 @@ pub mod tests {
         blockstore.set_dead_slot(4).unwrap();
         fill_blockstore_slot_with_ticks(&blockstore, ticks_per_slot, 3, 1, slot1_blockhash);
 
-        let (bank_forks, _leader_schedule) = process_blockstore(
+        let (bank_forks, _leader_schedule, _) = process_blockstore(
             &genesis_config,
             &blockstore,
             Vec::new(),
@@ -1574,7 +1618,7 @@ pub mod tests {
         fill_blockstore_slot_with_ticks(&blockstore, ticks_per_slot, 2, 0, blockhash);
         blockstore.set_dead_slot(1).unwrap();
         blockstore.set_dead_slot(2).unwrap();
-        let (bank_forks, _leader_schedule) = process_blockstore(
+        let (bank_forks, _leader_schedule, _) = process_blockstore(
             &genesis_config,
             &blockstore,
             Vec::new(),
@@ -1630,7 +1674,7 @@ pub mod tests {
             poh_verify: true,
             ..ProcessOptions::default()
         };
-        let (bank_forks, _leader_schedule) =
+        let (bank_forks, _leader_schedule, _) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
 
         // There is one fork, head is last_slot + 1
@@ -1704,7 +1748,17 @@ pub mod tests {
         );
 
         // Now ensure the TX is accepted despite pointing to the ID of an empty entry.
-        process_entries(&bank, &slot_entries, true, None, None, None).unwrap();
+        process_entries(
+            &bank,
+            &slot_entries,
+            true,
+            None,
+            None,
+            None,
+            &mut ValidatorVoteHistory::new(0),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert_eq!(bank.process_transaction(&tx), Ok(()));
     }
 
@@ -1773,7 +1827,7 @@ pub mod tests {
             poh_verify: true,
             ..ProcessOptions::default()
         };
-        let (bank_forks, _leader_schedule) =
+        let (bank_forks, _leader_schedule, _) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
 
         assert_eq!(frozen_bank_slots(&bank_forks), vec![0, 1]);
@@ -1802,7 +1856,7 @@ pub mod tests {
             poh_verify: true,
             ..ProcessOptions::default()
         };
-        let (bank_forks, _leader_schedule) =
+        let (bank_forks, _leader_schedule, _) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
 
         assert_eq!(frozen_bank_slots(&bank_forks), vec![0]);
@@ -1836,7 +1890,7 @@ pub mod tests {
             full_leader_cache: true,
             ..ProcessOptions::default()
         };
-        let (_bank_forks, leader_schedule) =
+        let (_bank_forks, leader_schedule, _) =
             process_blockstore(&genesis_config, &blockstore, Vec::new(), opts, None, None).unwrap();
         assert_eq!(leader_schedule.max_schedules(), std::usize::MAX);
     }
@@ -1910,7 +1964,16 @@ pub mod tests {
         assert_eq!(bank.tick_height(), 0);
         let tick = next_entry(&genesis_config.hash(), 1, vec![]);
         assert_eq!(
-            process_entries(&bank, &[tick], true, None, None, None),
+            process_entries(
+                &bank,
+                &[tick],
+                true,
+                None,
+                None,
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new()
+            ),
             Ok(())
         );
         assert_eq!(bank.tick_height(), 1);
@@ -1945,7 +2008,16 @@ pub mod tests {
         );
         let entry_2 = next_entry(&entry_1.hash, 1, vec![tx]);
         assert_eq!(
-            process_entries(&bank, &[entry_1, entry_2], true, None, None, None),
+            process_entries(
+                &bank,
+                &[entry_1, entry_2],
+                true,
+                None,
+                None,
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new()
+            ),
             Ok(())
         );
         assert_eq!(bank.get_balance(&keypair1.pubkey()), 2);
@@ -2008,6 +2080,8 @@ pub mod tests {
                 None,
                 None,
                 None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new()
             ),
             Ok(())
         );
@@ -2081,6 +2155,8 @@ pub mod tests {
             None,
             None,
             None,
+            &mut ValidatorVoteHistory::new(0),
+            &HashSet::new(),
         )
         .is_err());
 
@@ -2194,6 +2270,8 @@ pub mod tests {
             None,
             None,
             None,
+            &mut ValidatorVoteHistory::new(0),
+            &HashSet::new(),
         )
         .is_err());
 
@@ -2241,7 +2319,16 @@ pub mod tests {
             system_transaction::transfer(&keypair2, &keypair4.pubkey(), 1, bank.last_blockhash());
         let entry_2 = next_entry(&entry_1.hash, 1, vec![tx]);
         assert_eq!(
-            process_entries(&bank, &[entry_1, entry_2], true, None, None, None),
+            process_entries(
+                &bank,
+                &[entry_1, entry_2],
+                true,
+                None,
+                None,
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new()
+            ),
             Ok(())
         );
         assert_eq!(bank.get_balance(&keypair3.pubkey()), 1);
@@ -2302,7 +2389,16 @@ pub mod tests {
             })
             .collect();
         assert_eq!(
-            process_entries(&bank, &entries, true, None, None, None),
+            process_entries(
+                &bank,
+                &entries,
+                true,
+                None,
+                None,
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new()
+            ),
             Ok(())
         );
     }
@@ -2365,7 +2461,16 @@ pub mod tests {
         // Transfer lamports to each other
         let entry = next_entry(&bank.last_blockhash(), 1, tx_vector);
         assert_eq!(
-            process_entries(&bank, &[entry], true, None, None, None),
+            process_entries(
+                &bank,
+                &[entry],
+                true,
+                None,
+                None,
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new()
+            ),
             Ok(())
         );
         bank.squash();
@@ -2431,7 +2536,9 @@ pub mod tests {
                 true,
                 None,
                 None,
-                None
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new()
             ),
             Ok(())
         );
@@ -2443,7 +2550,16 @@ pub mod tests {
             system_transaction::transfer(&keypair2, &keypair3.pubkey(), 1, bank.last_blockhash());
         let entry_3 = next_entry(&entry_2.hash, 1, vec![tx]);
         assert_eq!(
-            process_entries(&bank, &[entry_3], true, None, None, None),
+            process_entries(
+                &bank,
+                &[entry_3],
+                true,
+                None,
+                None,
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new()
+            ),
             Err(TransactionError::AccountNotFound)
         );
     }
@@ -2523,7 +2639,16 @@ pub mod tests {
         );
 
         assert_eq!(
-            process_entries(&bank, &[entry_1_to_mint], false, None, None, None),
+            process_entries(
+                &bank,
+                &[entry_1_to_mint],
+                false,
+                None,
+                None,
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new()
+            ),
             Err(TransactionError::AccountInUse)
         );
 
@@ -2585,12 +2710,14 @@ pub mod tests {
             None,
             None,
             None,
+            &mut ValidatorVoteHistory::new(0),
+            &HashSet::new(),
         )
         .unwrap();
         bank1.squash();
 
         // Test process_blockstore_from_root() from slot 1 onwards
-        let (bank_forks, _leader_schedule) = process_blockstore_from_root(
+        let (bank_forks, _leader_schedule, _) = process_blockstore_from_root(
             &genesis_config,
             &blockstore,
             bank1,
@@ -2680,7 +2807,17 @@ pub mod tests {
                 })
                 .collect();
             info!("paying iteration {}", i);
-            process_entries(&bank, &entries, true, None, None, None).expect("paying failed");
+            process_entries(
+                &bank,
+                &entries,
+                true,
+                None,
+                None,
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new(),
+            )
+            .expect("paying failed");
 
             let entries: Vec<_> = (0..NUM_TRANSFERS)
                 .step_by(NUM_TRANSFERS_PER_ENTRY)
@@ -2703,7 +2840,17 @@ pub mod tests {
                 .collect();
 
             info!("refunding iteration {}", i);
-            process_entries(&bank, &entries, true, None, None, None).expect("refunding failed");
+            process_entries(
+                &bank,
+                &entries,
+                true,
+                None,
+                None,
+                None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new(),
+            )
+            .expect("refunding failed");
 
             // advance to next block
             process_entries(
@@ -2715,6 +2862,8 @@ pub mod tests {
                 None,
                 None,
                 None,
+                &mut ValidatorVoteHistory::new(0),
+                &HashSet::new(),
             )
             .expect("process ticks failed");
 
@@ -2757,7 +2906,18 @@ pub mod tests {
         let entry = next_entry(&new_blockhash, 1, vec![tx]);
         entries.push(entry);
 
-        process_entries_with_callback(&bank0, &entries, true, None, None, None, None).unwrap();
+        process_entries_with_callback(
+            &bank0,
+            &entries,
+            true,
+            None,
+            None,
+            None,
+            None,
+            &mut ValidatorVoteHistory::new(0),
+            &HashSet::new(),
+        )
+        .unwrap();
         assert_eq!(bank0.get_balance(&keypair.pubkey()), 1)
     }
 
@@ -2919,6 +3079,8 @@ pub mod tests {
             None,
             Some(&replay_vote_sender),
             Some(&replay_vote_transaction_sender),
+            &mut ValidatorVoteHistory::new(0),
+            &HashSet::new(),
         );
         let successes: BTreeSet<Pubkey> = replay_vote_receiver
             .try_iter()
