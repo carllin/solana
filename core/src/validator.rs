@@ -32,7 +32,6 @@ use solana_ledger::{
     create_new_tmp_ledger,
     leader_schedule::FixedSchedule,
     leader_schedule_cache::LeaderScheduleCache,
-    validator_vote_history::ValidatorVoteHistory,
 };
 use solana_measure::measure::Measure;
 use solana_metrics::datapoint_info;
@@ -41,6 +40,7 @@ use solana_runtime::{
     bank_forks::{BankForks, SnapshotConfig},
     commitment::BlockCommitmentCache,
     hardened_unpack::{open_genesis_config, MAX_GENESIS_ARCHIVE_UNPACKED_SIZE},
+    validator_vote_history::ValidatorVoteHistory,
     vote_sender_types::{
         ReplayVoteSender, ReplayVoteTransactionReceiver, ReplayVoteTransactionSender,
     },
@@ -473,7 +473,7 @@ impl Validator {
             verified_vote_receiver,
             replay_vote_sender.clone(),
             replay_vote_transaction_sender.clone(),
-            vote_history,
+            vote_history.clone(),
             TvuConfig {
                 max_ledger_shreds: config.max_ledger_shreds,
                 halt_on_trusted_validators_accounts_hash_mismatch: config
@@ -502,6 +502,7 @@ impl Validator {
             bank_forks,
             verified_vote_sender,
             replay_vote_receiver,
+            vote_history,
             replay_vote_sender,
             replay_vote_transaction_sender,
         );
@@ -611,7 +612,7 @@ fn new_banks_from_ledger(
     Option<(Slot, Hash)>,
     TransactionHistoryServices,
     InsertVoteTransactionsService,
-    ValidatorVoteHistory,
+    Arc<RwLock<ValidatorVoteHistory>>,
 ) {
     info!("loading ledger from {:?}...", ledger_path);
     let genesis_config = open_genesis_config(ledger_path, config.max_genesis_archive_unpacked_size);

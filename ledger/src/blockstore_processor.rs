@@ -5,7 +5,6 @@ use crate::{
     blockstore_meta::SlotMeta,
     entry::{create_ticks, Entry, EntrySlice, EntryVerificationStatus, VerifyRecyclers},
     leader_schedule_cache::LeaderScheduleCache,
-    validator_vote_history::ValidatorVoteHistory,
 };
 use crossbeam_channel::Sender;
 use itertools::Itertools;
@@ -21,6 +20,7 @@ use solana_runtime::{
     bank_utils,
     transaction_batch::TransactionBatch,
     transaction_utils::OrderedIterator,
+    validator_vote_history::ValidatorVoteHistory,
     vote_sender_types::{ReplayVoteSender, ReplayVoteTransactionSender},
 };
 use solana_sdk::{
@@ -43,7 +43,11 @@ use std::{
 use thiserror::Error;
 
 pub type BlockstoreProcessorResult = result::Result<
-    (BankForks, LeaderScheduleCache, ValidatorVoteHistory),
+    (
+        BankForks,
+        LeaderScheduleCache,
+        Arc<RwLock<ValidatorVoteHistory>>,
+    ),
     BlockstoreProcessorError,
 >;
 
@@ -100,7 +104,7 @@ fn execute_batch(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
-    vote_history: &Arc<RwLock<&mut ValidatorVoteHistory>>,
+    vote_history: &RwLock<ValidatorVoteHistory>,
     ancestors: &Arc<&HashSet<Slot>>,
 ) -> Result<()> {
     let (tx_results, balances) = batch.bank().load_execute_and_commit_transactions(
@@ -110,10 +114,13 @@ fn execute_batch(
     );
 
     bank_utils::find_and_send_votes(
+        bank.slot(),
         batch.transactions(),
         &tx_results,
         replay_vote_sender,
         replay_vote_transaction_sender,
+        vote_history,
+        **ancestors,
     );
 
     let TransactionResults {
@@ -144,11 +151,10 @@ fn execute_batches(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
-    vote_history: &mut ValidatorVoteHistory,
+    vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
     ancestors: &HashSet<Slot>,
 ) -> Result<()> {
     inc_new_counter_debug!("bank-par_execute_entries-count", batches.len());
-    let vote_history = Arc::new(RwLock::new(vote_history));
     let ancestors = Arc::new(ancestors);
     let results: Vec<Result<()>> = PAR_THREAD_POOL.with(|thread_pool| {
         thread_pool.borrow().install(|| {
@@ -188,7 +194,7 @@ pub fn process_entries(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
-    vote_history: &mut ValidatorVoteHistory,
+    vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
     ancestors: &HashSet<Slot>,
 ) -> Result<()> {
     process_entries_with_callback(
@@ -212,7 +218,7 @@ fn process_entries_with_callback(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
-    vote_history: &mut ValidatorVoteHistory,
+    vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
     ancestors: &HashSet<Slot>,
 ) -> Result<()> {
     // accumulator for entries that can be processed in parallel
@@ -407,7 +413,7 @@ pub fn process_blockstore_from_root(
     let start_slot = bank.slot();
     let now = Instant::now();
     let mut root = start_slot;
-    let mut vote_history = ValidatorVoteHistory::new_from_root_bank(&bank);
+    let vote_history = Arc::new(RwLock::new(ValidatorVoteHistory::new_from_root_bank(&bank)));
 
     bank.set_entered_epoch_callback(solana_genesis_programs::get_entered_epoch_callback(
         genesis_config.operating_mode,
@@ -465,7 +471,7 @@ pub fn process_blockstore_from_root(
                 transaction_status_sender,
                 replay_vote_sender,
                 replay_vote_transaction_sender,
-                &mut vote_history,
+                &vote_history,
             )?;
             (initial_forks, leader_schedule_cache)
         } else {
@@ -558,7 +564,7 @@ fn confirm_full_slot(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
-    vote_history: &mut ValidatorVoteHistory,
+    vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
     ancestors: &HashSet<Slot>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let mut timing = ConfirmationTiming::default();
@@ -639,7 +645,7 @@ pub fn confirm_slot(
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
     entry_callback: Option<&ProcessCallback>,
     recyclers: &VerifyRecyclers,
-    vote_history: &mut ValidatorVoteHistory,
+    vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
     ancestors: &HashSet<Slot>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
@@ -755,7 +761,7 @@ fn process_bank_0(
         None,
         None,
         None,
-        &mut ValidatorVoteHistory::new(0),
+        &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
         &HashSet::new(),
     )
     .expect("processing for bank 0 must succeed");
@@ -834,7 +840,7 @@ fn load_frozen_forks(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
-    vote_history: &mut ValidatorVoteHistory,
+    vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
 ) -> result::Result<Vec<Arc<Bank>>, BlockstoreProcessorError> {
     let mut initial_forks = HashMap::new();
     let mut last_status_report = Instant::now();
@@ -910,7 +916,7 @@ fn load_frozen_forks(
             pending_slots.clear();
             initial_forks.clear();
             last_root_slot = slot;
-            vote_history.set_root(slot);
+            vote_history.write().unwrap().set_root(slot);
         }
         slots_elapsed += 1;
 
@@ -950,7 +956,7 @@ fn process_single_slot(
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
-    vote_history: &mut ValidatorVoteHistory,
+    vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
     ancestors: &HashSet<Slot>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     // Mark corrupt slots as dead so validators don't replay this slot and
@@ -1755,7 +1761,7 @@ pub mod tests {
             None,
             None,
             None,
-            &mut ValidatorVoteHistory::new(0),
+            &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
             &HashSet::new(),
         )
         .unwrap();
@@ -1971,7 +1977,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new()
             ),
             Ok(())
@@ -2015,7 +2021,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new()
             ),
             Ok(())
@@ -2080,7 +2086,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new()
             ),
             Ok(())
@@ -2155,7 +2161,7 @@ pub mod tests {
             None,
             None,
             None,
-            &mut ValidatorVoteHistory::new(0),
+            &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
             &HashSet::new(),
         )
         .is_err());
@@ -2270,7 +2276,7 @@ pub mod tests {
             None,
             None,
             None,
-            &mut ValidatorVoteHistory::new(0),
+            &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
             &HashSet::new(),
         )
         .is_err());
@@ -2326,7 +2332,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new()
             ),
             Ok(())
@@ -2396,7 +2402,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new()
             ),
             Ok(())
@@ -2468,7 +2474,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new()
             ),
             Ok(())
@@ -2537,7 +2543,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new()
             ),
             Ok(())
@@ -2557,7 +2563,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new()
             ),
             Err(TransactionError::AccountNotFound)
@@ -2646,7 +2652,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new()
             ),
             Err(TransactionError::AccountInUse)
@@ -2710,7 +2716,7 @@ pub mod tests {
             None,
             None,
             None,
-            &mut ValidatorVoteHistory::new(0),
+            &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
             &HashSet::new(),
         )
         .unwrap();
@@ -2814,7 +2820,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new(),
             )
             .expect("paying failed");
@@ -2847,7 +2853,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new(),
             )
             .expect("refunding failed");
@@ -2862,7 +2868,7 @@ pub mod tests {
                 None,
                 None,
                 None,
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new(),
             )
             .expect("process ticks failed");
@@ -2914,7 +2920,7 @@ pub mod tests {
             None,
             None,
             None,
-            &mut ValidatorVoteHistory::new(0),
+            &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
             &HashSet::new(),
         )
         .unwrap();
@@ -3079,7 +3085,7 @@ pub mod tests {
             None,
             Some(&replay_vote_sender),
             Some(&replay_vote_transaction_sender),
-            &mut ValidatorVoteHistory::new(0),
+            &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
             &HashSet::new(),
         );
         let successes: BTreeSet<Pubkey> = replay_vote_receiver

@@ -16,6 +16,7 @@ use crossbeam_channel::unbounded;
 use solana_ledger::{blockstore::Blockstore, blockstore_processor::TransactionStatusSender};
 use solana_runtime::{
     bank_forks::BankForks,
+    validator_vote_history::ValidatorVoteHistory,
     vote_sender_types::{ReplayVoteReceiver, ReplayVoteSender, ReplayVoteTransactionSender},
 };
 use std::{
@@ -56,6 +57,7 @@ impl Tpu {
         bank_forks: Arc<RwLock<BankForks>>,
         verified_vote_sender: VerifiedVoteSender,
         replay_vote_receiver: ReplayVoteReceiver,
+        vote_history: Arc<RwLock<ValidatorVoteHistory>>,
         replay_vote_sender: ReplayVoteSender,
         replay_vote_transaction_sender: ReplayVoteTransactionSender,
     ) -> Self {
@@ -94,6 +96,7 @@ impl Tpu {
             verified_receiver,
             verified_vote_packets_receiver,
             transaction_status_sender,
+            vote_history,
             replay_vote_sender,
             replay_vote_transaction_sender,
         );

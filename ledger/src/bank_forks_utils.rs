@@ -6,23 +6,28 @@ use crate::{
     },
     entry::VerifyRecyclers,
     leader_schedule_cache::LeaderScheduleCache,
-    validator_vote_history::ValidatorVoteHistory,
 };
 use log::*;
 use solana_runtime::{
     bank_forks::{BankForks, SnapshotConfig},
     snapshot_utils,
+    validator_vote_history::ValidatorVoteHistory,
     vote_sender_types::{ReplayVoteSender, ReplayVoteTransactionSender},
 };
 use solana_sdk::{clock::Slot, genesis_config::GenesisConfig, hash::Hash};
-use std::{fs, path::PathBuf, process, result, sync::Arc};
+use std::{
+    fs,
+    path::PathBuf,
+    process, result,
+    sync::{Arc, RwLock},
+};
 
 pub type LoadResult = result::Result<
     (
         BankForks,
         LeaderScheduleCache,
         Option<(Slot, Hash)>,
-        ValidatorVoteHistory,
+        Arc<RwLock<ValidatorVoteHistory>>,
     ),
     BlockstoreProcessorError,
 >;

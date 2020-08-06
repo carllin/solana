@@ -26,6 +26,7 @@ use solana_runtime::{
     bank::{Bank, TransactionBalancesSet, TransactionProcessResult},
     bank_utils,
     transaction_batch::TransactionBatch,
+    validator_vote_history::ValidatorVoteHistory,
     vote_sender_types::{ReplayVoteSender, ReplayVoteTransactionSender},
 };
 use solana_sdk::{
@@ -43,7 +44,7 @@ use std::{
     net::UdpSocket,
     sync::atomic::AtomicBool,
     sync::mpsc::Receiver,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     thread::{self, Builder, JoinHandle},
     time::Duration,
     time::Instant,
@@ -83,6 +84,7 @@ impl BankingStage {
         verified_receiver: CrossbeamReceiver<Vec<Packets>>,
         verified_vote_receiver: CrossbeamReceiver<Vec<Packets>>,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: Arc<RwLock<ValidatorVoteHistory>>,
         gossip_vote_sender: ReplayVoteSender,
         vote_transaction_sender: ReplayVoteTransactionSender,
     ) -> Self {
@@ -93,6 +95,7 @@ impl BankingStage {
             verified_vote_receiver,
             Self::num_threads(),
             transaction_status_sender,
+            vote_history,
             gossip_vote_sender,
             vote_transaction_sender,
         )
@@ -105,6 +108,7 @@ impl BankingStage {
         verified_vote_receiver: CrossbeamReceiver<Vec<Packets>>,
         num_threads: u32,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: Arc<RwLock<ValidatorVoteHistory>>,
         gossip_vote_sender: ReplayVoteSender,
         vote_transaction_sender: ReplayVoteTransactionSender,
     ) -> Self {
@@ -127,6 +131,7 @@ impl BankingStage {
                 let cluster_info = cluster_info.clone();
                 let mut recv_start = Instant::now();
                 let transaction_status_sender = transaction_status_sender.clone();
+                let vote_history = vote_history.clone();
                 let gossip_vote_sender = gossip_vote_sender.clone();
                 let vote_transaction_sender = vote_transaction_sender.clone();
                 Builder::new()
@@ -143,6 +148,7 @@ impl BankingStage {
                             i,
                             batch_limit,
                             transaction_status_sender,
+                            vote_history,
                             gossip_vote_sender,
                             vote_transaction_sender,
                         );
@@ -180,6 +186,7 @@ impl BankingStage {
         buffered_packets: &mut Vec<PacketsAndOffsets>,
         batch_limit: usize,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: &RwLock<ValidatorVoteHistory>,
         gossip_vote_sender: &ReplayVoteSender,
         vote_transaction_sender: &ReplayVoteTransactionSender,
     ) -> UnprocessedPackets {
@@ -213,6 +220,7 @@ impl BankingStage {
                     &msgs,
                     unprocessed_indexes.to_owned(),
                     transaction_status_sender.clone(),
+                    vote_history,
                     gossip_vote_sender,
                     vote_transaction_sender,
                 );
@@ -309,6 +317,7 @@ impl BankingStage {
         enable_forwarding: bool,
         batch_limit: usize,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: &RwLock<ValidatorVoteHistory>,
         gossip_vote_sender: &ReplayVoteSender,
         vote_transaction_sender: &ReplayVoteTransactionSender,
     ) -> BufferedPacketsDecision {
@@ -338,6 +347,7 @@ impl BankingStage {
                     buffered_packets,
                     batch_limit,
                     transaction_status_sender,
+                    vote_history,
                     gossip_vote_sender,
                     vote_transaction_sender,
                 );
@@ -384,6 +394,7 @@ impl BankingStage {
         id: u32,
         batch_limit: usize,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: Arc<RwLock<ValidatorVoteHistory>>,
         gossip_vote_sender: ReplayVoteSender,
         vote_transaction_sender: ReplayVoteTransactionSender,
     ) {
@@ -400,6 +411,7 @@ impl BankingStage {
                     enable_forwarding,
                     batch_limit,
                     transaction_status_sender.clone(),
+                    &vote_history,
                     &gossip_vote_sender,
                     &vote_transaction_sender,
                 );
@@ -429,6 +441,7 @@ impl BankingStage {
                 id,
                 batch_limit,
                 transaction_status_sender.clone(),
+                &vote_history,
                 &gossip_vote_sender,
                 &vote_transaction_sender,
             ) {
@@ -529,6 +542,7 @@ impl BankingStage {
         poh: &Arc<Mutex<PohRecorder>>,
         batch: &TransactionBatch,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: &RwLock<ValidatorVoteHistory>,
         gossip_vote_sender: &ReplayVoteSender,
         vote_transaction_sender: &ReplayVoteTransactionSender,
     ) -> (Result<usize, PohRecorderError>, Vec<usize>) {
@@ -573,10 +587,13 @@ impl BankingStage {
             );
 
             bank_utils::find_and_send_votes(
+                bank.slot(),
                 txs,
                 &tx_results,
                 Some(gossip_vote_sender),
                 Some(vote_transaction_sender),
+                vote_history,
+                &bank.ancestors,
             );
             if let Some(sender) = transaction_status_sender {
                 let post_balances = bank.collect_balances(batch);
@@ -612,6 +629,7 @@ impl BankingStage {
         poh: &Arc<Mutex<PohRecorder>>,
         chunk_offset: usize,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: &RwLock<ValidatorVoteHistory>,
         gossip_vote_sender: &ReplayVoteSender,
         vote_transaction_sender: &ReplayVoteTransactionSender,
     ) -> (Result<usize, PohRecorderError>, Vec<usize>) {
@@ -626,6 +644,7 @@ impl BankingStage {
             poh,
             &batch,
             transaction_status_sender,
+            vote_history,
             gossip_vote_sender,
             vote_transaction_sender,
         );
@@ -656,6 +675,7 @@ impl BankingStage {
         transactions: &[Transaction],
         poh: &Arc<Mutex<PohRecorder>>,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: &RwLock<ValidatorVoteHistory>,
         gossip_vote_sender: &ReplayVoteSender,
         vote_transaction_sender: &ReplayVoteTransactionSender,
     ) -> (usize, Vec<usize>) {
@@ -673,6 +693,7 @@ impl BankingStage {
                 poh,
                 chunk_start,
                 transaction_status_sender.clone(),
+                vote_history,
                 gossip_vote_sender,
                 vote_transaction_sender,
             );
@@ -806,6 +827,7 @@ impl BankingStage {
         msgs: &Packets,
         packet_indexes: Vec<usize>,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: &RwLock<ValidatorVoteHistory>,
         gossip_vote_sender: &ReplayVoteSender,
         vote_transaction_sender: &ReplayVoteTransactionSender,
     ) -> (usize, usize, Vec<usize>) {
@@ -824,6 +846,7 @@ impl BankingStage {
             &transactions,
             poh,
             transaction_status_sender,
+            vote_history,
             gossip_vote_sender,
             vote_transaction_sender,
         );
@@ -907,6 +930,7 @@ impl BankingStage {
         id: u32,
         batch_limit: usize,
         transaction_status_sender: Option<TransactionStatusSender>,
+        vote_history: &RwLock<ValidatorVoteHistory>,
         gossip_vote_sender: &ReplayVoteSender,
         vote_transaction_sender: &ReplayVoteTransactionSender,
     ) -> Result<UnprocessedPackets, RecvTimeoutError> {
@@ -951,6 +975,7 @@ impl BankingStage {
                 &msgs,
                 packet_indexes,
                 transaction_status_sender.clone(),
+                vote_history,
                 gossip_vote_sender,
                 vote_transaction_sender,
             );
@@ -1117,6 +1142,7 @@ mod tests {
                 verified_receiver,
                 vote_receiver,
                 None,
+                Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 gossip_vote_sender,
                 replay_vote_tx_sender,
             );
@@ -1161,6 +1187,7 @@ mod tests {
                 verified_receiver,
                 vote_receiver,
                 None,
+                Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 gossip_vote_sender,
                 replay_vote_tx_sender,
             );
@@ -1228,6 +1255,7 @@ mod tests {
                 verified_receiver,
                 vote_receiver,
                 None,
+                Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 gossip_vote_sender,
                 replay_vote_tx_sender,
             );
@@ -1374,6 +1402,7 @@ mod tests {
                     vote_receiver,
                     2,
                     None,
+                    Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                     gossip_vote_sender,
                     replay_vote_tx_sender,
                 );
@@ -1761,6 +1790,7 @@ mod tests {
                 &poh_recorder,
                 0,
                 None,
+                &RwLock::new(ValidatorVoteHistory::new(0)),
                 &gossip_vote_sender,
                 &replay_vote_tx_sender,
             )
@@ -1799,6 +1829,7 @@ mod tests {
                     &poh_recorder,
                     0,
                     None,
+                    &RwLock::new(ValidatorVoteHistory::new(0)),
                     &gossip_vote_sender,
                     &replay_vote_tx_sender,
                 )
@@ -1860,6 +1891,7 @@ mod tests {
                 &poh_recorder,
                 0,
                 None,
+                &RwLock::new(ValidatorVoteHistory::new(0)),
                 &gossip_vote_sender,
                 &replay_vote_tx_sender,
             );
@@ -1953,6 +1985,7 @@ mod tests {
                     &transactions,
                     &poh_recorder,
                     None,
+                    &RwLock::new(ValidatorVoteHistory::new(0)),
                     &gossip_vote_sender,
                     &replay_vote_tx_sender,
                 );
@@ -2040,6 +2073,7 @@ mod tests {
                 &poh_recorder,
                 0,
                 Some(transaction_status_sender),
+                &RwLock::new(ValidatorVoteHistory::new(0)),
                 &gossip_vote_sender,
                 &replay_vote_tx_sender,
             );

@@ -23,12 +23,12 @@ use solana_ledger::{
     blockstore::{Blockstore, CompletedSlotsReceiver},
     blockstore_processor::TransactionStatusSender,
     leader_schedule_cache::LeaderScheduleCache,
-    validator_vote_history::ValidatorVoteHistory,
 };
 use solana_runtime::{
     bank_forks::BankForks,
     commitment::BlockCommitmentCache,
     snapshot_package::AccountsPackageSender,
+    validator_vote_history::ValidatorVoteHistory,
     vote_sender_types::{ReplayVoteSender, ReplayVoteTransactionSender},
 };
 use solana_sdk::{
@@ -103,7 +103,7 @@ impl Tvu {
         verified_vote_receiver: VerifiedVoteReceiver,
         replay_vote_sender: ReplayVoteSender,
         replay_vote_transaction_sender: ReplayVoteTransactionSender,
-        vote_history: ValidatorVoteHistory,
+        vote_history: Arc<RwLock<ValidatorVoteHistory>>,
         tvu_config: TvuConfig,
     ) -> Self {
         let keypair: Arc<Keypair> = cluster_info.keypair.clone();
@@ -329,7 +329,7 @@ pub mod tests {
             verified_vote_receiver,
             replay_vote_sender,
             replay_vote_transaction_sender,
-            ValidatorVoteHistory::new(0),
+            Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
             TvuConfig::default(),
         );
         exit.store(true, Ordering::Relaxed);

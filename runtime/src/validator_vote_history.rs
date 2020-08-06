@@ -654,14 +654,14 @@ pub mod test {
         let transaction_signature0 =
             Signature::new(&(0..64).map(|_| rand::random::<u8>()).collect::<Vec<_>>());
         let vote_slots = vec![0];
-        let vote0 = Vote::new(vote_slots.clone(), Hash::default());
+        let vote0 = Vote::new(vote_slots, Hash::default());
         let vote_landed_slot = 1;
         validator_vote_history.insert_vote(
             &vote0,
             &vote_account,
             vote_landed_slot,
             transaction_signature0,
-            vote_pubkey.clone(),
+            &vote_pubkey.clone(),
             ancestors.get(&vote_landed_slot).unwrap(),
         );
 
@@ -674,14 +674,14 @@ pub mod test {
         let transaction_signature1 =
             Signature::new(&(0..64).map(|_| rand::random::<u8>()).collect::<Vec<_>>());
         let vote_slots = vec![1];
-        let vote1 = Vote::new(vote_slots.clone(), Hash::default());
+        let vote1 = Vote::new(vote_slots, Hash::default());
         for vote_landed_slot in &[2, 3] {
             validator_vote_history.insert_vote(
                 &vote1,
                 &vote_account,
                 *vote_landed_slot,
                 transaction_signature1,
-                vote_pubkey.clone(),
+                &vote_pubkey.clone(),
                 ancestors.get(vote_landed_slot).unwrap(),
             );
         }

@@ -17,7 +17,9 @@ use solana_ledger::{
 };
 use solana_measure::measure::Measure;
 use solana_perf::packet::to_packets_chunked;
-use solana_runtime::{bank::Bank, bank_forks::BankForks};
+use solana_runtime::{
+    bank::Bank, bank_forks::BankForks, validator_vote_history::ValidatorVoteHistory,
+};
 use solana_sdk::{
     hash::Hash,
     pubkey::Pubkey,
@@ -28,7 +30,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use std::{
-    sync::{atomic::Ordering, mpsc::Receiver, Arc, Mutex},
+    sync::{atomic::Ordering, mpsc::Receiver, Arc, Mutex, RwLock},
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -220,12 +222,14 @@ fn main() {
             create_test_recorder(&bank, &blockstore, None);
         let cluster_info = ClusterInfo::new_with_invalid_keypair(Node::new_localhost().info);
         let cluster_info = Arc::new(cluster_info);
+        let root = bank_forks.root();
         let banking_stage = BankingStage::new(
             &cluster_info,
             &poh_recorder,
             verified_receiver,
             vote_receiver,
             None,
+            Arc::new(RwLock::new(ValidatorVoteHistory::new(root))),
             replay_vote_sender,
             replay_vote_txs_sender,
         );

@@ -24,7 +24,6 @@ use solana_ledger::{
     blockstore_processor::{self, BlockstoreProcessorError, TransactionStatusSender},
     entry::VerifyRecyclers,
     leader_schedule_cache::LeaderScheduleCache,
-    validator_vote_history::ValidatorVoteHistory,
 };
 use solana_measure::{measure::Measure, thread_mem_usage};
 use solana_metrics::inc_new_counter_info;
@@ -33,6 +32,7 @@ use solana_runtime::{
     bank_forks::BankForks,
     commitment::BlockCommitmentCache,
     snapshot_package::AccountsPackageSender,
+    validator_vote_history::ValidatorVoteHistory,
     vote_sender_types::{ReplayVoteSender, ReplayVoteTransactionSender},
 };
 use solana_sdk::{
@@ -227,7 +227,7 @@ impl ReplayStage {
         duplicate_slots_reset_receiver: DuplicateSlotsResetReceiver,
         replay_vote_sender: ReplayVoteSender,
         replay_vote_transaction_sender: ReplayVoteTransactionSender,
-        mut vote_history: ValidatorVoteHistory,
+        vote_history: Arc<RwLock<ValidatorVoteHistory>>,
     ) -> Self {
         let ReplayStageConfig {
             my_pubkey,
@@ -352,7 +352,7 @@ impl ReplayStage {
                         &subscriptions,
                         &replay_vote_sender,
                         &replay_vote_transaction_sender,
-                        &mut vote_history,
+                        &vote_history,
                         &ancestors,
                     );
                     replay_active_banks_time.stop();
@@ -503,7 +503,7 @@ impl ReplayStage {
                             &subscriptions,
                             &block_commitment_cache,
                             &mut heaviest_subtree_fork_choice,
-                            &mut vote_history,
+                            &vote_history,
                         )?;
                     };
                     voting_time.stop();
@@ -951,7 +951,7 @@ impl ReplayStage {
         replay_vote_sender: &ReplayVoteSender,
         replay_vote_transaction_sender: &ReplayVoteTransactionSender,
         verify_recyclers: &VerifyRecyclers,
-        vote_history: &mut ValidatorVoteHistory,
+        vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
         ancestors: &HashSet<Slot>,
     ) -> result::Result<usize, BlockstoreProcessorError> {
         let tx_count_before = bank_progress.replay_progress.num_txs;
@@ -1020,7 +1020,7 @@ impl ReplayStage {
         subscriptions: &Arc<RpcSubscriptions>,
         block_commitment_cache: &Arc<RwLock<BlockCommitmentCache>>,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
-        vote_history: &mut ValidatorVoteHistory,
+        vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
     ) -> Result<()> {
         if bank.is_empty() {
             inc_new_counter_info!("replay_stage-voted_empty_bank", 1);
@@ -1232,7 +1232,7 @@ impl ReplayStage {
         subscriptions: &Arc<RpcSubscriptions>,
         replay_vote_sender: &ReplayVoteSender,
         replay_vote_transaction_sender: &ReplayVoteTransactionSender,
-        vote_history: &mut ValidatorVoteHistory,
+        vote_history: &Arc<RwLock<ValidatorVoteHistory>>,
         ancestors: &HashMap<Slot, HashSet<Slot>>,
     ) -> bool {
         let mut did_complete_bank = false;
@@ -1764,9 +1764,9 @@ impl ReplayStage {
         all_pubkeys: &mut PubkeyReferences,
         highest_confirmed_root: Option<Slot>,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
-        vote_history: &mut ValidatorVoteHistory,
+        vote_history: &RwLock<ValidatorVoteHistory>,
     ) {
-        vote_history.set_root(new_root);
+        vote_history.write().unwrap().set_root(new_root);
         let old_epoch = bank_forks.read().unwrap().root_bank().epoch();
         bank_forks.write().unwrap().set_root(
             new_root,
@@ -2172,7 +2172,7 @@ pub(crate) mod tests {
             &mut PubkeyReferences::default(),
             None,
             &mut heaviest_subtree_fork_choice,
-            &mut ValidatorVoteHistory::new(0),
+            &RwLock::new(ValidatorVoteHistory::new(0)),
         );
         assert_eq!(bank_forks.read().unwrap().root(), root);
         assert_eq!(progress.len(), 1);
@@ -2218,7 +2218,7 @@ pub(crate) mod tests {
             &mut PubkeyReferences::default(),
             Some(confirmed_root),
             &mut heaviest_subtree_fork_choice,
-            &mut ValidatorVoteHistory::new(0),
+            &RwLock::new(ValidatorVoteHistory::new(0)),
         );
         assert_eq!(bank_forks.read().unwrap().root(), root);
         assert!(bank_forks.read().unwrap().get(confirmed_root).is_some());
@@ -2472,7 +2472,7 @@ pub(crate) mod tests {
                 &replay_vote_sender,
                 &replay_vote_transaction_sender,
                 &VerifyRecyclers::default(),
-                &mut ValidatorVoteHistory::new(0),
+                &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
                 &HashSet::new(),
             );
 
@@ -2653,7 +2653,7 @@ pub(crate) mod tests {
             Some(transaction_status_sender),
             Some(&replay_vote_sender),
             Some(&replay_vote_transaction_sender),
-            &mut ValidatorVoteHistory::new(0),
+            &Arc::new(RwLock::new(ValidatorVoteHistory::new(0))),
             &HashSet::new(),
         );
 

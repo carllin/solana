@@ -679,13 +679,13 @@ pub mod test {
         progress_map::ForkProgress,
         replay_stage::{HeaviestForkFailures, ReplayStage},
     };
-    use solana_ledger::validator_vote_history::ValidatorVoteHistory;
     use solana_runtime::{
         bank::Bank,
         bank_forks::BankForks,
         genesis_utils::{
             create_genesis_config_with_vote_accounts, GenesisConfigInfo, ValidatorVoteKeypairs,
         },
+        validator_vote_history::ValidatorVoteHistory,
     };
     use solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Signer};
     use solana_vote_program::{
@@ -853,7 +853,7 @@ pub mod test {
                 &mut PubkeyReferences::default(),
                 None,
                 &mut self.heaviest_subtree_fork_choice,
-                &mut ValidatorVoteHistory::new(0),
+                &RwLock::new(ValidatorVoteHistory::new(0)),
             )
         }
 
