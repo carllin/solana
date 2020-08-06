@@ -15,10 +15,7 @@ use crossbeam_channel::{
 };
 use itertools::izip;
 use log::*;
-use solana_ledger::{
-    blockstore::Blockstore,
-    blockstore_processor::{ReplayVoteReceiver, ReplayedVote},
-};
+use solana_ledger::blockstore::Blockstore;
 use solana_metrics::inc_new_counter_debug;
 use solana_perf::packet::{self, Packets};
 use solana_runtime::{
@@ -26,6 +23,7 @@ use solana_runtime::{
     bank_forks::BankForks,
     epoch_stakes::{EpochAuthorizedVoters, EpochStakes},
     stakes::Stakes,
+    vote_sender_types::{ReplayVoteReceiver, ReplayedVote},
 };
 use solana_sdk::{
     clock::{Epoch, Slot},
@@ -772,12 +770,12 @@ impl ClusterInfoVoteListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solana_ledger::blockstore_processor::ReplayVoteSender;
     use solana_perf::packet;
     use solana_runtime::{
         bank::Bank,
         commitment::BlockCommitmentCache,
         genesis_utils::{self, GenesisConfigInfo, ValidatorVoteKeypairs},
+        vote_sender_types::ReplayVoteSender,
     };
     use solana_sdk::{
         hash::Hash,

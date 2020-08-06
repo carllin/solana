@@ -6,7 +6,7 @@ use crate::{
     entry::{create_ticks, Entry, EntrySlice, EntryVerificationStatus, VerifyRecyclers},
     leader_schedule_cache::LeaderScheduleCache,
 };
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use itertools::Itertools;
 use log::*;
 use rand::{seq::SliceRandom, thread_rng};
@@ -17,8 +17,10 @@ use solana_rayon_threadlimit::get_thread_count;
 use solana_runtime::{
     bank::{Bank, TransactionBalancesSet, TransactionProcessResult, TransactionResults},
     bank_forks::BankForks,
+    bank_utils,
     transaction_batch::TransactionBatch,
     transaction_utils::OrderedIterator,
+    vote_sender_types::{ReplayVoteSender, ReplayVoteTransactionSender},
 };
 use solana_sdk::{
     clock::{Slot, MAX_PROCESSING_AGE},
@@ -29,7 +31,6 @@ use solana_sdk::{
     timing::duration_as_ms,
     transaction::{Result, Transaction, TransactionError},
 };
-use solana_vote_program::{vote_state::Vote, vote_transaction};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -42,12 +43,6 @@ use thiserror::Error;
 
 pub type BlockstoreProcessorResult =
     result::Result<(BankForks, LeaderScheduleCache), BlockstoreProcessorError>;
-
-pub type ReplayedVote = (Pubkey, Vote, Option<Hash>);
-pub type ReplayVoteSender = Sender<ReplayedVote>;
-pub type ReplayVoteReceiver = Receiver<ReplayedVote>;
-pub type ReplayTransactionSender = Sender<(Slot, Transaction)>;
-pub type ReplayTransactionReceiver = Receiver<(Slot, Transaction)>;
 
 thread_local!(static PAR_THREAD_POOL: RefCell<ThreadPool> = RefCell::new(rayon::ThreadPoolBuilder::new()
                     .num_threads(get_thread_count())
@@ -101,39 +96,26 @@ fn execute_batch(
     bank: &Arc<Bank>,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> Result<()> {
-    let (
-        TransactionResults {
-            fee_collection_results,
-            processing_results,
-            overwritten_vote_accounts,
-        },
-        balances,
-    ) = batch.bank().load_execute_and_commit_transactions(
+    let (tx_results, balances) = batch.bank().load_execute_and_commit_transactions(
         batch,
         MAX_PROCESSING_AGE,
         transaction_status_sender.is_some(),
     );
 
-    if replay_vote_sender.is_some() || replay_transaction_sender.is_some() {
-        for old_account in overwritten_vote_accounts {
-            assert!(processing_results[old_account.transaction_result_index]
-                .0
-                .is_ok());
-            let transaction = &batch.transactions()[old_account.transaction_index];
-            if let Some(parsed_vote) = vote_transaction::parse_vote_transaction(transaction) {
-                if let Some(voted_slot) = parsed_vote.1.slots.last().copied() {
-                    if let Some(replay_vote_sender) = replay_vote_sender {
-                        let _ = replay_vote_sender.send(parsed_vote);
-                    }
-                    if let Some(replay_transaction_sender) = replay_transaction_sender {
-                        let _ = replay_transaction_sender.send((voted_slot, transaction.clone()));
-                    }
-                }
-            }
-        }
-    }
+    bank_utils::find_and_send_votes(
+        batch.transactions(),
+        &tx_results,
+        replay_vote_sender,
+        replay_vote_transaction_sender,
+    );
+
+    let TransactionResults {
+        fee_collection_results,
+        processing_results,
+        ..
+    } = tx_results;
 
     if let Some(sender) = transaction_status_sender {
         send_transaction_status_batch(
@@ -156,7 +138,7 @@ fn execute_batches(
     entry_callback: Option<&ProcessCallback>,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> Result<()> {
     inc_new_counter_debug!("bank-par_execute_entries-count", batches.len());
     let results: Vec<Result<()>> = PAR_THREAD_POOL.with(|thread_pool| {
@@ -169,7 +151,7 @@ fn execute_batches(
                         bank,
                         sender.clone(),
                         replay_vote_sender,
-                        replay_transaction_sender,
+                        replay_vote_transaction_sender,
                     );
                     if let Some(entry_callback) = entry_callback {
                         entry_callback(bank);
@@ -194,7 +176,7 @@ pub fn process_entries(
     randomize: bool,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> Result<()> {
     process_entries_with_callback(
         bank,
@@ -203,7 +185,7 @@ pub fn process_entries(
         None,
         transaction_status_sender,
         replay_vote_sender,
-        replay_transaction_sender,
+        replay_vote_transaction_sender,
     )
 }
 
@@ -214,7 +196,7 @@ fn process_entries_with_callback(
     entry_callback: Option<&ProcessCallback>,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> Result<()> {
     // accumulator for entries that can be processed in parallel
     let mut batches = vec![];
@@ -232,7 +214,7 @@ fn process_entries_with_callback(
                     entry_callback,
                     transaction_status_sender.clone(),
                     replay_vote_sender,
-                    replay_transaction_sender,
+                    replay_vote_transaction_sender,
                 )?;
                 batches.clear();
                 for hash in &tick_hashes {
@@ -289,7 +271,7 @@ fn process_entries_with_callback(
                     entry_callback,
                     transaction_status_sender.clone(),
                     replay_vote_sender,
-                    replay_transaction_sender,
+                    replay_vote_transaction_sender,
                 )?;
                 batches.clear();
             }
@@ -301,7 +283,7 @@ fn process_entries_with_callback(
         entry_callback,
         transaction_status_sender,
         replay_vote_sender,
-        replay_transaction_sender,
+        replay_vote_transaction_sender,
     )?;
     for hash in tick_hashes {
         bank.register_tick(&hash);
@@ -350,7 +332,7 @@ pub fn process_blockstore(
     account_paths: Vec<PathBuf>,
     opts: ProcessOptions,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> BlockstoreProcessorResult {
     if let Some(num_threads) = opts.override_num_threads {
         PAR_THREAD_POOL.with(|pool| {
@@ -378,7 +360,7 @@ pub fn process_blockstore(
         &recyclers,
         None,
         replay_vote_sender,
-        replay_transaction_sender,
+        replay_vote_transaction_sender,
     )
 }
 
@@ -391,7 +373,7 @@ pub fn process_blockstore_from_root(
     recyclers: &VerifyRecyclers,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> BlockstoreProcessorResult {
     info!("processing ledger from slot {}...", bank.slot());
     let allocated = thread_mem_usage::Allocatedp::default();
@@ -458,7 +440,7 @@ pub fn process_blockstore_from_root(
                 recyclers,
                 transaction_status_sender,
                 replay_vote_sender,
-                replay_transaction_sender,
+                replay_vote_transaction_sender,
             )?;
             (initial_forks, leader_schedule_cache)
         } else {
@@ -549,7 +531,7 @@ fn confirm_full_slot(
     progress: &mut ConfirmationProgress,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let mut timing = ConfirmationTiming::default();
     let skip_verification = !opts.poh_verify;
@@ -561,7 +543,7 @@ fn confirm_full_slot(
         skip_verification,
         transaction_status_sender,
         replay_vote_sender,
-        replay_transaction_sender,
+        replay_vote_transaction_sender,
         opts.entry_callback.as_ref(),
         recyclers,
     )?;
@@ -624,7 +606,7 @@ pub fn confirm_slot(
     skip_verification: bool,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
     entry_callback: Option<&ProcessCallback>,
     recyclers: &VerifyRecyclers,
 ) -> result::Result<(), BlockstoreProcessorError> {
@@ -693,7 +675,7 @@ pub fn confirm_slot(
         entry_callback,
         transaction_status_sender,
         replay_vote_sender,
-        replay_transaction_sender,
+        replay_vote_transaction_sender,
     )
     .map_err(BlockstoreProcessorError::from);
     replay_elapsed.stop();
@@ -815,7 +797,7 @@ fn load_frozen_forks(
     recyclers: &VerifyRecyclers,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> result::Result<Vec<Arc<Bank>>, BlockstoreProcessorError> {
     let mut initial_forks = HashMap::new();
     let mut last_status_report = Instant::now();
@@ -858,8 +840,8 @@ fn load_frozen_forks(
 
         let mut progress = ConfirmationProgress::new(last_entry_hash);
 
-        let (replay_vote_sender, replay_transaction_sender) = if slot >= max_root {
-            (replay_vote_sender, replay_transaction_sender)
+        let (replay_vote_sender, replay_vote_transaction_sender) = if slot >= max_root {
+            (replay_vote_sender, replay_vote_transaction_sender)
         } else {
             // Ignore vote transactions below the greatest known root
             // since those won't be used for any switching proofs/confirmation
@@ -874,7 +856,7 @@ fn load_frozen_forks(
             &mut progress,
             transaction_status_sender.clone(),
             replay_vote_sender,
-            replay_transaction_sender,
+            replay_vote_transaction_sender,
         )
         .is_err()
         {
@@ -926,11 +908,11 @@ fn process_single_slot(
     progress: &mut ConfirmationProgress,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     // Mark corrupt slots as dead so validators don't replay this slot and
     // see DuplicateSignature errors later in ReplayStage
-    confirm_full_slot(blockstore, bank, opts, recyclers, progress, transaction_status_sender, replay_vote_sender, replay_transaction_sender).map_err(|err| {
+    confirm_full_slot(blockstore, bank, opts, recyclers, progress, transaction_status_sender, replay_vote_sender, replay_vote_transaction_sender).map_err(|err| {
         let slot = bank.slot();
         warn!("slot {} failed to verify: {}", slot, err);
         if blockstore.is_primary_access() {
@@ -1037,6 +1019,7 @@ pub mod tests {
         system_transaction,
         transaction::{Transaction, TransactionError},
     };
+    use solana_vote_program::vote_transaction;
     use std::{collections::BTreeSet, sync::RwLock};
 
     #[test]
@@ -2928,14 +2911,14 @@ pub mod tests {
             .collect();
         let entry = next_entry(&bank_1_blockhash, 1, vote_txs);
         let (replay_vote_sender, replay_vote_receiver) = unbounded();
-        let (replay_transaction_sender, replay_transaction_receiver) = unbounded();
+        let (replay_vote_transaction_sender, replay_vote_transaction_receiver) = unbounded();
         let _ = process_entries(
             &bank1,
             &[entry],
             true,
             None,
             Some(&replay_vote_sender),
-            Some(&replay_transaction_sender),
+            Some(&replay_vote_transaction_sender),
         );
         let successes: BTreeSet<Pubkey> = replay_vote_receiver
             .try_iter()
@@ -2943,7 +2926,7 @@ pub mod tests {
             .collect();
         assert_eq!(successes, expected_successful_voter_pubkeys);
         let successes: IndexSet<(Slot, Transaction)> =
-            replay_transaction_receiver.try_iter().collect();
+            replay_vote_transaction_receiver.try_iter().collect();
         assert_eq!(successes, expected_successful_vote_txs);
     }
 }

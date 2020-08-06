@@ -1,5 +1,6 @@
 use crossbeam_channel::RecvTimeoutError;
-use solana_ledger::{blockstore::Blockstore, blockstore_processor::ReplayTransactionReceiver};
+use solana_ledger::blockstore::Blockstore;
+use solana_runtime::vote_sender_types::ReplayVoteTransactionReceiver;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -15,7 +16,7 @@ pub struct InsertVoteTransactionsService {
 
 impl InsertVoteTransactionsService {
     pub fn new(
-        vote_transactions_receiver: ReplayTransactionReceiver,
+        vote_transactions_receiver: ReplayVoteTransactionReceiver,
         blockstore: Arc<Blockstore>,
         exit: &Arc<AtomicBool>,
     ) -> Self {
@@ -37,7 +38,7 @@ impl InsertVoteTransactionsService {
     }
 
     fn recv_insert_vote_transactions(
-        vote_transactions_receiver: &ReplayTransactionReceiver,
+        vote_transactions_receiver: &ReplayVoteTransactionReceiver,
         blockstore: &Blockstore,
     ) -> Result<(), RecvTimeoutError> {
         let vote_transaction = vote_transactions_receiver.recv_timeout(Duration::from_secs(1))?;

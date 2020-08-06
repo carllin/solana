@@ -28,10 +28,7 @@ use solana_ledger::{
     bank_forks_utils,
     blockstore::{Blockstore, CompletedSlotsReceiver, PurgeType},
     blockstore_db::BlockstoreRecoveryMode,
-    blockstore_processor::{
-        self, ReplayTransactionReceiver, ReplayTransactionSender, ReplayVoteSender,
-        TransactionStatusSender,
-    },
+    blockstore_processor::{self, TransactionStatusSender},
     create_new_tmp_ledger,
     leader_schedule::FixedSchedule,
     leader_schedule_cache::LeaderScheduleCache,
@@ -43,6 +40,9 @@ use solana_runtime::{
     bank_forks::{BankForks, SnapshotConfig},
     commitment::BlockCommitmentCache,
     hardened_unpack::{open_genesis_config, MAX_GENESIS_ARCHIVE_UNPACKED_SIZE},
+    vote_sender_types::{
+        ReplayVoteSender, ReplayVoteTransactionReceiver, ReplayVoteTransactionSender,
+    },
 };
 use solana_sdk::{
     clock::Slot,
@@ -229,8 +229,7 @@ impl Validator {
         let validator_exit = Arc::new(RwLock::new(Some(validator_exit)));
 
         let (replay_vote_sender, replay_vote_receiver) = unbounded();
-        let (replay_transaction_sender, replay_transaction_receiver) = unbounded();
-
+        let (replay_vote_transaction_sender, replay_vote_transaction_receiver) = unbounded();
         let (
             genesis_config,
             bank_forks,
@@ -252,8 +251,8 @@ impl Validator {
             poh_verify,
             &exit,
             &replay_vote_sender,
-            &replay_transaction_sender,
-            &replay_transaction_receiver,
+            &replay_vote_transaction_sender,
+            &replay_vote_transaction_receiver,
         );
 
         let leader_schedule_cache = Arc::new(leader_schedule_cache);
@@ -469,8 +468,8 @@ impl Validator {
             vote_tracker.clone(),
             retransmit_slots_sender,
             verified_vote_receiver,
-            replay_vote_sender,
-            replay_transaction_sender,
+            replay_vote_sender.clone(),
+            replay_vote_transaction_sender.clone(),
             TvuConfig {
                 max_ledger_shreds: config.max_ledger_shreds,
                 halt_on_trusted_validators_accounts_hash_mismatch: config
@@ -499,6 +498,8 @@ impl Validator {
             bank_forks,
             verified_vote_sender,
             replay_vote_receiver,
+            replay_vote_sender,
+            replay_vote_transaction_sender,
         );
 
         datapoint_info!("validator-new", ("id", id.to_string(), String));
@@ -594,8 +595,8 @@ fn new_banks_from_ledger(
     poh_verify: bool,
     exit: &Arc<AtomicBool>,
     replay_vote_sender: &ReplayVoteSender,
-    replay_transaction_sender: &ReplayTransactionSender,
-    replay_transaction_receiver: &ReplayTransactionReceiver,
+    replay_vote_transaction_sender: &ReplayVoteTransactionSender,
+    replay_vote_transaction_receiver: &ReplayVoteTransactionReceiver,
 ) -> (
     GenesisConfig,
     BankForks,
@@ -649,7 +650,7 @@ fn new_banks_from_ledger(
             TransactionHistoryServices::default()
         };
     let insert_vote_transactions_service = InsertVoteTransactionsService::new(
-        replay_transaction_receiver.clone(),
+        replay_vote_transaction_receiver.clone(),
         blockstore.clone(),
         exit,
     );
@@ -664,7 +665,7 @@ fn new_banks_from_ledger(
             .transaction_status_sender
             .clone(),
         Some(replay_vote_sender),
-        Some(replay_transaction_sender),
+        Some(replay_vote_transaction_sender),
     )
     .unwrap_or_else(|err| {
         error!("Failed to load ledger: {:?}", err);

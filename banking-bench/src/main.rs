@@ -167,6 +167,8 @@ fn main() {
 
     let (verified_sender, verified_receiver) = unbounded();
     let (vote_sender, vote_receiver) = unbounded();
+    let (replay_vote_sender, _replay_vote_receiver) = unbounded();
+    let (replay_vote_txs_sender, _replay_vote_txs_receiver) = unbounded();
     let bank0 = Bank::new(&genesis_config);
     let mut bank_forks = BankForks::new(bank0);
     let mut bank = bank_forks.working_bank();
@@ -224,6 +226,8 @@ fn main() {
             verified_receiver,
             vote_receiver,
             None,
+            replay_vote_sender,
+            replay_vote_txs_sender,
         );
         poh_recorder.lock().unwrap().set_bank(&bank);
 

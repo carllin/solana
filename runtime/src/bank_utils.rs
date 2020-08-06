@@ -1,8 +1,10 @@
 use crate::{
-    bank::Bank,
+    bank::{Bank, TransactionResults},
     genesis_utils::{self, GenesisConfigInfo, ValidatorVoteKeypairs},
+    vote_sender_types::*,
 };
-use solana_sdk::{pubkey::Pubkey, signature::Signer};
+use solana_sdk::{pubkey::Pubkey, signature::Signer, transaction::Transaction};
+use solana_vote_program::vote_transaction;
 
 pub fn setup_bank_and_vote_pubkeys(num_vote_accounts: usize, stake: u64) -> (Bank, Vec<Pubkey>) {
     // Create some voters at genesis
@@ -22,4 +24,33 @@ pub fn setup_bank_and_vote_pubkeys(num_vote_accounts: usize, stake: u64) -> (Ban
         );
     let bank = Bank::new(&genesis_config);
     (bank, vote_pubkeys)
+}
+
+pub fn find_and_send_votes(
+    txs: &[Transaction],
+    tx_results: &TransactionResults,
+    vote_sender: Option<&ReplayVoteSender>,
+    vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
+) {
+    let TransactionResults {
+        processing_results,
+        overwritten_vote_accounts,
+        ..
+    } = tx_results;
+    for old_account in overwritten_vote_accounts {
+        assert!(processing_results[old_account.transaction_result_index]
+            .0
+            .is_ok());
+        let transaction = &txs[old_account.transaction_index];
+        if let Some(parsed_vote) = vote_transaction::parse_vote_transaction(transaction) {
+            if let Some(voted_slot) = parsed_vote.1.slots.last().copied() {
+                if let Some(vote_sender) = vote_sender {
+                    let _ = vote_sender.send(parsed_vote);
+                }
+                if let Some(vote_transaction_sender) = vote_transaction_sender {
+                    let _ = vote_transaction_sender.send((voted_slot, transaction.clone()));
+                }
+            }
+        }
+    }
 }

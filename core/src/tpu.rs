@@ -13,11 +13,11 @@ use crate::{
     sigverify_stage::SigVerifyStage,
 };
 use crossbeam_channel::unbounded;
-use solana_ledger::{
-    blockstore::Blockstore,
-    blockstore_processor::{ReplayVoteReceiver, TransactionStatusSender},
+use solana_ledger::{blockstore::Blockstore, blockstore_processor::TransactionStatusSender};
+use solana_runtime::{
+    bank_forks::BankForks,
+    vote_sender_types::{ReplayVoteReceiver, ReplayVoteSender, ReplayVoteTransactionSender},
 };
-use solana_runtime::bank_forks::BankForks;
 use std::{
     net::UdpSocket,
     sync::{
@@ -56,6 +56,8 @@ impl Tpu {
         bank_forks: Arc<RwLock<BankForks>>,
         verified_vote_sender: VerifiedVoteSender,
         replay_vote_receiver: ReplayVoteReceiver,
+        replay_vote_sender: ReplayVoteSender,
+        replay_vote_transaction_sender: ReplayVoteTransactionSender,
     ) -> Self {
         let (packet_sender, packet_receiver) = channel();
         let fetch_stage = FetchStage::new_with_sender(
@@ -92,6 +94,8 @@ impl Tpu {
             verified_receiver,
             verified_vote_packets_receiver,
             transaction_status_sender,
+            replay_vote_sender,
+            replay_vote_transaction_sender,
         );
 
         let broadcast_stage = broadcast_type.new_broadcast_stage(

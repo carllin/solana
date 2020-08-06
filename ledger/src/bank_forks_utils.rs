@@ -2,7 +2,7 @@ use crate::{
     blockstore::Blockstore,
     blockstore_processor::{
         self, BlockstoreProcessorError, BlockstoreProcessorResult, ProcessOptions,
-        ReplayTransactionSender, ReplayVoteSender, TransactionStatusSender,
+        TransactionStatusSender,
     },
     entry::VerifyRecyclers,
     leader_schedule_cache::LeaderScheduleCache,
@@ -11,6 +11,7 @@ use log::*;
 use solana_runtime::{
     bank_forks::{BankForks, SnapshotConfig},
     snapshot_utils,
+    vote_sender_types::{ReplayVoteSender, ReplayVoteTransactionSender},
 };
 use solana_sdk::{clock::Slot, genesis_config::GenesisConfig, hash::Hash};
 use std::{fs, path::PathBuf, process, result, sync::Arc};
@@ -37,7 +38,7 @@ pub fn load(
     process_options: ProcessOptions,
     transaction_status_sender: Option<TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    replay_transaction_sender: Option<&ReplayTransactionSender>,
+    replay_vote_transaction_sender: Option<&ReplayVoteTransactionSender>,
 ) -> LoadResult {
     if let Some(snapshot_config) = snapshot_config.as_ref() {
         info!(
@@ -92,7 +93,7 @@ pub fn load(
                         &VerifyRecyclers::default(),
                         transaction_status_sender,
                         replay_vote_sender,
-                        replay_transaction_sender,
+                        replay_vote_transaction_sender,
                     ),
                     Some(deserialized_snapshot_hash),
                 );
@@ -111,7 +112,7 @@ pub fn load(
             account_paths,
             process_options,
             replay_vote_sender,
-            replay_transaction_sender,
+            replay_vote_transaction_sender,
         ),
         None,
     )
