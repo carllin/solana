@@ -5,7 +5,6 @@ use crate::{
     cluster_info_vote_listener::VerifiedVoteReceiver,
     cluster_slots::ClusterSlots,
     repair_weight::RepairWeight,
-    repair_weighted_traversal::Contains,
     result::Result,
     serve_repair::{RepairType, ServeRepair, DEFAULT_NONCE},
 };
@@ -16,7 +15,10 @@ use solana_ledger::{
 };
 use solana_measure::measure::Measure;
 use solana_runtime::{bank::Bank, bank_forks::BankForks, commitment::VOTE_THRESHOLD_SIZE};
-use solana_sdk::{clock::Slot, epoch_schedule::EpochSchedule, pubkey::Pubkey, timing::timestamp};
+use solana_sdk::{
+    clock::Slot, contains::Contains, epoch_schedule::EpochSchedule, pubkey::Pubkey,
+    timing::timestamp,
+};
 use std::{
     collections::HashMap,
     iter::Iterator,

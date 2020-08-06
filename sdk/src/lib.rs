@@ -14,6 +14,7 @@ pub mod account_utils;
 pub mod bpf_loader;
 pub mod clock;
 pub mod commitment_config;
+pub mod contains;
 pub mod decode_error;
 pub mod entrypoint_native;
 pub mod epoch_info;
