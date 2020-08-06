@@ -1,6 +1,7 @@
 use crate::{
     progress_map::{LockoutIntervals, ProgressMap},
     pubkey_references::PubkeyReferences,
+    switch_proof::{FinalizedSwitchProof, ProofStorageInfo, SwitchProof},
 };
 use chrono::prelude::*;
 use solana_runtime::{bank::Bank, bank_forks::BankForks, commitment::VOTE_THRESHOLD_SIZE};
@@ -10,6 +11,7 @@ use solana_sdk::{
     hash::Hash,
     instruction::Instruction,
     pubkey::Pubkey,
+    signature::Keypair,
 };
 use solana_vote_program::{
     vote_instruction,
@@ -20,12 +22,13 @@ use solana_vote_program::{
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ops::Bound::{Included, Unbounded},
+    path::PathBuf,
     sync::{Arc, RwLock},
 };
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum SwitchForkDecision {
-    SwitchProof(Hash),
+    SwitchProof(FinalizedSwitchProof),
     NoSwitch,
     FailedSwitchThreshold,
 }
@@ -44,12 +47,12 @@ impl SwitchForkDecision {
                 authorized_voter_pubkey,
                 vote,
             )),
-            SwitchForkDecision::SwitchProof(switch_proof_hash) => {
+            SwitchForkDecision::SwitchProof(finalized_switch_proof) => {
                 Some(vote_instruction::vote_switch(
                     vote_account_pubkey,
                     authorized_voter_pubkey,
                     vote,
-                    *switch_proof_hash,
+                    finalized_switch_proof.hash,
                 ))
             }
         }
@@ -57,7 +60,6 @@ impl SwitchForkDecision {
 }
 
 pub const VOTE_THRESHOLD_DEPTH: usize = 8;
-pub const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 
 pub type Stake = u64;
 pub type VotedStakes = HashMap<Slot, Stake>;
@@ -167,7 +169,7 @@ impl Tower {
                 lockout_intervals
                     .entry(vote.expiration_slot())
                     .or_insert_with(Vec::new)
-                    .push((vote.slot, key));
+                    .push((vote.slot, key, vote.confirmation_count()));
             }
 
             if key == *node_pubkey || vote_state.node_pubkey == *node_pubkey {
@@ -404,6 +406,7 @@ impl Tower {
         progress: &ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: &HashMap<Pubkey, (u64, Account)>,
+        authorized_voter_keypair: Option<Arc<Keypair>>,
     ) -> SwitchForkDecision {
         let root = self.lockouts.root_slot.unwrap_or(0);
         self.last_voted_slot()
@@ -421,12 +424,15 @@ impl Tower {
                 // of your last vote
                 assert!(!last_vote_ancestors.contains(&switch_slot));
 
+                let proof_storage_info = authorized_voter_keypair.map(|authorized_voter_keypair| ProofStorageInfo {
+                    authorized_voter_keypair,
+                    path: PathBuf::new(),
+                });
+
                 // By this point, we know the `switch_slot` is on a different fork
                 // (is neither an ancestor nor descendant of `last_vote`), so a
                 // switching proof is necessary
-                let switch_proof = Hash::default();
-                let mut locked_out_stake = 0;
-                let mut locked_out_vote_accounts = HashSet::new();
+                let mut switch_proof = SwitchProof::new(last_voted_slot, switch_slot, total_stake);
                 for (candidate_slot, descendants) in descendants.iter() {
                     // 1) Don't consider any banks that haven't been frozen yet
                     //    because the needed stats are unavailable
@@ -474,7 +480,7 @@ impl Tower {
                     // Find any locked out intervals in this bank with endpoint >= last_vote,
                     // implies they are locked out at last_vote
                     for (_lockout_interval_end, value) in lockout_intervals.range((Included(last_voted_slot), Unbounded)) {
-                        for (lockout_interval_start, vote_account_pubkey) in value {
+                        for (lockout_interval_start, vote_account_pubkey, confirmation_count) in value {
                             // Only count lockouts on slots that are:
                             // 1) Not ancestors of `last_vote`
                             // 2) Not from before the current root as we can't determine if
@@ -485,24 +491,30 @@ impl Tower {
                                 // is an ancestor of the current root, because `candidate_slot` is a
                                 // descendant of the current root
                                 && *lockout_interval_start > root
-                                && !locked_out_vote_accounts.contains(vote_account_pubkey)
                             {
+                                // 'candidate_slot` must have been replayed because it's > root.
+                                // 'candidate_slot` must be frozen by now because the `stats.computed` flag was checked
+                                // above.
+                                // Thus 'candidate_slot` bank hash must exist in the progress map
+                                let candidate_slot_hash = progress.get_bank_hash(*candidate_slot).expect("candidate_slot bank hash must exist in progress map");
+                                // 'locked_slot` must have been replayed because it's > root.
+                                // `locked_slot` must be frozen by now because it's an ancestor of `candidate_slot` which
+                                // is frozen.
+                                // Thus 'locked_slot` bank hash must exist in the progress map
+                                let locked_slot_hash = progress.get_bank_hash(*lockout_interval_start).expect("lockout_interval_start bank hash must exist in progress map");
                                 let stake = epoch_vote_accounts
                                     .get(vote_account_pubkey)
                                     .map(|(stake, _)| *stake)
                                     .unwrap_or(0);
-                                locked_out_stake += stake;
-                                locked_out_vote_accounts.insert(vote_account_pubkey);
+                                if let Some(finalized_switch_proof) = switch_proof.add_validator_proof(vote_account_pubkey, stake, *lockout_interval_start, locked_slot_hash, *confirmation_count, *candidate_slot, candidate_slot_hash, &proof_storage_info) {
+                                    // Switch proof is now valid
+                                    return SwitchForkDecision::SwitchProof(finalized_switch_proof);
+                                }
                             }
                         }
                     }
                 }
-
-                if (locked_out_stake as f64 / total_stake as f64) > SWITCH_FORK_THRESHOLD {
-                    SwitchForkDecision::SwitchProof(switch_proof)
-                } else {
-                    SwitchForkDecision::FailedSwitchThreshold
-                }
+                SwitchForkDecision::FailedSwitchThreshold
             })
             .unwrap_or(SwitchForkDecision::NoSwitch)
     }
@@ -823,6 +835,7 @@ pub mod test {
                 ..
             } = ReplayStage::select_vote_and_reset_forks(
                 &vote_bank,
+                None,
                 &None,
                 &ancestors,
                 &descendants,
@@ -891,7 +904,7 @@ pub mod test {
                 .lockout_intervals
                 .entry(lockout_interval.1)
                 .or_default()
-                .push((lockout_interval.0, Rc::new(*vote_account_pubkey)));
+                .push((lockout_interval.0, Rc::new(*vote_account_pubkey), 0));
         }
 
         fn can_progress_on_fork(
@@ -1037,7 +1050,7 @@ pub mod test {
                 vote.clone(),
             ))
         );
-        decision = SwitchForkDecision::SwitchProof(Hash::default());
+        decision = SwitchForkDecision::SwitchProof(FinalizedSwitchProof::default());
         assert_eq!(
             decision.to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default()),
             Some(vote_instruction::vote_switch(
@@ -1130,6 +1143,7 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
+                None,
             ),
             SwitchForkDecision::NoSwitch
         );
@@ -1143,6 +1157,7 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
+                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1158,6 +1173,7 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
+                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1173,6 +1189,7 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
+                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1188,6 +1205,7 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
+                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1205,6 +1223,7 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
+                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1220,8 +1239,9 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
+                None,
             ),
-            SwitchForkDecision::SwitchProof(Hash::default())
+            SwitchForkDecision::SwitchProof(FinalizedSwitchProof::default())
         );
 
         // Adding another unfrozen descendant of the tip of 14 should not remove
@@ -1236,8 +1256,9 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
+                None,
             ),
-            SwitchForkDecision::SwitchProof(Hash::default())
+            SwitchForkDecision::SwitchProof(FinalizedSwitchProof::default())
         );
 
         // If we set a root, then any lockout intervals below the root shouldn't
@@ -1256,6 +1277,7 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
+                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );

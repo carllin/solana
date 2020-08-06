@@ -88,6 +88,10 @@ impl Lockout {
     pub fn is_expired(&self, slot: Slot) -> bool {
         self.expiration_slot() < slot
     }
+
+    pub fn confirmation_count(&self) -> u32 {
+        self.confirmation_count
+    }
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]

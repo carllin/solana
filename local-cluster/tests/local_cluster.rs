@@ -5,9 +5,8 @@ use serial_test_derive::serial;
 use solana_client::rpc_client::RpcClient;
 use solana_client::thin_client::create_client;
 use solana_core::{
-    broadcast_stage::BroadcastStageType,
-    consensus::{SWITCH_FORK_THRESHOLD, VOTE_THRESHOLD_DEPTH},
-    gossip_service::discover_cluster,
+    broadcast_stage::BroadcastStageType, consensus::VOTE_THRESHOLD_DEPTH,
+    gossip_service::discover_cluster, switch_proof::SWITCH_FORK_THRESHOLD,
     validator::ValidatorConfig,
 };
 use solana_download_utils::download_snapshot;

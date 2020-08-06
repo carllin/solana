@@ -16,7 +16,7 @@ use std::{
 
 type VotedSlot = Slot;
 type ExpirationSlot = Slot;
-pub(crate) type LockoutIntervals = BTreeMap<ExpirationSlot, Vec<(VotedSlot, Rc<Pubkey>)>>;
+pub(crate) type LockoutIntervals = BTreeMap<ExpirationSlot, Vec<(VotedSlot, Rc<Pubkey>, u32)>>;
 
 #[derive(Default)]
 pub(crate) struct ReplaySlotStats(ConfirmationTiming);
@@ -104,6 +104,7 @@ pub(crate) struct ForkProgress {
     // so these stats do not span all of time
     pub(crate) num_blocks_on_fork: u64,
     pub(crate) num_dropped_blocks_on_fork: u64,
+    pub(crate) bank_hash: Option<Hash>,
 }
 
 impl ForkProgress {
@@ -147,6 +148,7 @@ impl ForkProgress {
             replay_progress: ConfirmationProgress::new(last_entry),
             num_blocks_on_fork,
             num_dropped_blocks_on_fork,
+            bank_hash: None,
             propagated_stats: PropagatedStats {
                 prev_leader_slot,
                 is_leader_slot,
@@ -321,6 +323,12 @@ impl ProgressMap {
         self.progress_map
             .get_mut(&slot)
             .map(|fork_progress| &mut fork_progress.fork_stats)
+    }
+
+    pub fn get_bank_hash(&self, slot: Slot) -> Option<Hash> {
+        self.progress_map
+            .get(&slot)
+            .and_then(|fork_progress| fork_progress.bank_hash)
     }
 
     pub fn is_propagated(&self, slot: Slot) -> bool {

@@ -436,6 +436,7 @@ impl ReplayStage {
                         heaviest_fork_failures,
                     } = Self::select_vote_and_reset_forks(
                         &heaviest_bank,
+                        Self::authorized_voter_for_bank(&heaviest_bank, &authorized_voter_keypairs, &vote_account).cloned(),
                         &heaviest_bank_on_same_voted_fork,
                         &ancestors,
                         &descendants,
@@ -1073,17 +1074,14 @@ impl ReplayStage {
         Ok(())
     }
 
-    fn push_vote(
-        cluster_info: &ClusterInfo,
-        bank: &Arc<Bank>,
-        vote_account_pubkey: &Pubkey,
-        authorized_voter_keypairs: &[Arc<Keypair>],
-        vote: Vote,
-        tower_index: usize,
-        switch_fork_decision: &SwitchForkDecision,
-    ) {
+    // Returns authorized voter for `bank.slot()`
+    fn authorized_voter_for_bank<'a>(
+        bank: &'a Arc<Bank>,
+        authorized_voter_keypairs: &'a [Arc<Keypair>],
+        vote_account_pubkey: &'a Pubkey,
+    ) -> Option<&'a Arc<Keypair>> {
         if authorized_voter_keypairs.is_empty() {
-            return;
+            return None;
         }
 
         let vote_state =
@@ -1095,14 +1093,14 @@ impl ReplayStage {
                         "Vote account {} is unreadable.  Unable to vote",
                         vote_account_pubkey,
                     );
-                    return;
+                    return None;
                 }
             } else {
                 warn!(
                     "Vote account {} does not exist.  Unable to vote",
                     vote_account_pubkey,
                 );
-                return;
+                return None;
             };
 
         let authorized_voter_pubkey =
@@ -1114,20 +1112,37 @@ impl ReplayStage {
                     vote_account_pubkey,
                     bank.epoch()
                 );
-                return;
+                return None;
             };
 
-        let authorized_voter_keypair = match authorized_voter_keypairs
+        match authorized_voter_keypairs
             .iter()
             .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
         {
             None => {
                 warn!("The authorized keypair {} for vote account {} is not available.  Unable to vote",
                       authorized_voter_pubkey, vote_account_pubkey);
-                return;
+                None
             }
-            Some(authorized_voter_keypair) => authorized_voter_keypair,
-        };
+            Some(authorized_voter_keypair) => Some(authorized_voter_keypair),
+        }
+    }
+
+    fn push_vote(
+        cluster_info: &ClusterInfo,
+        bank: &Arc<Bank>,
+        vote_account_pubkey: &Pubkey,
+        authorized_voter_keypairs: &[Arc<Keypair>],
+        vote: Vote,
+        tower_index: usize,
+        switch_fork_decision: &SwitchForkDecision,
+    ) {
+        let authorized_voter_keypair =
+            Self::authorized_voter_for_bank(bank, authorized_voter_keypairs, vote_account_pubkey);
+        if authorized_voter_keypair.is_none() {
+            return;
+        }
+        let authorized_voter_keypair = authorized_voter_keypair.unwrap();
         let node_keypair = cluster_info.keypair.clone();
 
         // Send our last few votes along with the new one
@@ -1283,6 +1298,7 @@ impl ReplayStage {
                 did_complete_bank = true;
                 info!("bank frozen: {}", bank.slot());
                 bank.freeze();
+                bank_progress.bank_hash = Some(bank.hash());
                 heaviest_subtree_fork_choice
                     .add_new_leaf_slot(bank.slot(), Some(bank.parent_slot()));
                 subscriptions.notify_frozen(bank.slot());
@@ -1467,6 +1483,7 @@ impl ReplayStage {
     // a bank to vote on, a bank to reset to,
     pub(crate) fn select_vote_and_reset_forks(
         heaviest_bank: &Arc<Bank>,
+        heaviest_bank_authorized_voter_keypair: Option<Arc<Keypair>>,
         heaviest_bank_on_same_voted_fork: &Option<Arc<Bank>>,
         ancestors: &HashMap<u64, HashSet<u64>>,
         descendants: &HashMap<u64, HashSet<u64>>,
@@ -1497,6 +1514,7 @@ impl ReplayStage {
                 heaviest_bank
                     .epoch_vote_accounts(heaviest_bank.epoch())
                     .expect("Bank epoch vote accounts must contain entry for the bank's own epoch"),
+                heaviest_bank_authorized_voter_keypair,
             );
             if switch_fork_decision == SwitchForkDecision::FailedSwitchThreshold {
                 // If we can't switch, then reset to the the next votable
