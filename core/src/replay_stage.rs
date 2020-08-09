@@ -49,6 +49,7 @@ use solana_vote_program::{
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
+    path::PathBuf,
     result,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -436,7 +437,6 @@ impl ReplayStage {
                         heaviest_fork_failures,
                     } = Self::select_vote_and_reset_forks(
                         &heaviest_bank,
-                        Self::authorized_voter_for_bank(&heaviest_bank, &authorized_voter_keypairs, &vote_account).cloned(),
                         &heaviest_bank_on_same_voted_fork,
                         &ancestors,
                         &descendants,
@@ -1151,7 +1151,8 @@ impl ReplayStage {
                 .to_vote_instruction(
                     vote,
                     &vote_account_pubkey,
-                    &authorized_voter_keypair.pubkey(),
+                    authorized_voter_keypair,
+                    Some(PathBuf::default()),
                 )
                 .expect("Switch threshold failure should not lead to voting")
         } else {
@@ -1483,7 +1484,6 @@ impl ReplayStage {
     // a bank to vote on, a bank to reset to,
     pub(crate) fn select_vote_and_reset_forks(
         heaviest_bank: &Arc<Bank>,
-        heaviest_bank_authorized_voter_keypair: Option<Arc<Keypair>>,
         heaviest_bank_on_same_voted_fork: &Option<Arc<Bank>>,
         ancestors: &HashMap<u64, HashSet<u64>>,
         descendants: &HashMap<u64, HashSet<u64>>,
@@ -1514,7 +1514,6 @@ impl ReplayStage {
                 heaviest_bank
                     .epoch_vote_accounts(heaviest_bank.epoch())
                     .expect("Bank epoch vote accounts must contain entry for the bank's own epoch"),
-                heaviest_bank_authorized_voter_keypair,
             );
             if switch_fork_decision == SwitchForkDecision::FailedSwitchThreshold {
                 // If we can't switch, then reset to the the next votable

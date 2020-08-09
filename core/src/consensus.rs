@@ -1,7 +1,7 @@
 use crate::{
     progress_map::{LockoutIntervals, ProgressMap},
     pubkey_references::PubkeyReferences,
-    switch_proof::{FinalizedSwitchProof, ProofStorageInfo, SwitchProof},
+    switch_proof::{ProofStorageInfo, SwitchProof},
 };
 use chrono::prelude::*;
 use solana_runtime::{bank::Bank, bank_forks::BankForks, commitment::VOTE_THRESHOLD_SIZE};
@@ -11,7 +11,7 @@ use solana_sdk::{
     hash::Hash,
     instruction::Instruction,
     pubkey::Pubkey,
-    signature::Keypair,
+    signature::{Keypair, Signer},
 };
 use solana_vote_program::{
     vote_instruction,
@@ -28,7 +28,7 @@ use std::{
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum SwitchForkDecision {
-    SwitchProof(FinalizedSwitchProof),
+    SwitchProof(SwitchProof),
     NoSwitch,
     FailedSwitchThreshold,
 }
@@ -38,21 +38,32 @@ impl SwitchForkDecision {
         &self,
         vote: Vote,
         vote_account_pubkey: &Pubkey,
-        authorized_voter_pubkey: &Pubkey,
+        authorized_voter_keypair: &Arc<Keypair>,
+        proof_storage_path: Option<PathBuf>,
     ) -> Option<Instruction> {
         match self {
             SwitchForkDecision::FailedSwitchThreshold => None,
             SwitchForkDecision::NoSwitch => Some(vote_instruction::vote(
                 vote_account_pubkey,
-                authorized_voter_pubkey,
+                &authorized_voter_keypair.pubkey(),
                 vote,
             )),
-            SwitchForkDecision::SwitchProof(finalized_switch_proof) => {
+            SwitchForkDecision::SwitchProof(switch_proof) => {
+                // Finalize and store proof in preparation for voting
+                let switch_proof_hash = proof_storage_path
+                    .map(|proof_storage_path| {
+                        let finalized_switch_proof = switch_proof.finalize(&ProofStorageInfo {
+                            path: proof_storage_path,
+                            authorized_voter_keypair: authorized_voter_keypair.clone(),
+                        });
+                        finalized_switch_proof.hash
+                    })
+                    .unwrap_or(Hash::default());
                 Some(vote_instruction::vote_switch(
                     vote_account_pubkey,
-                    authorized_voter_pubkey,
+                    &authorized_voter_keypair.pubkey(),
                     vote,
-                    finalized_switch_proof.hash,
+                    switch_proof_hash,
                 ))
             }
         }
@@ -406,7 +417,6 @@ impl Tower {
         progress: &ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: &HashMap<Pubkey, (u64, Account)>,
-        authorized_voter_keypair: Option<Arc<Keypair>>,
     ) -> SwitchForkDecision {
         let root = self.lockouts.root_slot.unwrap_or(0);
         self.last_voted_slot()
@@ -423,11 +433,6 @@ impl Tower {
                 // Should never consider switching to an ancestor
                 // of your last vote
                 assert!(!last_vote_ancestors.contains(&switch_slot));
-
-                let proof_storage_info = authorized_voter_keypair.map(|authorized_voter_keypair| ProofStorageInfo {
-                    authorized_voter_keypair,
-                    path: PathBuf::new(),
-                });
 
                 // By this point, we know the `switch_slot` is on a different fork
                 // (is neither an ancestor nor descendant of `last_vote`), so a
@@ -506,9 +511,9 @@ impl Tower {
                                     .get(vote_account_pubkey)
                                     .map(|(stake, _)| *stake)
                                     .unwrap_or(0);
-                                if let Some(finalized_switch_proof) = switch_proof.add_validator_proof(vote_account_pubkey, stake, *lockout_interval_start, locked_slot_hash, *confirmation_count, *candidate_slot, candidate_slot_hash, &proof_storage_info) {
+                                if switch_proof.add_validator_proof(vote_account_pubkey, stake, *lockout_interval_start, locked_slot_hash, *confirmation_count, *candidate_slot, candidate_slot_hash) {
                                     // Switch proof is now valid
-                                    return SwitchForkDecision::SwitchProof(finalized_switch_proof);
+                                    return SwitchForkDecision::SwitchProof(switch_proof);
                                 }
                             }
                         }
@@ -835,7 +840,6 @@ pub mod test {
                 ..
             } = ReplayStage::select_vote_and_reset_forks(
                 &vote_bank,
-                None,
                 &None,
                 &ancestors,
                 &descendants,
@@ -1039,20 +1043,35 @@ pub mod test {
         let vote = Vote::default();
         let mut decision = SwitchForkDecision::FailedSwitchThreshold;
         assert!(decision
-            .to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default())
+            .to_vote_instruction(
+                vote.clone(),
+                &Pubkey::default(),
+                &Arc::new(Keypair::new()),
+                None
+            )
             .is_none());
         decision = SwitchForkDecision::NoSwitch;
         assert_eq!(
-            decision.to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default()),
+            decision.to_vote_instruction(
+                vote.clone(),
+                &Pubkey::default(),
+                &Arc::new(Keypair::new()),
+                None
+            ),
             Some(vote_instruction::vote(
                 &Pubkey::default(),
                 &Pubkey::default(),
                 vote.clone(),
             ))
         );
-        decision = SwitchForkDecision::SwitchProof(FinalizedSwitchProof::default());
+        decision = SwitchForkDecision::SwitchProof(SwitchProof::default());
         assert_eq!(
-            decision.to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default()),
+            decision.to_vote_instruction(
+                vote.clone(),
+                &Pubkey::default(),
+                &Arc::new(Keypair::new()),
+                None
+            ),
             Some(vote_instruction::vote_switch(
                 &Pubkey::default(),
                 &Pubkey::default(),
@@ -1143,7 +1162,6 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
-                None,
             ),
             SwitchForkDecision::NoSwitch
         );
@@ -1157,7 +1175,6 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
-                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1173,7 +1190,6 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
-                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1189,7 +1205,6 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
-                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1205,7 +1220,6 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
-                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1223,7 +1237,6 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
-                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
@@ -1239,9 +1252,8 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
-                None,
             ),
-            SwitchForkDecision::SwitchProof(FinalizedSwitchProof::default())
+            SwitchForkDecision::SwitchProof(SwitchProof::default())
         );
 
         // Adding another unfrozen descendant of the tip of 14 should not remove
@@ -1256,9 +1268,8 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
-                None,
             ),
-            SwitchForkDecision::SwitchProof(FinalizedSwitchProof::default())
+            SwitchForkDecision::SwitchProof(SwitchProof::default())
         );
 
         // If we set a root, then any lockout intervals below the root shouldn't
@@ -1277,7 +1288,6 @@ pub mod test {
                 &vote_simulator.progress,
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
-                None,
             ),
             SwitchForkDecision::FailedSwitchThreshold
         );
