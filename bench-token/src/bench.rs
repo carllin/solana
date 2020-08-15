@@ -519,25 +519,32 @@ trait FundingTransactions<'a> {
     fn fund<T: 'static + Client + Send + Sync>(
         &mut self,
         client: &Arc<T>,
-        owner: &Keypair,
-        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo>)],
+        owner: &'a Keypair,
+        mint_keypair: &'a Keypair,
+        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
         to_lamports: u64,
     );
-    fn make(&mut self, owner: &Keypair, to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo>)]);
+    fn make(
+        &mut self,
+        owner: &'a Keypair,
+        mint_keypair: &'a Keypair,
+        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
+    );
     fn sign(&mut self, blockhash: Hash, owner: &Keypair);
     fn send<T: Client>(&self, client: &Arc<T>);
     fn verify<T: 'static + Client + Send + Sync>(&mut self, client: &Arc<T>, to_lamports: u64);
 }
 
-impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
+impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)> {
     fn fund<T: 'static + Client + Send + Sync>(
         &mut self,
         client: &Arc<T>,
-        owner: &Keypair,
-        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo>)],
+        owner: &'a Keypair,
+        mint_keypair: &'a Keypair,
+        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
         to_lamports: u64,
     ) {
-        self.make(owner, to_fund);
+        self.make(owner, mint_keypair, to_fund);
 
         let mut tries = 0;
         while !self.is_empty() {
@@ -572,14 +579,17 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
         info!("transferred");
     }
 
-    fn make(&mut self, owner: &Keypair, to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo>)]) {
+    fn make(
+        &mut self,
+        owner: &'a Keypair,
+        mint_keypair: &'a Keypair,
+        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
+    ) {
         let mut make_txs = Measure::start("make_txs");
-        let to_fund_txs: Vec<(&Keypair, Transaction)> = to_fund
+        let to_fund_txs: Vec<(&'a Keypair, &'a Keypair, Transaction)> = to_fund
             .par_iter()
-            .map(|(k, dest_info)| {
-                let instructions = make_many_token_accounts(&k.pubkey(), owner, &dest_info);
-                let message = Message::new(&instructions, Some(&k.pubkey()));
-                (*k, Transaction::new_unsigned(message))
+            .flat_map(|(from_keypair, dest_infos)| {
+                make_many_token_accounts(*from_keypair, owner, mint_keypair, &dest_infos)
             })
             .collect();
         make_txs.stop();
@@ -593,8 +603,8 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
 
     fn sign(&mut self, blockhash: Hash, owner: &Keypair) {
         let mut sign_txs = Measure::start("sign_txs");
-        self.par_iter_mut().for_each(|(k, tx)| {
-            tx.sign(&[k, owner], blockhash);
+        self.par_iter_mut().for_each(|(from, new_account, tx)| {
+            tx.sign(&[*from, new_account, owner], blockhash);
         });
         sign_txs.stop();
         debug!("sign {} txs: {}us", self.len(), sign_txs.as_us());
@@ -602,7 +612,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
 
     fn send<T: Client>(&self, client: &Arc<T>) {
         let mut send_txs = Measure::start("send_txs");
-        self.iter().for_each(|(_, tx)| {
+        self.iter().for_each(|(_, _, tx)| {
             client.async_send_transaction(tx.clone()).expect("transfer");
         });
         send_txs.stop();
@@ -625,7 +635,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
             let too_many_failures = &too_many_failures;
             let verified_set: HashSet<Pubkey> = self
                 .par_iter()
-                .filter_map(move |(k, tx)| {
+                .filter_map(move |(k, _, tx)| {
                     if too_many_failures.load(Ordering::Relaxed) {
                         return None;
                     }
@@ -663,7 +673,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
                 })
                 .collect();
 
-            self.retain(|(k, _)| !verified_set.contains(&k.pubkey()));
+            self.retain(|(k, _, _)| !verified_set.contains(&k.pubkey()));
             if self.is_empty() {
                 break;
             }
@@ -692,6 +702,7 @@ struct FundingDestinationInfo<'a> {
 pub fn fund_keys<T: 'static + Client + Send + Sync>(
     client: Arc<T>,
     source: &Keypair,
+    mint_keypair: &Keypair,
     dests: &[Keypair],
     total: u64,
     max_fee: u64,
@@ -724,9 +735,10 @@ pub fn fund_keys<T: 'static + Client + Send + Sync>(
         const FUND_CHUNK_LEN: usize = 4 * 1024 * 1024 / 512;
 
         to_fund.chunks(FUND_CHUNK_LEN).for_each(|chunk| {
-            Vec::<(&Keypair, Transaction)>::with_capacity(chunk.len()).fund(
+            Vec::<(&Keypair, &Keypair, Transaction)>::with_capacity(chunk.len()).fund(
                 &client,
                 source,
+                mint_keypair,
                 chunk,
                 to_lamports,
             );
@@ -931,9 +943,11 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
             airdrop_lamports(client.as_ref(), &faucet_addr.unwrap(), funding_key, total)?;
         }
 
+        let new_mint_keypair = Keypair::new();
         // Deploy new token mint
-        let mut create_token_tx = command_create_token(
+        let mut create_token_tx = create_token_transaction(
             &*client,
+            &new_mint_keypair,
             &funding_key,
             &funding_key,
             total,
@@ -946,8 +960,10 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
             .send_and_confirm_transaction(&[funding_key], &mut create_token_tx, 5, 0)
             .unwrap();
 
+        println!("New token mint successfully created!");
         fund_keys(
             client,
+            &new_mint_keypair,
             funding_key,
             &keypairs,
             total,
@@ -1008,16 +1024,16 @@ fn initialize_mint(
     })
 }
 
-fn command_create_token<'a, T: Client>(
+fn create_token_transaction<'a, T: Client>(
     client: &T,
+    new_mint: &'a Keypair,
     owner: &'a Keypair,
     fee_payer: &'a Keypair,
     num_lamports: u64,
     num_tokens: u64,
     decimals: u8,
 ) -> CommmandResult {
-    let new_mint = Keypair::new();
-    println!("Creating token {}", new_mint.pubkey());
+    println!("Creating token mint {}", new_mint.pubkey());
 
     let mut transaction = Transaction::new_with_payer(
         &[
@@ -1043,7 +1059,7 @@ fn command_create_token<'a, T: Client>(
     );
 
     let (recent_blockhash, fee_calculator) = client.get_recent_blockhash()?;
-    transaction.sign(&[&fee_payer, &owner, &new_mint], recent_blockhash);
+    transaction.sign(&[fee_payer, owner, new_mint], recent_blockhash);
     Ok(Some(transaction))
 }
 
@@ -1128,22 +1144,28 @@ fn transfer_tokens_ix(
     })
 }
 
-fn make_many_token_accounts(
-    from_pubkey: &Pubkey,
-    mint: &Keypair,
-    to_tokens: &[FundingDestinationInfo],
-) -> Vec<Instruction> {
+fn make_many_token_accounts<'a>(
+    from_keypair: &'a Keypair,
+    owner: &'a Keypair,
+    mint: &'a Keypair,
+    to_tokens: &[FundingDestinationInfo<'a>],
+) -> Vec<(&'a Keypair, &'a Keypair, Transaction)> {
     to_tokens
         .iter()
-        .flat_map(|dest_info| {
-            create_token_account_ix(
-                // The mint is the owner
-                &mint.pubkey(),
-                from_pubkey,
+        .map(|dest_info| {
+            let ix = create_token_account_ix(
+                &owner.pubkey(),
+                &from_keypair.pubkey(),
                 &mint.pubkey(),
                 dest_info.amount,
                 dest_info.amount,
                 &dest_info.dest.pubkey(),
+            );
+            let message = Message::new(&ix, Some(&from_keypair.pubkey()));
+            (
+                from_keypair,
+                dest_info.dest,
+                Transaction::new_unsigned(message),
             )
         })
         .collect()
