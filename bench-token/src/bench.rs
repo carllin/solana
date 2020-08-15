@@ -930,16 +930,16 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
     //   pay for the transaction fees in a new run.
     let enough_lamports = 8 * lamports_per_account / 10;
     if first_keypair_balance < enough_lamports || last_keypair_balance < enough_lamports {
-        let minimum_balance_for_rent_exemption =
-            client.get_minimum_balance_for_rent_exemption(size_of::<Mint>()).unwrap();
+        let minimum_balance_for_rent_exemption = client
+            .get_minimum_balance_for_rent_exemption(size_of::<Mint>())
+            .unwrap();
 
         let fee_rate_governor = client.get_fee_rate_governor().unwrap();
         let max_fee = fee_rate_governor.max_lamports_per_signature;
         let extra_fees = extra * max_fee;
         let total_keypairs = keypairs.len() as u64 + 1; // Add one for funding keypair
-        let total = lamports_per_account * total_keypairs
-            + extra_fees
-            + minimum_balance_for_rent_exemption;
+        let total =
+            lamports_per_account * total_keypairs + extra_fees + minimum_balance_for_rent_exemption;
 
         let funding_key_balance = client.get_balance(&funding_key.pubkey()).unwrap_or(0);
         info!(
@@ -967,7 +967,6 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
         .unwrap()
         .unwrap();
 
-        
         info!("Sending create mint transaction");
         client
             .send_and_confirm_transaction(&[funding_key], &mut create_token_tx, 5, 0)
@@ -975,8 +974,13 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
 
         info!("New token mint successfully created!");
 
-        airdrop_lamports(client.as_ref(), &faucet_addr.unwrap(), &token_owner_keypair, total)?;
-        
+        airdrop_lamports(
+            client.as_ref(),
+            &faucet_addr.unwrap(),
+            &token_owner_keypair,
+            total,
+        )?;
+
         fund_keys(
             client,
             &new_mint_keypair,
@@ -1040,7 +1044,12 @@ fn create_token_transaction<'a, T: Client>(
     num_tokens: u64,
     decimals: u8,
 ) -> CommmandResult {
-    info!("Creating token mint {}, owner: {}, fee_payer: {}", new_mint.pubkey(), owner.pubkey(), fee_payer.pubkey());
+    info!(
+        "Creating token mint {}, owner: {}, fee_payer: {}",
+        new_mint.pubkey(),
+        owner.pubkey(),
+        fee_payer.pubkey()
+    );
 
     let mut transaction = Transaction::new_with_payer(
         &[
@@ -1220,7 +1229,8 @@ mod tests {
             10,
             10000,
             NUM_DECIMALS,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[test]

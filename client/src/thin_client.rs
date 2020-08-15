@@ -289,9 +289,17 @@ impl SyncClient for ThinClient {
             while now.elapsed().as_secs() < wait_time as u64 {
                 if num_confirmed == 0 {
                     // Send the transaction if there has been no confirmation (e.g. the first time)
+                    info!("sending to: {:?}", self.tpu_addr());
                     self.transactions_socket
                         .send_to(&buf[..], &self.tpu_addr())?;
                 }
+
+                let res = self.poll_for_signature_confirmation(
+                    &transaction.signatures[0],
+                    pending_confirmations,
+                );
+
+                println!("poll for signature res: {:?}", res);
 
                 if let Ok(confirmed_blocks) = self.poll_for_signature_confirmation(
                     &transaction.signatures[0],

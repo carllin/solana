@@ -278,6 +278,7 @@ impl Transaction {
         recent_blockhash: Hash,
     ) -> result::Result<(), SignerError> {
         let positions = self.get_signing_keypair_positions(&keypairs.pubkeys())?;
+        println!("positions: {:?}", positions);
         if positions.iter().any(|pos| pos.is_none()) {
             return Err(SignerError::KeypairPubkeyMismatch);
         }
@@ -332,6 +333,11 @@ impl Transaction {
 
     /// Get the positions of the pubkeys in `account_keys` associated with signing keypairs
     pub fn get_signing_keypair_positions(&self, pubkeys: &[Pubkey]) -> Result<Vec<Option<usize>>> {
+        println!(
+            "num required: {} {}",
+            self.message.header.num_required_signatures,
+            pubkeys.len()
+        );
         if self.message.account_keys.len() < self.message.header.num_required_signatures as usize {
             return Err(TransactionError::InvalidAccountIndex);
         }
