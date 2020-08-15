@@ -278,6 +278,8 @@ impl SyncClient for ThinClient {
         pending_confirmations: usize,
     ) -> TransportResult<Signature> {
         for x in 0..tries {
+            let (blockhash, _fee_calculator) = self.get_recent_blockhash()?;
+            transaction.sign(keypairs, blockhash);
             let now = Instant::now();
             let mut buf = vec![0; serialized_size(&transaction).unwrap() as usize];
             let mut wr = std::io::Cursor::new(&mut buf[..]);
@@ -318,8 +320,6 @@ impl SyncClient for ThinClient {
                 }
             }
             info!("{} tries failed transfer to {}", x, self.tpu_addr());
-            let (blockhash, _fee_calculator) = self.get_recent_blockhash()?;
-            transaction.sign(keypairs, blockhash);
         }
         Err(io::Error::new(
             io::ErrorKind::Other,
@@ -333,8 +333,7 @@ impl SyncClient for ThinClient {
         keypairs: &T,
         message: Message,
     ) -> TransportResult<Signature> {
-        let (blockhash, _fee_calculator) = self.get_recent_blockhash()?;
-        let mut transaction = Transaction::new(keypairs, message, blockhash);
+        let mut transaction = Transaction::new_unsigned(message);
         let signature = self.send_and_confirm_transaction(keypairs, &mut transaction, 5, 0)?;
         Ok(signature)
     }

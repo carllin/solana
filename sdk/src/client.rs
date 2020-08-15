@@ -53,7 +53,7 @@ pub trait SyncClient {
         instruction: Instruction,
     ) -> Result<Signature>;
 
-    /// Transfer lamports from `keypair` to `pubkey`, retrying until the
+    /// Transfer lamports frpom `keypair` to `pubkey`, retrying until the
     /// transfer completes or produces and error.
     fn transfer_and_confirm(
         &self,

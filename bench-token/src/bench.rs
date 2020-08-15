@@ -505,20 +505,27 @@ fn do_tx_transfers<T: Client>(
     }
 }
 
+fn verify_balance<T: Client>(client: &Arc<T>, key: &Pubkey, amount: u64) -> Option<bool> {
+    match client.get_balance_with_commitment(key, CommitmentConfig::recent()) {
+        Ok(balance) => {
+            println!("verifying: {} {} {}", key, balance, amount);
+            return Some(balance >= amount);
+        }
+        Err(err) => error!("failed to get balance {:?}", err),
+    }
+    None
+}
+
 fn verify_funding_transfer<T: Client>(client: &Arc<T>, tx: &Transaction, amount: u64) -> bool {
     for a in &tx.message().account_keys[1..] {
-        match client.get_balance_with_commitment(a, CommitmentConfig::recent()) {
-            Ok(balance) => {
-                println!("verifying: {} {} {}", a, balance, amount);
-                return balance >= amount;
-            }
-            Err(err) => error!("failed to get balance {:?}", err),
+        if let Some(res) = verify_balance(client, a, amount) {
+            return res;
         }
     }
     false
 }
 
-trait FundingTransactions<'a> {
+/*trait FundingTransactions<'a> {
     fn fund<T: 'static + Client + Send + Sync>(
         &mut self,
         client: &Arc<T>,
@@ -592,7 +599,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
         let to_fund_txs: Vec<(&'a Keypair, &'a Keypair, Transaction)> = to_fund
             .par_iter()
             .flat_map(|(from_keypair, dest_infos)| {
-                make_many_token_accounts(*from_keypair, owner, mint_keypair, &dest_infos)
+                make_many_token_accounts(*from_keypair, owner, mint_keypair, minimum_balance_for_rent_exemption, &dest_infos)
             })
             .collect();
         make_txs.stop();
@@ -692,7 +699,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
             sleep(Duration::from_millis(100));
         }
     }
-}
+}*/
 
 struct FundingDestinationInfo<'a> {
     dest: &'a Keypair,
@@ -702,7 +709,7 @@ struct FundingDestinationInfo<'a> {
 /// fund the dests keys by spending all of the source keys into MAX_SPENDS_PER_TX
 /// on every iteration.  This allows us to replay the transfers because the source is either empty,
 /// or full
-pub fn fund_keys<T: 'static + Client + Send + Sync>(
+/*pub fn fund_keys<T: 'static + Client + Send + Sync>(
     client: Arc<T>,
     source: &Keypair,
     mint_keypair: &Keypair,
@@ -751,7 +758,7 @@ pub fn fund_keys<T: 'static + Client + Send + Sync>(
         funded = new_funded;
         funded_funds = to_lamports;
     }
-}
+}*/
 
 pub fn airdrop_lamports<T: Client>(
     client: &T,
@@ -930,16 +937,21 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
     //   pay for the transaction fees in a new run.
     let enough_lamports = 8 * lamports_per_account / 10;
     if first_keypair_balance < enough_lamports || last_keypair_balance < enough_lamports {
-        let minimum_balance_for_rent_exemption = client
+        let mint_minimum_balance_for_rent_exemption = client
             .get_minimum_balance_for_rent_exemption(size_of::<Mint>())
+            .unwrap();
+        let token_account_minimum_balance_for_rent_exemption = client
+            .get_minimum_balance_for_rent_exemption(size_of::<Account>())
             .unwrap();
 
         let fee_rate_governor = client.get_fee_rate_governor().unwrap();
         let max_fee = fee_rate_governor.max_lamports_per_signature;
         let extra_fees = extra * max_fee;
         let total_keypairs = keypairs.len() as u64 + 1; // Add one for funding keypair
-        let total =
-            lamports_per_account * total_keypairs + extra_fees + minimum_balance_for_rent_exemption;
+        let total = (lamports_per_account + token_account_minimum_balance_for_rent_exemption)
+            * total_keypairs
+            + extra_fees
+            + mint_minimum_balance_for_rent_exemption;
 
         let funding_key_balance = client.get_balance(&funding_key.pubkey()).unwrap_or(0);
         info!(
@@ -951,37 +963,48 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
             airdrop_lamports(client.as_ref(), &faucet_addr.unwrap(), funding_key, total)?;
         }
 
+        // Make a token account for holding all the tokens
         let new_mint_keypair = Keypair::new();
-        let token_owner_keypair = Keypair::new();
+        let (mut create_account_tx, new_account_pubkey) = create_token_account_transaction(
+            &funding_key,
+            &new_mint_keypair,
+            token_account_minimum_balance_for_rent_exemption,
+        );
+        info!("Initializing first token account");
+        client
+            .send_and_confirm_transaction(&[funding_key], &mut create_account_tx, 5, 0)
+            .unwrap();
+        if !verify_balance(
+            &client,
+            &new_account_pubkey,
+            token_account_minimum_balance_for_rent_exemption,
+        )
+        .unwrap()
+        {
+            panic!("Could not create first token account");
+        }
+        info!("First token account successfully created!");
 
-        // Deploy new token mint
+        // Deploy new token mint, deposit tokens into token account with key == funding_key
+        info!("Creating mint");
         let mut create_token_tx = create_token_transaction(
             &*client,
             &new_mint_keypair,
-            &token_owner_keypair,
+            &new_account_pubkey,
             &funding_key,
-            minimum_balance_for_rent_exemption,
+            mint_minimum_balance_for_rent_exemption,
             total,
             NUM_DECIMALS,
         )
         .unwrap()
         .unwrap();
-
         info!("Sending create mint transaction");
         client
             .send_and_confirm_transaction(&[funding_key], &mut create_token_tx, 5, 0)
             .unwrap();
-
         info!("New token mint successfully created!");
 
-        airdrop_lamports(
-            client.as_ref(),
-            &faucet_addr.unwrap(),
-            &token_owner_keypair,
-            total,
-        )?;
-
-        fund_keys(
+        /*fund_keys(
             client,
             &new_mint_keypair,
             funding_key,
@@ -989,7 +1012,7 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
             total,
             max_fee,
             lamports_per_account,
-        );
+        );*/
     }
 
     // 'generate_keypairs' generates extra keys to be able to have size-aligned funding batches for fund_keys.
@@ -1038,7 +1061,7 @@ fn initialize_mint(
 fn create_token_transaction<'a, T: Client>(
     client: &T,
     new_mint: &'a Keypair,
-    owner: &'a Keypair,
+    owner: &'a Pubkey,
     fee_payer: &'a Keypair,
     num_lamports: u64,
     num_tokens: u64,
@@ -1047,7 +1070,7 @@ fn create_token_transaction<'a, T: Client>(
     info!(
         "Creating token mint {}, owner: {}, fee_payer: {}",
         new_mint.pubkey(),
-        owner.pubkey(),
+        owner,
         fee_payer.pubkey()
     );
 
@@ -1064,7 +1087,7 @@ fn create_token_transaction<'a, T: Client>(
                 &to_this_pubkey(&spl_token_v1_0::id()),
                 &new_mint.pubkey(),
                 // Deposit all the tokens with the owner
-                Some(&owner.pubkey()),
+                Some(owner),
                 num_tokens,
                 decimals,
             )
@@ -1076,55 +1099,6 @@ fn create_token_transaction<'a, T: Client>(
     let (recent_blockhash, fee_calculator) = client.get_recent_blockhash()?;
     transaction.sign(&[fee_payer, new_mint], recent_blockhash);
     Ok(Some(transaction))
-}
-
-pub fn initialize_token_account_ix(
-    token_program_id: &Pubkey,
-    account_pubkey: &Pubkey,
-    mint_pubkey: &Pubkey,
-    owner_pubkey: &Pubkey,
-) -> std::result::Result<Instruction, ProgramError> {
-    let data = TokenInstruction::InitializeAccount.pack().unwrap();
-
-    let accounts = vec![
-        AccountMeta::new(*account_pubkey, false),
-        AccountMeta::new_readonly(*mint_pubkey, false),
-        AccountMeta::new_readonly(*owner_pubkey, false),
-    ];
-
-    Ok(Instruction {
-        program_id: *token_program_id,
-        accounts,
-        data,
-    })
-}
-
-fn create_token_account_ix(
-    owner: &Pubkey,
-    fee_payer: &Pubkey,
-    mint_pubkey: &Pubkey,
-    lamports: u64,
-    num_tokens: u64,
-    new_account: &Pubkey,
-) -> Vec<Instruction> {
-    println!("Creating account {}", new_account);
-
-    vec![
-        system_instruction::create_account(
-            &fee_payer,
-            &new_account,
-            lamports,
-            size_of::<Account>() as u64,
-            &to_this_pubkey(&spl_token_v1_0::id()),
-        ),
-        initialize_token_account_ix(
-            &to_this_pubkey(&spl_token_v1_0::id()),
-            &new_account,
-            &mint_pubkey,
-            &owner,
-        )
-        .unwrap(),
-    ]
 }
 
 fn ui_amount_to_amount(ui_amount: f64, decimals: u8) -> u64 {
@@ -1159,31 +1133,67 @@ fn transfer_tokens_ix(
     })
 }
 
-fn make_many_token_accounts<'a>(
-    from_keypair: &'a Keypair,
-    owner: &'a Keypair,
+fn initialize_token_account_ix(
+    token_program_id: &Pubkey,
+    account_pubkey: &Pubkey,
+    mint_pubkey: &Pubkey,
+    owner_pubkey: &Pubkey,
+) -> std::result::Result<Instruction, ProgramError> {
+    let data = TokenInstruction::InitializeAccount.pack().unwrap();
+
+    let accounts = vec![
+        AccountMeta::new(*account_pubkey, false),
+        AccountMeta::new_readonly(*mint_pubkey, false),
+        AccountMeta::new_readonly(*owner_pubkey, false),
+    ];
+
+    Ok(Instruction {
+        program_id: *token_program_id,
+        accounts,
+        data,
+    })
+}
+
+fn create_token_account_ix(
+    // fee payer system account
+    fee_payer: &Pubkey,
+    mint_pubkey: &Pubkey,
+    minimum_balance_for_rent_exemption: u64,
+) -> (Vec<Instruction>, Pubkey) {
+    println!("Creating token account {}", fee_payer);
+    let spl_token_id = to_this_pubkey(&spl_token_v1_0::id());
+    let seed = "token";
+    let derived_key = Pubkey::create_with_seed(fee_payer, seed, &spl_token_id).unwrap();
+    (
+        vec![
+            system_instruction::create_account_with_seed(
+                fee_payer,
+                &derived_key, // must match create_address_with_seed(base, seed, program_id)
+                fee_payer,
+                &seed,
+                minimum_balance_for_rent_exemption,
+                size_of::<Account>() as u64,
+                &spl_token_id,
+            ),
+            initialize_token_account_ix(&spl_token_id, &derived_key, &mint_pubkey, &fee_payer)
+                .unwrap(),
+        ],
+        derived_key,
+    )
+}
+
+fn create_token_account_transaction<'a>(
+    fee_payer_keypair: &'a Keypair,
     mint: &'a Keypair,
-    to_tokens: &[FundingDestinationInfo<'a>],
-) -> Vec<(&'a Keypair, &'a Keypair, Transaction)> {
-    to_tokens
-        .iter()
-        .map(|dest_info| {
-            let ix = create_token_account_ix(
-                &owner.pubkey(),
-                &from_keypair.pubkey(),
-                &mint.pubkey(),
-                dest_info.amount,
-                dest_info.amount,
-                &dest_info.dest.pubkey(),
-            );
-            let message = Message::new(&ix, Some(&from_keypair.pubkey()));
-            (
-                from_keypair,
-                dest_info.dest,
-                Transaction::new_unsigned(message),
-            )
-        })
-        .collect()
+    minimum_balance_for_rent_exemption: u64,
+) -> (Transaction, Pubkey) {
+    let (instructions, new_account_key) = create_token_account_ix(
+        &fee_payer_keypair.pubkey(),
+        &mint.pubkey(),
+        minimum_balance_for_rent_exemption,
+    );
+    let message = Message::new(&instructions, Some(&fee_payer_keypair.pubkey()));
+    (Transaction::new_unsigned(message), new_account_key)
 }
 
 fn transfer_many_tokens(
@@ -1224,7 +1234,7 @@ mod tests {
         create_token_transaction(
             &client,
             &Keypair::new(),
-            &Keypair::new(),
+            &Keypair::new().pubkey(),
             &genesis_keypair,
             10,
             10000,
