@@ -206,7 +206,7 @@ where
         .collect()
 }
 
-pub fn do_bench_tps<T>(client: Arc<T>, config: Config, gen_keypairs: Vec<Keypair>) -> u64
+pub fn do_bench_token<T>(client: Arc<T>, config: Config, gen_keypairs: Vec<Keypair>) -> u64
 where
     T: 'static + Client + Send + Sync,
 {
@@ -330,7 +330,7 @@ where
 fn metrics_submit_lamport_balance(lamport_balance: u64) {
     info!("Token balance: {}", lamport_balance);
     datapoint_info!(
-        "bench-tps-lamport_balance",
+        "bench-token-lamport_balance",
         ("balance", lamport_balance, i64)
     );
 }
@@ -388,7 +388,7 @@ fn generate_txs(
         blockhash,
     );
     datapoint_info!(
-        "bench-tps-generate_txs",
+        "bench-token-generate_txs",
         ("duration", duration_as_us(&duration), i64)
     );
 
@@ -494,7 +494,7 @@ fn do_tx_transfers<T: Client>(
                 tx_len as f32 / duration_as_s(&transfer_start.elapsed()),
             );
             datapoint_info!(
-                "bench-tps-do_tx_transfers",
+                "bench-token-do_tx_transfers",
                 ("duration", duration_as_us(&transfer_start.elapsed()), i64),
                 ("count", tx_len, i64)
             );
@@ -508,7 +508,10 @@ fn do_tx_transfers<T: Client>(
 fn verify_funding_transfer<T: Client>(client: &Arc<T>, tx: &Transaction, amount: u64) -> bool {
     for a in &tx.message().account_keys[1..] {
         match client.get_balance_with_commitment(a, CommitmentConfig::recent()) {
-            Ok(balance) => { println!("verifying: {} {} {}", a, balance, amount); return balance >= amount },
+            Ok(balance) => {
+                println!("verifying: {} {} {}", a, balance, amount);
+                return balance >= amount;
+            }
             Err(err) => error!("failed to get balance {:?}", err),
         }
     }
@@ -913,7 +916,7 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
     let (mut keypairs, extra) = generate_keypairs(funding_key, keypair_count as u64);
     info!("Get lamports...");
 
-    // Sample the first keypair, to prevent lamport loss on repeated solana-bench-tps executions
+    // Sample the first keypair, to prevent lamport loss on repeated solana-bench-token executions
     let first_key = keypairs[0].pubkey();
     let first_keypair_balance = client.get_balance(&first_key).unwrap_or(0);
 
@@ -922,16 +925,21 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
     let last_keypair_balance = client.get_balance(&last_key).unwrap_or(0);
 
     // Repeated runs will eat up keypair balances from transaction fees. In order to quickly
-    //   start another bench-tps run without re-funding all of the keypairs, check if the
+    //   start another bench-token run without re-funding all of the keypairs, check if the
     //   keypairs still have at least 80% of the expected funds. That should be enough to
     //   pay for the transaction fees in a new run.
     let enough_lamports = 8 * lamports_per_account / 10;
     if first_keypair_balance < enough_lamports || last_keypair_balance < enough_lamports {
+        let minimum_balance_for_rent_exemption =
+            client.get_minimum_balance_for_rent_exemption(size_of::<Mint>()).unwrap();
+
         let fee_rate_governor = client.get_fee_rate_governor().unwrap();
         let max_fee = fee_rate_governor.max_lamports_per_signature;
         let extra_fees = extra * max_fee;
         let total_keypairs = keypairs.len() as u64 + 1; // Add one for funding keypair
-        let total = lamports_per_account * total_keypairs + extra_fees;
+        let total = lamports_per_account * total_keypairs
+            + extra_fees
+            + minimum_balance_for_rent_exemption;
 
         let funding_key_balance = client.get_balance(&funding_key.pubkey()).unwrap_or(0);
         info!(
@@ -944,23 +952,31 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
         }
 
         let new_mint_keypair = Keypair::new();
+        let token_owner_keypair = Keypair::new();
+
         // Deploy new token mint
         let mut create_token_tx = create_token_transaction(
             &*client,
             &new_mint_keypair,
+            &token_owner_keypair,
             &funding_key,
-            &funding_key,
-            total,
+            minimum_balance_for_rent_exemption,
             total,
             NUM_DECIMALS,
         )
         .unwrap()
         .unwrap();
+
+        
+        info!("Sending create mint transaction");
         client
             .send_and_confirm_transaction(&[funding_key], &mut create_token_tx, 5, 0)
             .unwrap();
 
-        println!("New token mint successfully created!");
+        info!("New token mint successfully created!");
+
+        airdrop_lamports(client.as_ref(), &faucet_addr.unwrap(), &token_owner_keypair, total)?;
+        
         fund_keys(
             client,
             &new_mint_keypair,
@@ -991,7 +1007,6 @@ fn initialize_mint(
     token_program_id: &Pubkey,
     mint_pubkey: &Pubkey,
     account_pubkey: Option<&Pubkey>,
-    owner_pubkey: Option<&Pubkey>,
     amount: u64,
     decimals: u8,
 ) -> std::result::Result<Instruction, ProgramError> {
@@ -1005,14 +1020,6 @@ fn initialize_mint(
             Some(pubkey) => accounts.push(AccountMeta::new(*pubkey, false)),
             None => {
                 return Err(ProgramError::NotEnoughAccountKeys);
-            }
-        }
-    }
-    match owner_pubkey {
-        Some(pubkey) => accounts.push(AccountMeta::new_readonly(*pubkey, false)),
-        None => {
-            if amount == 0 {
-                panic!("OwnerRequiredIfNoInitialSupply");
             }
         }
     }
@@ -1033,7 +1040,7 @@ fn create_token_transaction<'a, T: Client>(
     num_tokens: u64,
     decimals: u8,
 ) -> CommmandResult {
-    println!("Creating token mint {}", new_mint.pubkey());
+    info!("Creating token mint {}, owner: {}, fee_payer: {}", new_mint.pubkey(), owner.pubkey(), fee_payer.pubkey());
 
     let mut transaction = Transaction::new_with_payer(
         &[
@@ -1047,8 +1054,7 @@ fn create_token_transaction<'a, T: Client>(
             initialize_mint(
                 &to_this_pubkey(&spl_token_v1_0::id()),
                 &new_mint.pubkey(),
-                // Deposit all the tokens with the fee payer
-                Some(&fee_payer.pubkey()),
+                // Deposit all the tokens with the owner
                 Some(&owner.pubkey()),
                 num_tokens,
                 decimals,
@@ -1059,7 +1065,7 @@ fn create_token_transaction<'a, T: Client>(
     );
 
     let (recent_blockhash, fee_calculator) = client.get_recent_blockhash()?;
-    transaction.sign(&[fee_payer, owner, new_mint], recent_blockhash);
+    transaction.sign(&[fee_payer, new_mint], recent_blockhash);
     Ok(Some(transaction))
 }
 
@@ -1202,7 +1208,23 @@ mod tests {
     use solana_sdk::genesis_config::create_genesis_config;
 
     #[test]
-    fn test_bench_tps_bank_client() {
+    fn test_create_token() {
+        let (genesis_config, genesis_keypair) = create_genesis_config(10_000);
+        let bank = Bank::new(&genesis_config);
+        let client = BankClient::new(bank);
+        create_token_transaction(
+            &client,
+            &Keypair::new(),
+            &Keypair::new(),
+            &genesis_keypair,
+            10,
+            10000,
+            NUM_DECIMALS,
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_bench_token_bank_client() {
         let (genesis_config, id) = create_genesis_config(10_000);
         let bank = Bank::new(&genesis_config);
         let client = Arc::new(BankClient::new(bank));
@@ -1217,11 +1239,11 @@ mod tests {
             generate_and_fund_keypairs(client.clone(), None, &config.id, keypair_count, 20)
                 .unwrap();
 
-        do_bench_tps(client, config, keypairs);
+        do_bench_token(client, config, keypairs);
     }
 
     #[test]
-    fn test_bench_tps_fund_keys() {
+    fn test_bench_token_fund_keys() {
         let (genesis_config, id) = create_genesis_config(10_000);
         let bank = Bank::new(&genesis_config);
         let client = Arc::new(BankClient::new(bank));
@@ -1242,7 +1264,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bench_tps_fund_keys_with_fees() {
+    fn test_bench_token_fund_keys_with_fees() {
         let (mut genesis_config, id) = create_genesis_config(10_000);
         let fee_rate_governor = FeeRateGovernor::new(11, 0);
         genesis_config.fee_rate_governor = fee_rate_governor;

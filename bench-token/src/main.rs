@@ -1,5 +1,5 @@
 use log::*;
-use solana_bench_token::bench::{do_bench_tps, generate_and_fund_keypairs, generate_keypairs};
+use solana_bench_token::bench::{do_bench_token, generate_and_fund_keypairs, generate_keypairs};
 use solana_bench_token::cli;
 use solana_core::gossip_service::{discover_cluster, get_client, get_multi_client};
 use solana_genesis::Base64Account;
@@ -111,7 +111,7 @@ fn main() {
             );
             exit(1);
         }
-        // Sort keypairs so that do_bench_tps() uses the same subset of accounts for each run.
+        // Sort keypairs so that do_bench_token() uses the same subset of accounts for each run.
         // This prevents the amount of storage needed for bench-tps accounts from creeping up
         // across multiple runs.
         keypairs.sort_by_key(|x| x.pubkey().to_string());
@@ -130,5 +130,5 @@ fn main() {
         })
     };
 
-    do_bench_tps(client, cli_config, keypairs);
+    do_bench_token(client, cli_config, keypairs);
 }
