@@ -19,7 +19,7 @@ use crate::{
     pubkey::Pubkey,
     signature::{Keypair, Signature},
     signers::Signers,
-    transaction,
+    transaction::{self, Transaction},
     transport::Result,
 };
 
@@ -28,6 +28,15 @@ pub trait Client: SyncClient + AsyncClient {
 }
 
 pub trait SyncClient {
+    /// Retry sending a signed Transaction
+    fn send_and_confirm_transaction<T: Signers>(
+        &self,
+        keypairs: &T,
+        transaction: &mut Transaction,
+        tries: usize,
+        pending_confirmations: usize,
+    ) -> Result<Signature>;
+
     /// Create a transaction from the given message, and send it to the
     /// server, retrying as-needed.
     fn send_and_confirm_message<T: Signers>(
@@ -84,6 +93,8 @@ pub trait SyncClient {
         &self,
         commitment_config: CommitmentConfig,
     ) -> Result<(Hash, FeeCalculator, Slot)>;
+
+    fn get_minimum_balance_for_rent_exemption(&self, len: usize) -> Result<u64>;
 
     /// Get `Some(FeeCalculator)` associated with `blockhash` if it is still in
     /// the BlockhashQueue`, otherwise `None`

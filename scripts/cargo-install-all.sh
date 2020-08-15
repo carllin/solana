@@ -78,6 +78,7 @@ else
     solana
     solana-bench-exchange
     solana-bench-tps
+    solana-bench-token
     solana-dos
     solana-faucet
     solana-gossip

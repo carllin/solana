@@ -3377,6 +3377,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-bench-token"
+version = "1.4.0"
+dependencies = [
+ "bincode",
+ "clap",
+ "log 0.4.8",
+ "rayon",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "serial_test_derive",
+ "solana-clap-utils",
+ "solana-client",
+ "solana-core",
+ "solana-faucet",
+ "solana-genesis",
+ "solana-local-cluster",
+ "solana-logger 1.4.0",
+ "solana-measure",
+ "solana-metrics",
+ "solana-net-utils",
+ "solana-runtime",
+ "solana-sdk 1.4.0",
+ "solana-version",
+ "spl-token",
+]
+
+[[package]]
 name = "solana-bench-tps"
 version = "1.4.0"
 dependencies = [

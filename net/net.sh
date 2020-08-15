@@ -393,7 +393,7 @@ startClient() {
 startClients() {
   for ((i=0; i < "$numClients" && i < "$numClientsRequested"; i++)) do
     if [[ $i -lt "$numBenchTpsClients" ]]; then
-      startClient "${clientIpList[$i]}" "solana-bench-tps" "$i"
+      startClient "${clientIpList[$i]}" "solana-bench-token" "$i"
     elif [[ $i -lt $((numBenchTpsClients + numBenchExchangeClients)) ]]; then
       startClient "${clientIpList[$i]}" "solana-bench-exchange" $((i-numBenchTpsClients))
     else

@@ -203,57 +203,6 @@ impl ThinClient {
         self.send_and_confirm_transaction(&[keypair], transaction, tries, 0)
     }
 
-    /// Retry sending a signed Transaction to the server for processing
-    pub fn send_and_confirm_transaction<T: Signers>(
-        &self,
-        keypairs: &T,
-        transaction: &mut Transaction,
-        tries: usize,
-        pending_confirmations: usize,
-    ) -> TransportResult<Signature> {
-        for x in 0..tries {
-            let now = Instant::now();
-            let mut buf = vec![0; serialized_size(&transaction).unwrap() as usize];
-            let mut wr = std::io::Cursor::new(&mut buf[..]);
-            let mut num_confirmed = 0;
-            let mut wait_time = MAX_PROCESSING_AGE;
-            serialize_into(&mut wr, &transaction)
-                .expect("serialize Transaction in pub fn transfer_signed");
-            // resend the same transaction until the transaction has no chance of succeeding
-            while now.elapsed().as_secs() < wait_time as u64 {
-                if num_confirmed == 0 {
-                    // Send the transaction if there has been no confirmation (e.g. the first time)
-                    self.transactions_socket
-                        .send_to(&buf[..], &self.tpu_addr())?;
-                }
-
-                if let Ok(confirmed_blocks) = self.poll_for_signature_confirmation(
-                    &transaction.signatures[0],
-                    pending_confirmations,
-                ) {
-                    num_confirmed = confirmed_blocks;
-                    if confirmed_blocks >= pending_confirmations {
-                        return Ok(transaction.signatures[0]);
-                    }
-                    // Since network has seen the transaction, wait longer to receive
-                    // all pending confirmations. Resending the transaction could result into
-                    // extra transaction fees
-                    wait_time = wait_time.max(
-                        MAX_PROCESSING_AGE * pending_confirmations.saturating_sub(num_confirmed),
-                    );
-                }
-            }
-            info!("{} tries failed transfer to {}", x, self.tpu_addr());
-            let (blockhash, _fee_calculator) = self.get_recent_blockhash()?;
-            transaction.sign(keypairs, blockhash);
-        }
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("retry_transfer failed in {} retries", tries),
-        )
-        .into())
-    }
-
     pub fn poll_get_balance(&self, pubkey: &Pubkey) -> TransportResult<u64> {
         self.poll_get_balance_with_commitment(pubkey, CommitmentConfig::default())
     }
@@ -320,6 +269,57 @@ impl Client for ThinClient {
 }
 
 impl SyncClient for ThinClient {
+    /// Retry sending a signed Transaction to the server for processing
+    fn send_and_confirm_transaction<T: Signers>(
+        &self,
+        keypairs: &T,
+        transaction: &mut Transaction,
+        tries: usize,
+        pending_confirmations: usize,
+    ) -> TransportResult<Signature> {
+        for x in 0..tries {
+            let now = Instant::now();
+            let mut buf = vec![0; serialized_size(&transaction).unwrap() as usize];
+            let mut wr = std::io::Cursor::new(&mut buf[..]);
+            let mut num_confirmed = 0;
+            let mut wait_time = MAX_PROCESSING_AGE;
+            serialize_into(&mut wr, &transaction)
+                .expect("serialize Transaction in pub fn transfer_signed");
+            // resend the same transaction until the transaction has no chance of succeeding
+            while now.elapsed().as_secs() < wait_time as u64 {
+                if num_confirmed == 0 {
+                    // Send the transaction if there has been no confirmation (e.g. the first time)
+                    self.transactions_socket
+                        .send_to(&buf[..], &self.tpu_addr())?;
+                }
+
+                if let Ok(confirmed_blocks) = self.poll_for_signature_confirmation(
+                    &transaction.signatures[0],
+                    pending_confirmations,
+                ) {
+                    num_confirmed = confirmed_blocks;
+                    if confirmed_blocks >= pending_confirmations {
+                        return Ok(transaction.signatures[0]);
+                    }
+                    // Since network has seen the transaction, wait longer to receive
+                    // all pending confirmations. Resending the transaction could result into
+                    // extra transaction fees
+                    wait_time = wait_time.max(
+                        MAX_PROCESSING_AGE * pending_confirmations.saturating_sub(num_confirmed),
+                    );
+                }
+            }
+            info!("{} tries failed transfer to {}", x, self.tpu_addr());
+            let (blockhash, _fee_calculator) = self.get_recent_blockhash()?;
+            transaction.sign(keypairs, blockhash);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("retry_transfer failed in {} retries", tries),
+        )
+        .into())
+    }
+
     fn send_and_confirm_message<T: Signers>(
         &self,
         keypairs: &T,
@@ -407,6 +407,22 @@ impl SyncClient for ThinClient {
             Ok(Response { value, .. }) => {
                 self.optimizer.report(index, duration_as_ms(&now.elapsed()));
                 Ok((value.0, value.1, value.2))
+            }
+            Err(e) => {
+                self.optimizer.report(index, std::u64::MAX);
+                Err(e.into())
+            }
+        }
+    }
+
+    fn get_minimum_balance_for_rent_exemption(&self, data_len: usize) -> TransportResult<u64> {
+        let index = self.optimizer.experiment();
+        let now = Instant::now();
+        let response = self.rpc_clients[index].get_minimum_balance_for_rent_exemption(data_len);
+        match response {
+            Ok(rent) => {
+                self.optimizer.report(index, duration_as_ms(&now.elapsed()));
+                Ok(rent)
             }
             Err(e) => {
                 self.optimizer.report(index, std::u64::MAX);

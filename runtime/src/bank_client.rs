@@ -79,6 +79,18 @@ impl AsyncClient for BankClient {
 }
 
 impl SyncClient for BankClient {
+    fn send_and_confirm_transaction<T: Signers>(
+        &self,
+        keypairs: &T,
+        transaction: &mut Transaction,
+        tries: usize,
+        pending_confirmations: usize,
+    ) -> Result<Signature> {
+        let blockhash = self.bank.last_blockhash();
+        self.bank.process_transaction(&transaction)?;
+        Ok(transaction.signatures.get(0).cloned().unwrap_or_default())
+    }
+
     fn send_and_confirm_message<T: Signers>(
         &self,
         keypairs: &T,
@@ -154,6 +166,10 @@ impl SyncClient for BankClient {
             .get_blockhash_last_valid_slot(&blockhash)
             .expect("bank blockhash queue should contain blockhash");
         Ok((blockhash, fee_calculator, last_valid_slot))
+    }
+
+    fn get_minimum_balance_for_rent_exemption(&self, data_len: usize) -> Result<u64> {
+        Ok(self.bank.get_minimum_balance_for_rent_exemption(data_len))
     }
 
     fn get_fee_calculator_for_blockhash(&self, blockhash: &Hash) -> Result<Option<FeeCalculator>> {

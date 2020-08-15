@@ -51,6 +51,7 @@ else
 fi
 
 solana_bench_tps=$(solana_program bench-tps)
+solana_bench_token=$(solana_program bench-token)
 solana_faucet=$(solana_program faucet)
 solana_validator=$(solana_program validator)
 solana_validator_cuda="$solana_validator --cuda"
