@@ -508,7 +508,7 @@ fn do_tx_transfers<T: Client>(
 fn verify_funding_transfer<T: Client>(client: &Arc<T>, tx: &Transaction, amount: u64) -> bool {
     for a in &tx.message().account_keys[1..] {
         match client.get_balance_with_commitment(a, CommitmentConfig::recent()) {
-            Ok(balance) => return balance >= amount,
+            Ok(balance) => { println!("verifying: {} {} {}", a, balance, amount); return balance >= amount },
             Err(err) => error!("failed to get balance {:?}", err),
         }
     }
