@@ -1008,6 +1008,45 @@ fn initialize_mint(
     })
 }
 
+fn command_create_token<'a, T: Client>(
+    client: &T,
+    owner: &'a Keypair,
+    fee_payer: &'a Keypair,
+    num_lamports: u64,
+    num_tokens: u64,
+    decimals: u8,
+) -> CommmandResult {
+    let new_mint = Keypair::new();
+    println!("Creating token {}", new_mint.pubkey());
+
+    let mut transaction = Transaction::new_with_payer(
+        &[
+            system_instruction::create_account(
+                &fee_payer.pubkey(),
+                &new_mint.pubkey(),
+                num_lamports,
+                size_of::<Mint>() as u64,
+                &to_this_pubkey(&spl_token_v1_0::id()),
+            ),
+            initialize_mint(
+                &to_this_pubkey(&spl_token_v1_0::id()),
+                &new_mint.pubkey(),
+                // Deposit all the tokens with the fee payer
+                Some(&fee_payer.pubkey()),
+                Some(&owner.pubkey()),
+                num_tokens,
+                decimals,
+            )
+            .unwrap(),
+        ],
+        Some(&fee_payer.pubkey()),
+    );
+
+    let (recent_blockhash, fee_calculator) = client.get_recent_blockhash()?;
+    transaction.sign(&[&fee_payer, &owner, &new_mint], recent_blockhash);
+    Ok(Some(transaction))
+}
+
 pub fn initialize_token_account_ix(
     token_program_id: &Pubkey,
     account_pubkey: &Pubkey,
@@ -1057,43 +1096,6 @@ fn create_token_account_ix(
     ]
 }
 
-fn command_create_token<'a, T: Client>(
-    client: &T,
-    owner: &'a Keypair,
-    fee_payer: &'a Keypair,
-    num_lamports: u64,
-    num_tokens: u64,
-    decimals: u8,
-) -> CommmandResult {
-    let token = Keypair::new();
-    println!("Creating token {}", token.pubkey());
-
-    let mut transaction = Transaction::new_with_payer(
-        &[
-            system_instruction::create_account(
-                &fee_payer.pubkey(),
-                &token.pubkey(),
-                num_lamports,
-                size_of::<Mint>() as u64,
-                &to_this_pubkey(&spl_token_v1_0::id()),
-            ),
-            initialize_mint(
-                &to_this_pubkey(&spl_token_v1_0::id()),
-                &token.pubkey(),
-                None,
-                Some(&owner.pubkey()),
-                num_tokens,
-                decimals,
-            )
-            .unwrap(),
-        ],
-        Some(&fee_payer.pubkey()),
-    );
-
-    let (recent_blockhash, fee_calculator) = client.get_recent_blockhash()?;
-    transaction.sign(&[&fee_payer, &owner, &token], recent_blockhash);
-    Ok(Some(transaction))
-}
 fn ui_amount_to_amount(ui_amount: f64, decimals: u8) -> u64 {
     (ui_amount * 10_usize.pow(decimals as u32) as f64) as u64
 }

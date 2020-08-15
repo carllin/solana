@@ -1,5 +1,5 @@
 use log::*;
-use solana_bench_token::bench::*;
+use solana_bench_token::bench::{do_bench_tps, generate_and_fund_keypairs, generate_keypairs};
 use solana_bench_token::cli;
 use solana_core::gossip_service::{discover_cluster, get_client, get_multi_client};
 use solana_genesis::Base64Account;
