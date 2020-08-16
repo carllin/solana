@@ -20,7 +20,7 @@ use solana_sdk::{
     program_error::ProgramError,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
-    system_instruction, system_transaction,
+    system_instruction,
     timing::{duration_as_ms, duration_as_s, duration_as_us, timestamp},
     transaction::Transaction,
 };
@@ -342,7 +342,7 @@ fn generate_system_txs(
         .par_iter()
         .map(|(from, to)| {
             (
-                system_transaction::transfer(from, &to.pubkey(), 1, *blockhash),
+                transfer_tokens_transaction(from, &to.pubkey(), 1, *blockhash),
                 timestamp(),
             )
         })
@@ -664,7 +664,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
             let too_many_failures = &too_many_failures;
             let verified_set: HashSet<Pubkey> = self
                 .par_iter()
-                .filter_map(move |(k, new_keypair, tx)| {
+                .filter_map(move |(k, _, tx)| {
                     if too_many_failures.load(Ordering::Relaxed) {
                         return None;
                     }
@@ -1132,9 +1132,7 @@ fn create_token_transaction<'a>(
     Ok(Some(transaction))
 }
 
-/// Creates a `Transfer` instruction.
 fn transfer_tokens_ix(
-    token_program_id: &Pubkey,
     source_system_account: &Pubkey,
     destination_system_account: &Pubkey,
     amount: u64,
@@ -1153,10 +1151,27 @@ fn transfer_tokens_ix(
     accounts.push(AccountMeta::new_readonly(*source_system_account, true));
 
     Instruction {
-        program_id: *token_program_id,
+        program_id: to_this_pubkey(&spl_token_v1_0::id()),
         accounts,
         data,
     }
+}
+
+fn transfer_tokens_transaction(
+    source_system_keypair: &Keypair,
+    destination_system_pubkey: &Pubkey,
+    amount: u64,
+    recent_blockhash: Hash,
+) -> Transaction {
+    let message = Message::new(
+        &[transfer_tokens_ix(
+            &source_system_keypair.pubkey(),
+            destination_system_pubkey,
+            amount,
+        )],
+        Some(&source_system_keypair.pubkey()),
+    );
+    Transaction::new(&[source_system_keypair], message, recent_blockhash)
 }
 
 fn initialize_token_account_ix(
@@ -1239,7 +1254,6 @@ fn create_system_and_token_account_tx(
         ),
     );
     ixs.push(transfer_tokens_ix(
-        &to_this_pubkey(&spl_token_v1_0::id()),
         &fee_payer,
         &new_account_pubkey,
         num_lamports,
