@@ -534,23 +534,32 @@ trait FundingTransactions<'a> {
     fn fund(
         &mut self,
         client: &Arc<ThinClient>,
-        to_fund: &[(&'a Keypair, Vec<(Pubkey, u64)>)],
+        to_fund: &[(&'a Keypair, Vec<(&'a Keypair, u64)>)],
         to_lamports: u64,
+        mint_pubkey: &Pubkey,
+        minimum_balance_for_rent_exemption: u64,
     );
-    fn make(&mut self, to_fund: &[(&'a Keypair, Vec<(Pubkey, u64)>)]);
+    fn make(
+        &mut self,
+        to_fund: &[(&'a Keypair, Vec<(&'a Keypair, u64)>)],
+        mint_pubkey: &Pubkey,
+        minimum_balance_for_rent_exemption: u64,
+    );
     fn sign(&mut self, blockhash: Hash);
     fn send<T: Client>(&self, client: &Arc<T>);
     fn verify(&mut self, client: &Arc<ThinClient>, to_lamports: u64);
 }
 
-impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
+impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)> {
     fn fund(
         &mut self,
         client: &Arc<ThinClient>,
-        to_fund: &[(&'a Keypair, Vec<(Pubkey, u64)>)],
+        to_fund: &[(&'a Keypair, Vec<(&'a Keypair, u64)>)],
         to_lamports: u64,
+        mint_pubkey: &Pubkey,
+        minimum_balance_for_rent_exemption: u64,
     ) {
-        self.make(to_fund);
+        self.make(to_fund, mint_pubkey, minimum_balance_for_rent_exemption);
 
         let mut tries = 0;
         while !self.is_empty() {
@@ -575,7 +584,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
             // Sleep a few slots to allow transactions to process
             sleep(Duration::from_secs(1));
 
-            self.verify(&client, to_lamports);
+            self.verify(&client, to_lamports - minimum_balance_for_rent_exemption);
 
             // retry anything that seems to have dropped through cracks
             //  again since these txs are all or nothing, they're fine to
@@ -585,14 +594,31 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
         info!("transferred");
     }
 
-    fn make(&mut self, to_fund: &[(&'a Keypair, Vec<(Pubkey, u64)>)]) {
+    fn make(
+        &mut self,
+        to_fund: &[(&'a Keypair, Vec<(&'a Keypair, u64)>)],
+        mint_pubkey: &Pubkey,
+        minimum_balance_for_rent_exemption: u64,
+    ) {
         let mut make_txs = Measure::start("make_txs");
-        let to_fund_txs: Vec<(&Keypair, Transaction)> = to_fund
+        let to_fund_txs: Vec<(&Keypair, &Keypair, Transaction)> = to_fund
             .par_iter()
-            .map(|(k, t)| {
-                let instructions = system_instruction::transfer_many(&k.pubkey(), &t);
-                let message = Message::new(&instructions, Some(&k.pubkey()));
-                (*k, Transaction::new_unsigned(message))
+            .flat_map(|(k, t)| {
+                t.iter()
+                    .map(|(new_keypair, num_lamports)| {
+                        (
+                            *k,
+                            *new_keypair,
+                            create_system_and_token_account_tx(
+                                &k.pubkey(),
+                                mint_pubkey,
+                                &new_keypair.pubkey(),
+                                *num_lamports,
+                                minimum_balance_for_rent_exemption,
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect();
         make_txs.stop();
@@ -606,8 +632,8 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
 
     fn sign(&mut self, blockhash: Hash) {
         let mut sign_txs = Measure::start("sign_txs");
-        self.par_iter_mut().for_each(|(k, tx)| {
-            tx.sign(&[*k], blockhash);
+        self.par_iter_mut().for_each(|(k, new_keypair, tx)| {
+            tx.sign(&[*k, new_keypair], blockhash);
         });
         sign_txs.stop();
         debug!("sign {} txs: {}us", self.len(), sign_txs.as_us());
@@ -615,7 +641,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
 
     fn send<T: Client>(&self, client: &Arc<T>) {
         let mut send_txs = Measure::start("send_txs");
-        self.iter().for_each(|(_, tx)| {
+        self.iter().for_each(|(_, _, tx)| {
             client.async_send_transaction(tx.clone()).expect("transfer");
         });
         send_txs.stop();
@@ -638,7 +664,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
             let too_many_failures = &too_many_failures;
             let verified_set: HashSet<Pubkey> = self
                 .par_iter()
-                .filter_map(move |(k, tx)| {
+                .filter_map(move |(k, new_keypair, tx)| {
                     if too_many_failures.load(Ordering::Relaxed) {
                         return None;
                     }
@@ -676,7 +702,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
                 })
                 .collect();
 
-            self.retain(|(k, _)| !verified_set.contains(&k.pubkey()));
+            self.retain(|(k, _, _)| !verified_set.contains(&k.pubkey()));
             if self.is_empty() {
                 break;
             }
@@ -694,11 +720,6 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
     }
 }
 
-struct FundingDestinationInfo<'a> {
-    dest: &'a Keypair,
-    amount: u64,
-}
-
 /// fund the dests keys by spending all of the source keys into MAX_SPENDS_PER_TX
 /// on every iteration.  This allows us to replay the transfers because the source is either empty,
 /// or full
@@ -709,6 +730,8 @@ pub fn fund_keys(
     total: u64,
     max_fee: u64,
     lamports_per_account: u64,
+    mint_pubkey: &Pubkey,
+    minimum_balance_for_rent_exemption: u64,
 ) {
     let mut funded: Vec<&Keypair> = vec![source];
     let mut funded_funds = total;
@@ -716,25 +739,27 @@ pub fn fund_keys(
     while !not_funded.is_empty() {
         // Build to fund list and prepare funding sources for next iteration
         let mut new_funded: Vec<&Keypair> = vec![];
-        let mut to_fund: Vec<(&Keypair, Vec<(Pubkey, u64)>)> = vec![];
+        let mut to_fund: Vec<(&Keypair, Vec<(&Keypair, u64)>)> = vec![];
         let to_lamports = (funded_funds - lamports_per_account - max_fee) / MAX_SPENDS_PER_TX;
         for f in funded {
             let start = not_funded.len() - MAX_SPENDS_PER_TX as usize;
             let dests: Vec<_> = not_funded.drain(start..).collect();
-            let spends: Vec<_> = dests.iter().map(|k| (k.pubkey(), to_lamports)).collect();
+            let spends: Vec<_> = dests.iter().map(|k| (*k, to_lamports)).collect();
             to_fund.push((f, spends));
             new_funded.extend(dests.into_iter());
         }
 
-        // try to transfer a "few" at a time with recent blockhash
+        // try to transfer a "few" at a time with recent blockhassh
         //  assume 4MB network buffers, and 512 byte packets
         const FUND_CHUNK_LEN: usize = 4 * 1024 * 1024 / 512;
 
         to_fund.chunks(FUND_CHUNK_LEN).for_each(|chunk| {
-            Vec::<(&Keypair, Transaction)>::with_capacity(chunk.len()).fund(
+            Vec::<(&Keypair, &Keypair, Transaction)>::with_capacity(chunk.len()).fund(
                 &client,
                 chunk,
                 to_lamports,
+                mint_pubkey,
+                minimum_balance_for_rent_exemption,
             );
         });
 
@@ -1009,15 +1034,16 @@ pub fn generate_and_fund_keypairs(
         }
         info!("Issued token balance verified!");
 
-        /*fund_keys(
+        fund_keys(
             client,
-            &new_mint_keypair,
             funding_key,
             &keypairs,
             total,
             max_fee,
             lamports_per_account,
-        );*/
+            &new_mint_keypair.pubkey(),
+            token_account_minimum_balance_for_rent_exemption,
+        );
     }
 
     // 'generate_keypairs' generates extra keys to be able to have size-aligned funding batches for fund_keys.
@@ -1101,41 +1127,36 @@ fn create_token_transaction<'a>(
         Some(&fee_payer.pubkey()),
     );
 
-    let (recent_blockhash, fee_calculator) = client.get_recent_blockhash()?;
+    let (recent_blockhash, _) = client.get_recent_blockhash()?;
     transaction.sign(&[fee_payer, new_mint], recent_blockhash);
     Ok(Some(transaction))
 }
 
-fn ui_amount_to_amount(ui_amount: f64, decimals: u8) -> u64 {
-    (ui_amount * 10_usize.pow(decimals as u32) as f64) as u64
-}
 /// Creates a `Transfer` instruction.
 fn transfer_tokens_ix(
     token_program_id: &Pubkey,
-    source_pubkey: &Pubkey,
-    destination_pubkey: &Pubkey,
-    authority_pubkey: &Pubkey,
-    signer_pubkeys: &[&Pubkey],
+    source_system_account: &Pubkey,
+    destination_system_account: &Pubkey,
     amount: u64,
-) -> std::result::Result<Instruction, ProgramError> {
+) -> Instruction {
     let data = TokenInstruction::Transfer { amount }.pack().unwrap();
 
-    let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
-    accounts.push(AccountMeta::new(*source_pubkey, false));
-    accounts.push(AccountMeta::new(*destination_pubkey, false));
-    accounts.push(AccountMeta::new_readonly(
-        *authority_pubkey,
-        signer_pubkeys.is_empty(),
+    let mut accounts = Vec::with_capacity(3);
+    accounts.push(AccountMeta::new(
+        token_account_from_system_account(source_system_account),
+        false,
     ));
-    for signer_pubkey in signer_pubkeys.iter() {
-        accounts.push(AccountMeta::new(**signer_pubkey, true));
-    }
+    accounts.push(AccountMeta::new(
+        token_account_from_system_account(destination_system_account),
+        false,
+    ));
+    accounts.push(AccountMeta::new_readonly(*source_system_account, true));
 
-    Ok(Instruction {
+    Instruction {
         program_id: *token_program_id,
         accounts,
         data,
-    })
+    }
 }
 
 fn initialize_token_account_ix(
@@ -1197,25 +1218,34 @@ fn create_token_account_transaction<'a>(
     Transaction::new_unsigned(message)
 }
 
-fn transfer_many_tokens(
-    from_pubkey: &Pubkey,
-    owner: &Pubkey,
-    to_tokens: &[FundingDestinationInfo],
-) -> Vec<Instruction> {
-    to_tokens
-        .iter()
-        .map(|dest_info| {
-            transfer_tokens_ix(
-                &to_this_pubkey(&spl_token_v1_0::id()),
-                from_pubkey,
-                &dest_info.dest.pubkey(),
-                owner,
-                &[],
-                dest_info.amount,
-            )
-            .unwrap()
-        })
-        .collect()
+fn create_system_and_token_account_tx(
+    fee_payer: &Pubkey,
+    mint_pubkey: &Pubkey,
+    new_account_pubkey: &Pubkey,
+    num_lamports: u64,
+    minimum_balance_for_rent_exemption: u64,
+) -> Transaction {
+    assert!(num_lamports > minimum_balance_for_rent_exemption);
+    let mut ixs = vec![
+        // Create a system account with `num_lamports`
+        system_instruction::transfer(fee_payer, new_account_pubkey, num_lamports),
+    ];
+    ixs.extend(
+        // Now make a new token account, paid for and owned by `new_account_pubkey`
+        create_token_account_ix(
+            new_account_pubkey,
+            mint_pubkey,
+            minimum_balance_for_rent_exemption,
+        ),
+    );
+    ixs.push(transfer_tokens_ix(
+        &to_this_pubkey(&spl_token_v1_0::id()),
+        &fee_payer,
+        &new_account_pubkey,
+        num_lamports,
+    ));
+    let message = Message::new(&ixs, Some(&fee_payer));
+    Transaction::new_unsigned(message)
 }
 
 fn token_account_from_system_account(system_account: &Pubkey) -> Pubkey {
