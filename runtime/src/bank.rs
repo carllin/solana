@@ -1993,7 +1993,6 @@ impl Bank {
         tx_count: u64,
         signature_count: u64,
     ) -> TransactionResults {
-        info!("processed txs: {:?}, results: {:?}", txs, executed);
         assert!(
             !self.is_frozen(),
             "commit_transactions() working on a frozen bank!"

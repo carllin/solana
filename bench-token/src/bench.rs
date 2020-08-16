@@ -1,13 +1,16 @@
 use crate::cli::Config;
 use log::*;
 use rayon::prelude::*;
-use solana_client::perf_utils::{sample_txs, SampleStats};
+use solana_client::{
+    perf_utils::{sample_txs, SampleStats},
+    thin_client::ThinClient,
+};
 use solana_core::gen_keys::GenKeys;
 use solana_faucet::faucet::request_airdrop_transaction;
 use solana_measure::measure::Measure;
 use solana_metrics::{self, datapoint_info};
 use solana_sdk::{
-    client::Client,
+    client::{AsyncClient, Client, SyncClient},
     clock::{DEFAULT_TICKS_PER_SECOND, DEFAULT_TICKS_PER_SLOT, MAX_PROCESSING_AGE},
     commitment_config::CommitmentConfig,
     fee_calculator::FeeCalculator,
@@ -56,7 +59,7 @@ pub type Result<T> = std::result::Result<T, BenchTpsError>;
 
 pub type SharedTransactions = Arc<RwLock<VecDeque<Vec<(Transaction, u64)>>>>;
 
-fn get_recent_blockhash<T: Client>(client: &T) -> (Hash, FeeCalculator) {
+fn get_recent_blockhash(client: &ThinClient) -> (Hash, FeeCalculator) {
     loop {
         match client.get_recent_blockhash_with_commitment(CommitmentConfig::recent()) {
             Ok((blockhash, fee_calculator, _last_valid_slot)) => {
@@ -70,10 +73,7 @@ fn get_recent_blockhash<T: Client>(client: &T) -> (Hash, FeeCalculator) {
     }
 }
 
-fn wait_for_target_slots_per_epoch<T>(target_slots_per_epoch: u64, client: &Arc<T>)
-where
-    T: 'static + Client + Send + Sync,
-{
+fn wait_for_target_slots_per_epoch(target_slots_per_epoch: u64, client: &Arc<ThinClient>) {
     if target_slots_per_epoch != 0 {
         info!(
             "Waiting until epochs are {} slots long..",
@@ -95,15 +95,12 @@ where
     }
 }
 
-fn create_sampler_thread<T>(
-    client: &Arc<T>,
+fn create_sampler_thread(
+    client: &Arc<ThinClient>,
     exit_signal: &Arc<AtomicBool>,
     sample_period: u64,
     maxes: &Arc<RwLock<Vec<(String, SampleStats)>>>,
-) -> JoinHandle<()>
-where
-    T: 'static + Client + Send + Sync,
-{
+) -> JoinHandle<()> {
     info!("Sampling TPS every {} second...", sample_period);
     let exit_signal = exit_signal.clone();
     let maxes = maxes.clone();
@@ -170,18 +167,15 @@ fn generate_chunked_transfers(
     }
 }
 
-fn create_sender_threads<T>(
-    client: &Arc<T>,
+fn create_sender_threads(
+    client: &Arc<ThinClient>,
     shared_txs: &SharedTransactions,
     thread_batch_sleep_ms: usize,
     total_tx_sent_count: &Arc<AtomicUsize>,
     threads: usize,
     exit_signal: &Arc<AtomicBool>,
     shared_tx_active_thread_count: &Arc<AtomicIsize>,
-) -> Vec<JoinHandle<()>>
-where
-    T: 'static + Client + Send + Sync,
-{
+) -> Vec<JoinHandle<()>> {
     (0..threads)
         .map(|_| {
             let exit_signal = exit_signal.clone();
@@ -206,10 +200,7 @@ where
         .collect()
 }
 
-pub fn do_bench_token<T>(client: Arc<T>, config: Config, gen_keypairs: Vec<Keypair>) -> u64
-where
-    T: 'static + Client + Send + Sync,
-{
+pub fn do_bench_token(client: Arc<ThinClient>, config: Config, gen_keypairs: Vec<Keypair>) -> u64 {
     let Config {
         id,
         threads,
@@ -402,10 +393,10 @@ fn generate_txs(
     }
 }
 
-fn poll_blockhash<T: Client>(
+fn poll_blockhash(
     exit_signal: &Arc<AtomicBool>,
     blockhash: &Arc<RwLock<Hash>>,
-    client: &Arc<T>,
+    client: &Arc<ThinClient>,
     id: &Pubkey,
 ) {
     let mut blockhash_last_updated = Instant::now();
@@ -444,13 +435,13 @@ fn poll_blockhash<T: Client>(
     }
 }
 
-fn do_tx_transfers<T: Client>(
+fn do_tx_transfers(
     exit_signal: &Arc<AtomicBool>,
     shared_txs: &SharedTransactions,
     shared_tx_thread_count: &Arc<AtomicIsize>,
     total_tx_sent_count: &Arc<AtomicUsize>,
     thread_batch_sleep_ms: usize,
-    client: &Arc<T>,
+    client: &Arc<ThinClient>,
 ) {
     loop {
         if thread_batch_sleep_ms > 0 {
@@ -505,7 +496,7 @@ fn do_tx_transfers<T: Client>(
     }
 }
 
-fn verify_balance<T: Client>(client: &Arc<T>, key: &Pubkey, amount: u64) -> Option<bool> {
+fn verify_balance(client: &Arc<ThinClient>, key: &Pubkey, amount: u64) -> Option<bool> {
     match client.get_balance_with_commitment(key, CommitmentConfig::recent()) {
         Ok(balance) => {
             println!("verifying: {} {} {}", key, balance, amount);
@@ -516,7 +507,7 @@ fn verify_balance<T: Client>(client: &Arc<T>, key: &Pubkey, amount: u64) -> Opti
     None
 }
 
-fn verify_funding_transfer<T: Client>(client: &Arc<T>, tx: &Transaction, amount: u64) -> bool {
+fn verify_funding_transfer(client: &Arc<ThinClient>, tx: &Transaction, amount: u64) -> bool {
     for a in &tx.message().account_keys[1..] {
         if let Some(res) = verify_balance(client, a, amount) {
             return res;
@@ -526,9 +517,9 @@ fn verify_funding_transfer<T: Client>(client: &Arc<T>, tx: &Transaction, amount:
 }
 
 /*trait FundingTransactions<'a> {
-    fn fund<T: 'static + Client + Send + Sync>(
+    fn fund(
         &mut self,
-        client: &Arc<T>,
+        client: &Arc<ThinClient>,
         owner: &'a Keypair,
         mint_keypair: &'a Keypair,
         to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
@@ -541,14 +532,14 @@ fn verify_funding_transfer<T: Client>(client: &Arc<T>, tx: &Transaction, amount:
         to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
     );
     fn sign(&mut self, blockhash: Hash, owner: &Keypair);
-    fn send<T: Client>(&self, client: &Arc<T>);
-    fn verify<T: 'static + Client + Send + Sync>(&mut self, client: &Arc<T>, to_lamports: u64);
+    fn send(&self, client: &Arc<T>);
+    fn verify(&mut self, client: &Arc<ThinClient>, to_lamports: u64);
 }
 
 impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)> {
-    fn fund<T: 'static + Client + Send + Sync>(
+    fn fund(
         &mut self,
-        client: &Arc<T>,
+        client: &Arc<ThinClient>,
         owner: &'a Keypair,
         mint_keypair: &'a Keypair,
         to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
@@ -620,7 +611,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
         debug!("sign {} txs: {}us", self.len(), sign_txs.as_us());
     }
 
-    fn send<T: Client>(&self, client: &Arc<T>) {
+    fn send(&self, client: &Arc<T>) {
         let mut send_txs = Measure::start("send_txs");
         self.iter().for_each(|(_, _, tx)| {
             client.async_send_transaction(tx.clone()).expect("transfer");
@@ -629,7 +620,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
         debug!("send {} txs: {}us", self.len(), send_txs.as_us());
     }
 
-    fn verify<T: 'static + Client + Send + Sync>(&mut self, client: &Arc<T>, to_lamports: u64) {
+    fn verify(&mut self, client: &Arc<ThinClient>, to_lamports: u64) {
         let starting_txs = self.len();
         let verified_txs = Arc::new(AtomicUsize::new(0));
         let too_many_failures = Arc::new(AtomicBool::new(false));
@@ -709,8 +700,8 @@ struct FundingDestinationInfo<'a> {
 /// fund the dests keys by spending all of the source keys into MAX_SPENDS_PER_TX
 /// on every iteration.  This allows us to replay the transfers because the source is either empty,
 /// or full
-/*pub fn fund_keys<T: 'static + Client + Send + Sync>(
-    client: Arc<T>,
+/*pub fn fund_keys(
+    client: Arc<ThinClient>,
     source: &Keypair,
     mint_keypair: &Keypair,
     dests: &[Keypair],
@@ -760,8 +751,8 @@ struct FundingDestinationInfo<'a> {
     }
 }*/
 
-pub fn airdrop_lamports<T: Client>(
-    client: &T,
+pub fn airdrop_lamports(
+    client: &ThinClient,
     faucet_addr: &SocketAddr,
     id: &Keypair,
     desired_balance: u64,
@@ -912,8 +903,8 @@ pub fn generate_keypairs(seed_keypair: &Keypair, count: u64) -> (Vec<Keypair>, u
     (rnd.gen_n_keypairs(total_keys), extra)
 }
 
-pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
-    client: Arc<T>,
+pub fn generate_and_fund_keypairs(
+    client: Arc<ThinClient>,
     faucet_addr: Option<SocketAddr>,
     funding_key: &Keypair,
     keypair_count: usize,
@@ -1002,6 +993,25 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
         client
             .send_and_confirm_transaction(&[funding_key], &mut create_token_tx, 5, 0)
             .unwrap();
+        if !verify_balance(
+            &client,
+            &new_mint_keypair.pubkey(),
+            mint_minimum_balance_for_rent_exemption,
+        )
+        .unwrap()
+        {
+            panic!("Could not create mint");
+        }
+
+        let token_balance = client
+            .get_token_account_balance(&new_account_pubkey)
+            .unwrap();
+        if token_balance.ui_amount as u64 != total {
+            panic!(
+                "Mint did not issue correct number of tokens {:?}, expected: {}",
+                token_balance, total
+            );
+        }
         info!("New token mint successfully created!");
 
         /*fund_keys(
@@ -1058,8 +1068,8 @@ fn initialize_mint(
     })
 }
 
-fn create_token_transaction<'a, T: Client>(
-    client: &T,
+fn create_token_transaction<'a>(
+    client: &ThinClient,
     new_mint: &'a Keypair,
     owner: &'a Pubkey,
     fee_payer: &'a Keypair,
