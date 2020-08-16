@@ -262,10 +262,15 @@ impl ThinClient {
             .map_err(|e| e.into())
     }
 
-    pub fn get_token_account_balance(&self, pubkey: &Pubkey) -> TransportResult<UiTokenAmount> {
+    pub fn get_token_account_balance_with_commitment(
+        &self,
+        pubkey: &Pubkey,
+        commitment_config: CommitmentConfig,
+    ) -> TransportResult<UiTokenAmount> {
         self.rpc_client()
-            .get_token_account_balance(pubkey)
+            .get_token_account_balance_with_commitment(pubkey, commitment_config)
             .map_err(|e| e.into())
+            .map(|r| r.value)
     }
 }
 

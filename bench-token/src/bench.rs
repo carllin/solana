@@ -43,7 +43,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const NUM_DECIMALS: u8 = 5;
+const NUM_DECIMALS: u8 = 0;
 // The point at which transactions become "too old", in seconds.
 const MAX_TX_QUEUE_AGE: u64 =
     MAX_PROCESSING_AGE as u64 * DEFAULT_TICKS_PER_SLOT / DEFAULT_TICKS_PER_SECOND;
@@ -496,10 +496,24 @@ fn do_tx_transfers(
     }
 }
 
+fn verify_token_balance(client: &Arc<ThinClient>, key: &Pubkey, amount: u64) -> Option<bool> {
+    match client.get_token_account_balance_with_commitment(&key, CommitmentConfig::recent()) {
+        Ok(token_balance) => {
+            info!(
+                "verifying token balance: {} {:?} {}",
+                key, token_balance, amount
+            );
+            return Some(token_balance.ui_amount as u64 == amount);
+        }
+        Err(err) => error!("failed to get token balance {:?}", err),
+    }
+    None
+}
+
 fn verify_balance(client: &Arc<ThinClient>, key: &Pubkey, amount: u64) -> Option<bool> {
     match client.get_balance_with_commitment(key, CommitmentConfig::recent()) {
         Ok(balance) => {
-            println!("verifying: {} {} {}", key, balance, amount);
+            info!("verifying balance: {} {} {}", key, balance, amount);
             return Some(balance >= amount);
         }
         Err(err) => error!("failed to get balance {:?}", err),
@@ -1003,16 +1017,12 @@ pub fn generate_and_fund_keypairs(
             panic!("Could not create mint");
         }
 
-        let token_balance = client
-            .get_token_account_balance(&new_account_pubkey)
-            .unwrap();
-        if token_balance.ui_amount as u64 != total {
-            panic!(
-                "Mint did not issue correct number of tokens {:?}, expected: {}",
-                token_balance, total
-            );
-        }
         info!("New token mint successfully created!");
+
+        if !verify_token_balance(&client, &new_account_pubkey, total).unwrap() {
+            panic!("Mint issued wrong balance");
+        }
+        info!("Issued token balance verified!");
 
         /*fund_keys(
             client,
