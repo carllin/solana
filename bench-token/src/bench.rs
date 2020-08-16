@@ -48,7 +48,7 @@ const NUM_DECIMALS: u8 = 0;
 const MAX_TX_QUEUE_AGE: u64 =
     MAX_PROCESSING_AGE as u64 * DEFAULT_TICKS_PER_SLOT / DEFAULT_TICKS_PER_SECOND;
 
-pub const MAX_SPENDS_PER_TX: u64 = 1;
+pub const MAX_SPENDS_PER_TX: u64 = 2;
 
 #[derive(Debug)]
 pub enum BenchTokenError {
@@ -550,7 +550,7 @@ trait FundingTransactions<'a> {
     fn verify(&mut self, client: &Arc<ThinClient>, to_lamports: u64);
 }
 
-impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)> {
+impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Vec<&'a Keypair>, Transaction)> {
     fn fund(
         &mut self,
         client: &Arc<ThinClient>,
@@ -601,24 +601,19 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
         minimum_balance_for_rent_exemption: u64,
     ) {
         let mut make_txs = Measure::start("make_txs");
-        let to_fund_txs: Vec<(&Keypair, &Keypair, Transaction)> = to_fund
+        let to_fund_txs: Vec<(&Keypair, Vec<&'a Keypair>, Transaction)> = to_fund
             .par_iter()
-            .flat_map(|(k, t)| {
-                t.iter()
-                    .map(|(new_keypair, num_lamports)| {
-                        (
-                            *k,
-                            *new_keypair,
-                            create_system_and_token_account_tx(
-                                &k.pubkey(),
-                                mint_pubkey,
-                                &new_keypair.pubkey(),
-                                *num_lamports,
-                                minimum_balance_for_rent_exemption,
-                            ),
-                        )
-                    })
-                    .collect::<Vec<_>>()
+            .map(|(k, destinations)| {
+                (
+                    *k,
+                    destinations.iter().map(|x| x.0).collect::<Vec<&Keypair>>(),
+                    create_many_system_and_token_accounts_tx(
+                        &k.pubkey(),
+                        destinations,
+                        mint_pubkey,
+                        minimum_balance_for_rent_exemption,
+                    ),
+                )
             })
             .collect();
         make_txs.stop();
@@ -632,9 +627,13 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
 
     fn sign(&mut self, blockhash: Hash) {
         let mut sign_txs = Measure::start("sign_txs");
-        self.par_iter_mut().for_each(|(k, new_keypair, tx)| {
-            tx.sign(&[*k, new_keypair], blockhash);
-        });
+        self.par_iter_mut()
+            .for_each(|(k, new_account_keypairs, tx)| {
+                let keys: Vec<_> = std::iter::once(*k)
+                    .chain(new_account_keypairs.iter_mut().map(|k| *k))
+                    .collect();
+                tx.sign(&keys, blockhash);
+            });
         sign_txs.stop();
         debug!("sign {} txs: {}us", self.len(), sign_txs.as_us());
     }
@@ -754,7 +753,7 @@ pub fn fund_keys(
         const FUND_CHUNK_LEN: usize = 4 * 1024 * 1024 / 512;
 
         to_fund.chunks(FUND_CHUNK_LEN).for_each(|chunk| {
-            Vec::<(&Keypair, &Keypair, Transaction)>::with_capacity(chunk.len()).fund(
+            Vec::<(&Keypair, Vec<&Keypair>, Transaction)>::with_capacity(chunk.len()).fund(
                 &client,
                 chunk,
                 to_lamports,
@@ -961,7 +960,7 @@ pub fn generate_and_fund_keypairs(
 
         let fee_rate_governor = client.get_fee_rate_governor().unwrap();
         let max_fee = fee_rate_governor.max_lamports_per_signature;
-        let extra_fees = extra * max_fee * 2;
+        let extra_fees = extra * max_fee;
         let total_keypairs = keypairs.len() as u64 + 1; // Add one for funding keypair
         let total = (lamports_per_account + token_account_minimum_balance_for_rent_exemption)
             * total_keypairs
@@ -982,6 +981,7 @@ pub fn generate_and_fund_keypairs(
         let new_mint_keypair = Keypair::new();
         let mut create_account_tx = create_token_account_transaction(
             &funding_key,
+            &funding_key.pubkey(),
             &new_mint_keypair,
             token_account_minimum_balance_for_rent_exemption,
         );
@@ -1201,37 +1201,48 @@ fn initialize_token_account_ix(
     })
 }
 
+// Create new token account funded by `fee_payer`, and owned
+// by `new_account_pubkey`
 fn create_token_account_ix(
     // fee payer system account
     fee_payer: &Pubkey,
+    new_account_pubkey: &Pubkey,
     mint_pubkey: &Pubkey,
     minimum_balance_for_rent_exemption: u64,
 ) -> Vec<Instruction> {
     println!("Creating token account {}", fee_payer);
     let spl_token_id = to_this_pubkey(&spl_token_v1_0::id());
     let seed = "token";
-    let derived_key = token_account_from_system_account(fee_payer);
+    let derived_key = token_account_from_system_account(new_account_pubkey);
     vec![
         system_instruction::create_account_with_seed(
             fee_payer,
-            &derived_key, // must match create_address_with_seed(base, seed, program_id)
-            fee_payer,
+            &derived_key,
+            new_account_pubkey,
             &seed,
             minimum_balance_for_rent_exemption,
             size_of::<Account>() as u64,
             &spl_token_id,
         ),
-        initialize_token_account_ix(&spl_token_id, &derived_key, &mint_pubkey, &fee_payer).unwrap(),
+        initialize_token_account_ix(
+            &spl_token_id,
+            &derived_key,
+            &mint_pubkey,
+            &new_account_pubkey,
+        )
+        .unwrap(),
     ]
 }
 
 fn create_token_account_transaction<'a>(
     fee_payer_keypair: &'a Keypair,
+    new_account_pubkey: &'a Pubkey,
     mint: &'a Keypair,
     minimum_balance_for_rent_exemption: u64,
 ) -> Transaction {
     let instructions = create_token_account_ix(
         &fee_payer_keypair.pubkey(),
+        new_account_pubkey,
         &mint.pubkey(),
         minimum_balance_for_rent_exemption,
     );
@@ -1239,21 +1250,23 @@ fn create_token_account_transaction<'a>(
     Transaction::new_unsigned(message)
 }
 
-fn create_system_and_token_account_tx(
+fn create_system_and_token_account_ixs(
     fee_payer: &Pubkey,
     mint_pubkey: &Pubkey,
     new_account_pubkey: &Pubkey,
     num_lamports: u64,
+    num_tokens: u64,
     minimum_balance_for_rent_exemption: u64,
-) -> Transaction {
+) -> Vec<Instruction> {
     assert!(num_lamports > minimum_balance_for_rent_exemption);
     let mut ixs = vec![
         // Create a system account with `num_lamports`
         system_instruction::transfer(fee_payer, new_account_pubkey, num_lamports),
     ];
     ixs.extend(
-        // Now make a new token account, paid for and owned by `new_account_pubkey`
+        // Now make a new token account, owned by `new_account_pubkey`
         create_token_account_ix(
+            fee_payer,
             new_account_pubkey,
             mint_pubkey,
             minimum_balance_for_rent_exemption,
@@ -1262,8 +1275,33 @@ fn create_system_and_token_account_tx(
     ixs.push(transfer_tokens_ix(
         &fee_payer,
         &new_account_pubkey,
-        num_lamports,
+        num_tokens,
     ));
+    ixs
+}
+
+fn create_many_system_and_token_accounts_tx(
+    fee_payer: &Pubkey,
+    new_accounts: &[(&Keypair, u64)],
+    mint_pubkey: &Pubkey,
+    minimum_balance_for_rent_exemption: u64,
+) -> Transaction {
+    let ixs: Vec<Instruction> = new_accounts
+        .iter()
+        .flat_map(|(new_account_keypair, num_lamports)| {
+            create_system_and_token_account_ixs(
+                fee_payer,
+                mint_pubkey,
+                &new_account_keypair.pubkey(),
+                // transfer equivalent number of tokens and lamports
+                // to new account
+                *num_lamports,
+                *num_lamports,
+                minimum_balance_for_rent_exemption,
+            )
+        })
+        .collect();
+
     let message = Message::new(&ixs, Some(&fee_payer));
     Transaction::new_unsigned(message)
 }
@@ -1274,7 +1312,7 @@ fn token_account_from_system_account(system_account: &Pubkey) -> Pubkey {
     Pubkey::create_with_seed(system_account, seed, &spl_token_id).unwrap()
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod tests {
     use super::*;
     use solana_runtime::bank::Bank;
@@ -1357,4 +1395,4 @@ mod tests {
             assert_eq!(client.get_balance(&kp.pubkey()).unwrap(), lamports);
         }
     }
-}
+}*/
