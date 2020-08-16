@@ -953,9 +953,15 @@ pub fn generate_and_fund_keypairs(
             .get_minimum_balance_for_rent_exemption(size_of::<Account>())
             .unwrap();
 
+        info!(
+            "minimum for mint: {} account: {}",
+            mint_minimum_balance_for_rent_exemption,
+            token_account_minimum_balance_for_rent_exemption
+        );
+
         let fee_rate_governor = client.get_fee_rate_governor().unwrap();
         let max_fee = fee_rate_governor.max_lamports_per_signature;
-        let extra_fees = extra * max_fee;
+        let extra_fees = extra * max_fee * 2;
         let total_keypairs = keypairs.len() as u64 + 1; // Add one for funding keypair
         let total = (lamports_per_account + token_account_minimum_balance_for_rent_exemption)
             * total_keypairs
