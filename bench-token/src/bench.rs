@@ -739,7 +739,8 @@ pub fn fund_keys(
         // Build to fund list and prepare funding sources for next iteration
         let mut new_funded: Vec<&Keypair> = vec![];
         let mut to_fund: Vec<(&Keypair, Vec<(&Keypair, u64)>)> = vec![];
-        let to_lamports = (funded_funds - lamports_per_account - max_fee) / MAX_SPENDS_PER_TX;
+        let to_lamports = (funded_funds - lamports_per_account - max_fee * (MAX_SPENDS_PER_TX + 1))
+            / MAX_SPENDS_PER_TX;
         for f in funded {
             let start = not_funded.len() - MAX_SPENDS_PER_TX as usize;
             let dests: Vec<_> = not_funded.drain(start..).collect();
@@ -917,7 +918,10 @@ pub fn generate_keypairs(seed_keypair: &Keypair, count: u64) -> (Vec<Keypair>, u
         delta *= MAX_SPENDS_PER_TX;
         total_keys += delta;
     }
-    (rnd.gen_n_keypairs(total_keys), extra)
+    (
+        rnd.gen_n_keypairs(total_keys),
+        extra * (MAX_SPENDS_PER_TX + 1),
+    )
 }
 
 pub fn generate_and_fund_keypairs(
