@@ -48,7 +48,7 @@ const NUM_DECIMALS: u8 = 0;
 const MAX_TX_QUEUE_AGE: u64 =
     MAX_PROCESSING_AGE as u64 * DEFAULT_TICKS_PER_SLOT / DEFAULT_TICKS_PER_SECOND;
 
-pub const MAX_SPENDS_PER_TX: u64 = 4;
+pub const MAX_SPENDS_PER_TX: u64 = 1;
 
 #[derive(Debug)]
 pub enum BenchTokenError {
