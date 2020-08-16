@@ -51,11 +51,11 @@ const MAX_TX_QUEUE_AGE: u64 =
 pub const MAX_SPENDS_PER_TX: u64 = 4;
 
 #[derive(Debug)]
-pub enum BenchTpsError {
+pub enum BenchTokenError {
     AirdropFailure,
 }
 
-pub type Result<T> = std::result::Result<T, BenchTpsError>;
+pub type Result<T> = std::result::Result<T, BenchTokenError>;
 
 pub type SharedTransactions = Arc<RwLock<VecDeque<Vec<(Transaction, u64)>>>>;
 
@@ -530,36 +530,27 @@ fn verify_funding_transfer(client: &Arc<ThinClient>, tx: &Transaction, amount: u
     false
 }
 
-/*trait FundingTransactions<'a> {
+trait FundingTransactions<'a> {
     fn fund(
         &mut self,
         client: &Arc<ThinClient>,
-        owner: &'a Keypair,
-        mint_keypair: &'a Keypair,
-        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
+        to_fund: &[(&'a Keypair, Vec<(Pubkey, u64)>)],
         to_lamports: u64,
     );
-    fn make(
-        &mut self,
-        owner: &'a Keypair,
-        mint_keypair: &'a Keypair,
-        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
-    );
-    fn sign(&mut self, blockhash: Hash, owner: &Keypair);
-    fn send(&self, client: &Arc<T>);
+    fn make(&mut self, to_fund: &[(&'a Keypair, Vec<(Pubkey, u64)>)]);
+    fn sign(&mut self, blockhash: Hash);
+    fn send<T: Client>(&self, client: &Arc<T>);
     fn verify(&mut self, client: &Arc<ThinClient>, to_lamports: u64);
 }
 
-impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)> {
+impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Transaction)> {
     fn fund(
         &mut self,
         client: &Arc<ThinClient>,
-        owner: &'a Keypair,
-        mint_keypair: &'a Keypair,
-        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
+        to_fund: &[(&'a Keypair, Vec<(Pubkey, u64)>)],
         to_lamports: u64,
     ) {
-        self.make(owner, mint_keypair, to_fund);
+        self.make(to_fund);
 
         let mut tries = 0;
         while !self.is_empty() {
@@ -578,7 +569,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
             let (blockhash, _fee_calculator) = get_recent_blockhash(client.as_ref());
 
             // re-sign retained to_fund_txes with updated blockhash
-            self.sign(blockhash, owner);
+            self.sign(blockhash);
             self.send(&client);
 
             // Sleep a few slots to allow transactions to process
@@ -594,17 +585,14 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
         info!("transferred");
     }
 
-    fn make(
-        &mut self,
-        owner: &'a Keypair,
-        mint_keypair: &'a Keypair,
-        to_fund: &[(&'a Keypair, Vec<FundingDestinationInfo<'a>>)],
-    ) {
+    fn make(&mut self, to_fund: &[(&'a Keypair, Vec<(Pubkey, u64)>)]) {
         let mut make_txs = Measure::start("make_txs");
-        let to_fund_txs: Vec<(&'a Keypair, &'a Keypair, Transaction)> = to_fund
+        let to_fund_txs: Vec<(&Keypair, Transaction)> = to_fund
             .par_iter()
-            .flat_map(|(from_keypair, dest_infos)| {
-                make_many_token_accounts(*from_keypair, owner, mint_keypair, minimum_balance_for_rent_exemption, &dest_infos)
+            .map(|(k, t)| {
+                let instructions = system_instruction::transfer_many(&k.pubkey(), &t);
+                let message = Message::new(&instructions, Some(&k.pubkey()));
+                (*k, Transaction::new_unsigned(message))
             })
             .collect();
         make_txs.stop();
@@ -616,18 +604,18 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
         self.extend(to_fund_txs);
     }
 
-    fn sign(&mut self, blockhash: Hash, owner: &Keypair) {
+    fn sign(&mut self, blockhash: Hash) {
         let mut sign_txs = Measure::start("sign_txs");
-        self.par_iter_mut().for_each(|(from, new_account, tx)| {
-            tx.sign(&[*from, new_account, owner], blockhash);
+        self.par_iter_mut().for_each(|(k, tx)| {
+            tx.sign(&[*k], blockhash);
         });
         sign_txs.stop();
         debug!("sign {} txs: {}us", self.len(), sign_txs.as_us());
     }
 
-    fn send(&self, client: &Arc<T>) {
+    fn send<T: Client>(&self, client: &Arc<T>) {
         let mut send_txs = Measure::start("send_txs");
-        self.iter().for_each(|(_, _, tx)| {
+        self.iter().for_each(|(_, tx)| {
             client.async_send_transaction(tx.clone()).expect("transfer");
         });
         send_txs.stop();
@@ -650,7 +638,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
             let too_many_failures = &too_many_failures;
             let verified_set: HashSet<Pubkey> = self
                 .par_iter()
-                .filter_map(move |(k, _, tx)| {
+                .filter_map(move |(k, tx)| {
                     if too_many_failures.load(Ordering::Relaxed) {
                         return None;
                     }
@@ -688,7 +676,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
                 })
                 .collect();
 
-            self.retain(|(k, _, _)| !verified_set.contains(&k.pubkey()));
+            self.retain(|(k, _)| !verified_set.contains(&k.pubkey()));
             if self.is_empty() {
                 break;
             }
@@ -704,7 +692,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, &'a Keypair, Transaction)
             sleep(Duration::from_millis(100));
         }
     }
-}*/
+}
 
 struct FundingDestinationInfo<'a> {
     dest: &'a Keypair,
@@ -714,10 +702,9 @@ struct FundingDestinationInfo<'a> {
 /// fund the dests keys by spending all of the source keys into MAX_SPENDS_PER_TX
 /// on every iteration.  This allows us to replay the transfers because the source is either empty,
 /// or full
-/*pub fn fund_keys(
+pub fn fund_keys(
     client: Arc<ThinClient>,
     source: &Keypair,
-    mint_keypair: &Keypair,
     dests: &[Keypair],
     total: u64,
     max_fee: u64,
@@ -729,18 +716,12 @@ struct FundingDestinationInfo<'a> {
     while !not_funded.is_empty() {
         // Build to fund list and prepare funding sources for next iteration
         let mut new_funded: Vec<&Keypair> = vec![];
-        let mut to_fund: Vec<(&Keypair, Vec<FundingDestinationInfo>)> = vec![];
+        let mut to_fund: Vec<(&Keypair, Vec<(Pubkey, u64)>)> = vec![];
         let to_lamports = (funded_funds - lamports_per_account - max_fee) / MAX_SPENDS_PER_TX;
         for f in funded {
             let start = not_funded.len() - MAX_SPENDS_PER_TX as usize;
             let dests: Vec<_> = not_funded.drain(start..).collect();
-            let spends: Vec<_> = dests
-                .iter()
-                .map(|k| FundingDestinationInfo {
-                    dest: k,
-                    amount: to_lamports,
-                })
-                .collect();
+            let spends: Vec<_> = dests.iter().map(|k| (k.pubkey(), to_lamports)).collect();
             to_fund.push((f, spends));
             new_funded.extend(dests.into_iter());
         }
@@ -750,10 +731,8 @@ struct FundingDestinationInfo<'a> {
         const FUND_CHUNK_LEN: usize = 4 * 1024 * 1024 / 512;
 
         to_fund.chunks(FUND_CHUNK_LEN).for_each(|chunk| {
-            Vec::<(&Keypair, &Keypair, Transaction)>::with_capacity(chunk.len()).fund(
+            Vec::<(&Keypair, Transaction)>::with_capacity(chunk.len()).fund(
                 &client,
-                source,
-                mint_keypair,
                 chunk,
                 to_lamports,
             );
@@ -763,7 +742,7 @@ struct FundingDestinationInfo<'a> {
         funded = new_funded;
         funded_funds = to_lamports;
     }
-}*/
+}
 
 pub fn airdrop_lamports(
     client: &ThinClient,
@@ -828,7 +807,7 @@ pub fn airdrop_lamports(
                 current_balance,
                 starting_balance
             );
-            return Err(BenchTpsError::AirdropFailure);
+            return Err(BenchTokenError::AirdropFailure);
         }
     }
     Ok(())
@@ -970,7 +949,7 @@ pub fn generate_and_fund_keypairs(
 
         // Make a token account for holding all the tokens
         let new_mint_keypair = Keypair::new();
-        let (mut create_account_tx, new_account_pubkey) = create_token_account_transaction(
+        let mut create_account_tx = create_token_account_transaction(
             &funding_key,
             &new_mint_keypair,
             token_account_minimum_balance_for_rent_exemption,
@@ -981,7 +960,7 @@ pub fn generate_and_fund_keypairs(
             .unwrap();
         if !verify_balance(
             &client,
-            &new_account_pubkey,
+            &token_account_from_system_account(&funding_key.pubkey()),
             token_account_minimum_balance_for_rent_exemption,
         )
         .unwrap()
@@ -995,7 +974,7 @@ pub fn generate_and_fund_keypairs(
         let mut create_token_tx = create_token_transaction(
             &*client,
             &new_mint_keypair,
-            &new_account_pubkey,
+            &token_account_from_system_account(&funding_key.pubkey()),
             &funding_key,
             mint_minimum_balance_for_rent_exemption,
             total,
@@ -1019,7 +998,13 @@ pub fn generate_and_fund_keypairs(
 
         info!("New token mint successfully created!");
 
-        if !verify_token_balance(&client, &new_account_pubkey, total).unwrap() {
+        if !verify_token_balance(
+            &client,
+            &token_account_from_system_account(&funding_key.pubkey()),
+            total,
+        )
+        .unwrap()
+        {
             panic!("Mint issued wrong balance");
         }
         info!("Issued token balance verified!");
@@ -1179,41 +1164,37 @@ fn create_token_account_ix(
     fee_payer: &Pubkey,
     mint_pubkey: &Pubkey,
     minimum_balance_for_rent_exemption: u64,
-) -> (Vec<Instruction>, Pubkey) {
+) -> Vec<Instruction> {
     println!("Creating token account {}", fee_payer);
     let spl_token_id = to_this_pubkey(&spl_token_v1_0::id());
     let seed = "token";
-    let derived_key = Pubkey::create_with_seed(fee_payer, seed, &spl_token_id).unwrap();
-    (
-        vec![
-            system_instruction::create_account_with_seed(
-                fee_payer,
-                &derived_key, // must match create_address_with_seed(base, seed, program_id)
-                fee_payer,
-                &seed,
-                minimum_balance_for_rent_exemption,
-                size_of::<Account>() as u64,
-                &spl_token_id,
-            ),
-            initialize_token_account_ix(&spl_token_id, &derived_key, &mint_pubkey, &fee_payer)
-                .unwrap(),
-        ],
-        derived_key,
-    )
+    let derived_key = token_account_from_system_account(fee_payer);
+    vec![
+        system_instruction::create_account_with_seed(
+            fee_payer,
+            &derived_key, // must match create_address_with_seed(base, seed, program_id)
+            fee_payer,
+            &seed,
+            minimum_balance_for_rent_exemption,
+            size_of::<Account>() as u64,
+            &spl_token_id,
+        ),
+        initialize_token_account_ix(&spl_token_id, &derived_key, &mint_pubkey, &fee_payer).unwrap(),
+    ]
 }
 
 fn create_token_account_transaction<'a>(
     fee_payer_keypair: &'a Keypair,
     mint: &'a Keypair,
     minimum_balance_for_rent_exemption: u64,
-) -> (Transaction, Pubkey) {
-    let (instructions, new_account_key) = create_token_account_ix(
+) -> Transaction {
+    let instructions = create_token_account_ix(
         &fee_payer_keypair.pubkey(),
         &mint.pubkey(),
         minimum_balance_for_rent_exemption,
     );
     let message = Message::new(&instructions, Some(&fee_payer_keypair.pubkey()));
-    (Transaction::new_unsigned(message), new_account_key)
+    Transaction::new_unsigned(message)
 }
 
 fn transfer_many_tokens(
@@ -1235,6 +1216,12 @@ fn transfer_many_tokens(
             .unwrap()
         })
         .collect()
+}
+
+fn token_account_from_system_account(system_account: &Pubkey) -> Pubkey {
+    let seed = "token";
+    let spl_token_id = to_this_pubkey(&spl_token_v1_0::id());
+    Pubkey::create_with_seed(system_account, seed, &spl_token_id).unwrap()
 }
 
 #[cfg(test)]
