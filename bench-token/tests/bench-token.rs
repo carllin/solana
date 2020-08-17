@@ -1,5 +1,5 @@
 use serial_test_derive::serial;
-use solana_bench_token::bench::{do_bench_tps, generate_and_fund_keypairs};
+use solana_bench_token::bench::{do_bench_token, generate_and_fund_keypairs};
 use solana_bench_token::cli::Config;
 use solana_client::thin_client::create_client;
 use solana_core::cluster_info::VALIDATOR_PORT_RANGE;
@@ -10,7 +10,7 @@ use solana_sdk::signature::{Keypair, Signer};
 use std::sync::{mpsc::channel, Arc};
 use std::time::Duration;
 
-fn test_bench_tps_local_cluster(config: Config) {
+fn test_bench_token_local_cluster(config: Config) {
     let native_instruction_processors = vec![];
 
     solana_logger::setup();
@@ -51,7 +51,7 @@ fn test_bench_tps_local_cluster(config: Config) {
     )
     .unwrap();
 
-    let _total = do_bench_tps(client, config, keypairs);
+    let _total = do_bench_token(client, config, keypairs);
 
     #[cfg(not(debug_assertions))]
     assert!(_total > 100);
@@ -59,10 +59,10 @@ fn test_bench_tps_local_cluster(config: Config) {
 
 #[test]
 #[serial]
-fn test_bench_tps_local_cluster_solana() {
+fn test_bench_token_local_cluster_solana() {
     let mut config = Config::default();
     config.tx_count = 100;
     config.duration = Duration::from_secs(10);
 
-    test_bench_tps_local_cluster(config);
+    test_bench_token_local_cluster(config);
 }

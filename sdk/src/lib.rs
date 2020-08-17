@@ -45,6 +45,7 @@ pub mod system_instruction;
 pub mod system_program;
 pub mod sysvar;
 pub mod timing;
+pub mod token;
 
 /// Convenience macro to declare a static public key and functions to interact with it
 ///

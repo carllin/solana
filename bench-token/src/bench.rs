@@ -1,16 +1,13 @@
 use crate::cli::Config;
 use log::*;
 use rayon::prelude::*;
-use solana_client::{
-    perf_utils::{sample_txs, SampleStats},
-    thin_client::ThinClient,
-};
+use solana_client::perf_utils::{sample_txs, SampleStats};
 use solana_core::gen_keys::GenKeys;
 use solana_faucet::faucet::request_airdrop_transaction;
 use solana_measure::measure::Measure;
 use solana_metrics::{self, datapoint_info};
 use solana_sdk::{
-    client::{AsyncClient, Client, SyncClient},
+    client::Client,
     clock::{DEFAULT_TICKS_PER_SECOND, DEFAULT_TICKS_PER_SLOT, MAX_PROCESSING_AGE},
     commitment_config::CommitmentConfig,
     fee_calculator::FeeCalculator,
@@ -27,7 +24,7 @@ use solana_sdk::{
 use spl_token_v1_0::{
     self,
     instruction::*,
-    state::{Account, Mint},
+    state::{Account as TokenAccount, Mint},
 };
 use std::mem::size_of;
 use std::{
@@ -59,7 +56,7 @@ pub type Result<T> = std::result::Result<T, BenchTokenError>;
 
 pub type SharedTransactions = Arc<RwLock<VecDeque<Vec<(Transaction, u64)>>>>;
 
-fn get_recent_blockhash(client: &ThinClient) -> (Hash, FeeCalculator) {
+fn get_recent_blockhash<T: Client>(client: &T) -> (Hash, FeeCalculator) {
     loop {
         match client.get_recent_blockhash_with_commitment(CommitmentConfig::recent()) {
             Ok((blockhash, fee_calculator, _last_valid_slot)) => {
@@ -73,7 +70,10 @@ fn get_recent_blockhash(client: &ThinClient) -> (Hash, FeeCalculator) {
     }
 }
 
-fn wait_for_target_slots_per_epoch(target_slots_per_epoch: u64, client: &Arc<ThinClient>) {
+fn wait_for_target_slots_per_epoch<T>(target_slots_per_epoch: u64, client: &Arc<T>)
+where
+    T: 'static + Client + Send + Sync,
+{
     if target_slots_per_epoch != 0 {
         info!(
             "Waiting until epochs are {} slots long..",
@@ -95,12 +95,15 @@ fn wait_for_target_slots_per_epoch(target_slots_per_epoch: u64, client: &Arc<Thi
     }
 }
 
-fn create_sampler_thread(
-    client: &Arc<ThinClient>,
+fn create_sampler_thread<T>(
+    client: &Arc<T>,
     exit_signal: &Arc<AtomicBool>,
     sample_period: u64,
     maxes: &Arc<RwLock<Vec<(String, SampleStats)>>>,
-) -> JoinHandle<()> {
+) -> JoinHandle<()>
+where
+    T: 'static + Client + Send + Sync,
+{
     info!("Sampling TPS every {} second...", sample_period);
     let exit_signal = exit_signal.clone();
     let maxes = maxes.clone();
@@ -167,15 +170,18 @@ fn generate_chunked_transfers(
     }
 }
 
-fn create_sender_threads(
-    client: &Arc<ThinClient>,
+fn create_sender_threads<T>(
+    client: &Arc<T>,
     shared_txs: &SharedTransactions,
     thread_batch_sleep_ms: usize,
     total_tx_sent_count: &Arc<AtomicUsize>,
     threads: usize,
     exit_signal: &Arc<AtomicBool>,
     shared_tx_active_thread_count: &Arc<AtomicIsize>,
-) -> Vec<JoinHandle<()>> {
+) -> Vec<JoinHandle<()>>
+where
+    T: 'static + Client + Send + Sync,
+{
     (0..threads)
         .map(|_| {
             let exit_signal = exit_signal.clone();
@@ -200,7 +206,10 @@ fn create_sender_threads(
         .collect()
 }
 
-pub fn do_bench_token(client: Arc<ThinClient>, config: Config, gen_keypairs: Vec<Keypair>) -> u64 {
+pub fn do_bench_token<T: Client>(client: Arc<T>, config: Config, gen_keypairs: Vec<Keypair>) -> u64
+where
+    T: 'static + Client + Send + Sync,
+{
     let Config {
         id,
         threads,
@@ -393,10 +402,10 @@ fn generate_txs(
     }
 }
 
-fn poll_blockhash(
+fn poll_blockhash<T: Client>(
     exit_signal: &Arc<AtomicBool>,
     blockhash: &Arc<RwLock<Hash>>,
-    client: &Arc<ThinClient>,
+    client: &Arc<T>,
     id: &Pubkey,
 ) {
     let mut blockhash_last_updated = Instant::now();
@@ -435,13 +444,13 @@ fn poll_blockhash(
     }
 }
 
-fn do_tx_transfers(
+fn do_tx_transfers<T: Client>(
     exit_signal: &Arc<AtomicBool>,
     shared_txs: &SharedTransactions,
     shared_tx_thread_count: &Arc<AtomicIsize>,
     total_tx_sent_count: &Arc<AtomicUsize>,
     thread_batch_sleep_ms: usize,
-    client: &Arc<ThinClient>,
+    client: &Arc<T>,
 ) {
     loop {
         if thread_batch_sleep_ms > 0 {
@@ -496,21 +505,32 @@ fn do_tx_transfers(
     }
 }
 
-fn verify_token_balance(client: &Arc<ThinClient>, key: &Pubkey, amount: u64) -> Option<bool> {
-    match client.get_token_account_balance_with_commitment(&key, CommitmentConfig::recent()) {
-        Ok(token_balance) => {
+fn verify_token_balance<T: Client>(client: &Arc<T>, key: &Pubkey, amount: u64) -> Option<bool> {
+    match client.get_account_with_commitment(key, CommitmentConfig::recent()) {
+        Ok(Some(account)) => {
+            if account.owner != to_this_pubkey(&spl_token_v1_0::id()) {
+                error!("Account not a v1.0 Token account");
+                return None;
+            }
+            let mut data = account.data.to_vec();
+            let token_account = spl_token_v1_0::state::unpack::<TokenAccount>(&mut data);
+            if token_account.is_err() {
+                error!("Account could not be unpacked into v1.0 Token account");
+            }
+            let token_account = token_account.unwrap();
             info!(
-                "verifying token balance: {} {:?} {}",
-                key, token_balance, amount
+                "verifying balance: {} {} {}",
+                key, token_account.amount, amount
             );
-            return Some(token_balance.ui_amount as u64 == amount);
+            return Some(token_account.amount >= amount);
         }
-        Err(err) => error!("failed to get token balance {:?}", err),
+        Ok(None) => error!("Token account did not exist"),
+        Err(err) => error!("failed to get token account {:?}", err),
     }
     None
 }
 
-fn verify_balance(client: &Arc<ThinClient>, key: &Pubkey, amount: u64) -> Option<bool> {
+fn verify_balance<T: Client>(client: &Arc<T>, key: &Pubkey, amount: u64) -> Option<bool> {
     match client.get_balance_with_commitment(key, CommitmentConfig::recent()) {
         Ok(balance) => {
             info!("verifying balance: {} {} {}", key, balance, amount);
@@ -521,7 +541,7 @@ fn verify_balance(client: &Arc<ThinClient>, key: &Pubkey, amount: u64) -> Option
     None
 }
 
-fn verify_funding_transfer(client: &Arc<ThinClient>, tx: &Transaction, amount: u64) -> bool {
+fn verify_funding_transfer<T: Client>(client: &Arc<T>, tx: &Transaction, amount: u64) -> bool {
     for a in &tx.message().account_keys[1..] {
         if let Some(res) = verify_balance(client, a, amount) {
             return res;
@@ -531,9 +551,9 @@ fn verify_funding_transfer(client: &Arc<ThinClient>, tx: &Transaction, amount: u
 }
 
 trait FundingTransactions<'a> {
-    fn fund(
+    fn fund<T: 'static + Client + Send + Sync>(
         &mut self,
-        client: &Arc<ThinClient>,
+        client: &Arc<T>,
         to_fund: &[(&'a Keypair, Vec<(&'a Keypair, u64)>)],
         to_lamports: u64,
         mint_pubkey: &Pubkey,
@@ -547,13 +567,13 @@ trait FundingTransactions<'a> {
     );
     fn sign(&mut self, blockhash: Hash);
     fn send<T: Client>(&self, client: &Arc<T>);
-    fn verify(&mut self, client: &Arc<ThinClient>, to_lamports: u64);
+    fn verify<T: 'static + Client + Send + Sync>(&mut self, client: &Arc<T>, to_lamports: u64);
 }
 
 impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Vec<&'a Keypair>, Transaction)> {
-    fn fund(
+    fn fund<T: 'static + Client + Send + Sync>(
         &mut self,
-        client: &Arc<ThinClient>,
+        client: &Arc<T>,
         to_fund: &[(&'a Keypair, Vec<(&'a Keypair, u64)>)],
         to_lamports: u64,
         mint_pubkey: &Pubkey,
@@ -647,7 +667,7 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Vec<&'a Keypair>, Transac
         debug!("send {} txs: {}us", self.len(), send_txs.as_us());
     }
 
-    fn verify(&mut self, client: &Arc<ThinClient>, to_lamports: u64) {
+    fn verify<T: 'static + Client + Send + Sync>(&mut self, client: &Arc<T>, to_lamports: u64) {
         let starting_txs = self.len();
         let verified_txs = Arc::new(AtomicUsize::new(0));
         let too_many_failures = Arc::new(AtomicBool::new(false));
@@ -722,8 +742,8 @@ impl<'a> FundingTransactions<'a> for Vec<(&'a Keypair, Vec<&'a Keypair>, Transac
 /// fund the dests keys by spending all of the source keys into MAX_SPENDS_PER_TX
 /// on every iteration.  This allows us to replay the transfers because the source is either empty,
 /// or full
-pub fn fund_keys(
-    client: Arc<ThinClient>,
+pub fn fund_keys<T: 'static + Client + Send + Sync>(
+    client: Arc<T>,
     source: &Keypair,
     dests: &[Keypair],
     total: u64,
@@ -769,8 +789,8 @@ pub fn fund_keys(
     }
 }
 
-pub fn airdrop_lamports(
-    client: &ThinClient,
+pub fn airdrop_lamports<T: Client>(
+    client: &T,
     faucet_addr: &SocketAddr,
     id: &Keypair,
     desired_balance: u64,
@@ -924,8 +944,8 @@ pub fn generate_keypairs(seed_keypair: &Keypair, count: u64) -> (Vec<Keypair>, u
     )
 }
 
-pub fn generate_and_fund_keypairs(
-    client: Arc<ThinClient>,
+pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
+    client: Arc<T>,
     faucet_addr: Option<SocketAddr>,
     funding_key: &Keypair,
     keypair_count: usize,
@@ -953,7 +973,7 @@ pub fn generate_and_fund_keypairs(
             .get_minimum_balance_for_rent_exemption(size_of::<Mint>())
             .unwrap();
         let token_account_minimum_balance_for_rent_exemption = client
-            .get_minimum_balance_for_rent_exemption(size_of::<Account>())
+            .get_minimum_balance_for_rent_exemption(size_of::<TokenAccount>())
             .unwrap();
 
         info!(
@@ -1099,8 +1119,8 @@ fn initialize_mint(
     })
 }
 
-fn create_token_transaction<'a>(
-    client: &ThinClient,
+fn create_token_transaction<'a, T: Client>(
+    client: &T,
     new_mint: &'a Keypair,
     owner: &'a Pubkey,
     fee_payer: &'a Keypair,
@@ -1225,7 +1245,7 @@ fn create_token_account_ix(
             new_account_pubkey,
             &seed,
             minimum_balance_for_rent_exemption,
-            size_of::<Account>() as u64,
+            size_of::<TokenAccount>() as u64,
             &spl_token_id,
         ),
         initialize_token_account_ix(
@@ -1316,7 +1336,7 @@ fn token_account_from_system_account(system_account: &Pubkey) -> Pubkey {
     Pubkey::create_with_seed(system_account, seed, &spl_token_id).unwrap()
 }
 
-/*#[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
     use solana_runtime::bank::Bank;
@@ -1399,4 +1419,4 @@ mod tests {
             assert_eq!(client.get_balance(&kp.pubkey()).unwrap(), lamports);
         }
     }
-}*/
+}

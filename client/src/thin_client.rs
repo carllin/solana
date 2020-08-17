@@ -6,7 +6,6 @@
 use crate::{rpc_client::RpcClient, rpc_response::Response};
 use bincode::{serialize_into, serialized_size};
 use log::*;
-use solana_account_decoder::parse_token::UiTokenAmount;
 use solana_sdk::{
     account::Account,
     client::{AsyncClient, Client, SyncClient},
@@ -260,17 +259,6 @@ impl ThinClient {
         self.rpc_client()
             .get_num_blocks_since_signature_confirmation(sig)
             .map_err(|e| e.into())
-    }
-
-    pub fn get_token_account_balance_with_commitment(
-        &self,
-        pubkey: &Pubkey,
-        commitment_config: CommitmentConfig,
-    ) -> TransportResult<UiTokenAmount> {
-        self.rpc_client()
-            .get_token_account_balance_with_commitment(pubkey, commitment_config)
-            .map_err(|e| e.into())
-            .map(|r| r.value)
     }
 }
 
