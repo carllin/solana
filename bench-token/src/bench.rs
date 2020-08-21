@@ -1347,7 +1347,7 @@ mod tests {
 
     #[test]
     fn test_create_token() {
-        let (genesis_config, genesis_keypair) = create_genesis_config(10_000);
+        let (genesis_config, genesis_keypair) = create_genesis_config(100_000_000);
         let bank = Bank::new(&genesis_config);
         let client = BankClient::new(bank);
         create_token_transaction(
@@ -1364,7 +1364,7 @@ mod tests {
 
     #[test]
     fn test_bench_token_bank_client() {
-        let (genesis_config, id) = create_genesis_config(10_000);
+        let (genesis_config, id) = create_genesis_config(100_000_000);
         let bank = Bank::new(&genesis_config);
         let client = Arc::new(BankClient::new(bank));
 
@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn test_bench_token_fund_keys() {
-        let (genesis_config, id) = create_genesis_config(10_000);
+        let (genesis_config, id) = create_genesis_config(100_000_000);
         let bank = Bank::new(&genesis_config);
         let client = Arc::new(BankClient::new(bank));
         let keypair_count = 20;
@@ -1404,7 +1404,7 @@ mod tests {
 
     #[test]
     fn test_bench_token_fund_keys_with_fees() {
-        let (mut genesis_config, id) = create_genesis_config(10_000);
+        let (mut genesis_config, id) = create_genesis_config(100_000_000);
         let fee_rate_governor = FeeRateGovernor::new(11, 0);
         genesis_config.fee_rate_governor = fee_rate_governor;
         let bank = Bank::new(&genesis_config);

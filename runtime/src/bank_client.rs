@@ -81,11 +81,13 @@ impl AsyncClient for BankClient {
 impl SyncClient for BankClient {
     fn send_and_confirm_transaction<T: Signers>(
         &self,
-        _keypairs: &T,
+        keypairs: &T,
         transaction: &mut Transaction,
         _tries: usize,
         _pending_confirmations: usize,
     ) -> Result<Signature> {
+        let (blockhash, _) = self.get_recent_blockhash()?;
+        transaction.sign(keypairs, blockhash);
         self.bank.process_transaction(&transaction)?;
         Ok(transaction.signatures.get(0).cloned().unwrap_or_default())
     }

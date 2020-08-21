@@ -296,13 +296,6 @@ impl SyncClient for ThinClient {
                         .send_to(&buf[..], &self.tpu_addr())?;
                 }
 
-                let res = self.poll_for_signature_confirmation(
-                    &transaction.signatures[0],
-                    pending_confirmations,
-                );
-
-                println!("poll for signature res: {:?}", res);
-
                 if let Ok(confirmed_blocks) = self.poll_for_signature_confirmation(
                     &transaction.signatures[0],
                     pending_confirmations,
