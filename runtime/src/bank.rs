@@ -1283,6 +1283,7 @@ impl Bank {
     ) {
         let mut status_cache = self.src.status_cache.write().unwrap();
         for (i, (_, tx)) in OrderedIterator::new(txs, iteration_order).enumerate() {
+            info!("tx result: {:?} {:?}", tx.signatures[0], res);
             let (res, _hash_age_kind) = &res[i];
             if Self::can_commit(res) && !tx.signatures.is_empty() {
                 status_cache.insert(

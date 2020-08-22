@@ -28,6 +28,7 @@ use solana_sdk::{
     transaction,
 };
 use solana_vote_program::vote_state::Vote;
+use std::fmt::Debug;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::{Receiver, RecvTimeoutError, SendError, Sender},
@@ -176,7 +177,7 @@ fn check_commitment_and_notify<K, S, B, F, X, T>(
     notifier: &RpcNotifier,
 ) -> HashSet<SubscriptionId>
 where
-    K: Eq + Hash + Clone + Copy,
+    K: Eq + Hash + Clone + Copy + Debug,
     S: Clone + Serialize,
     B: Fn(&Bank, &K) -> X,
     F: Fn(X, &K, Slot, Option<T>, Option<Arc<Bank>>) -> (Box<dyn Iterator<Item = S>>, Slot),
@@ -203,12 +204,21 @@ where
                     commitment_slots.highest_confirmed_slot
                 }
             };
+            info!(
+                "check_commitment_and_notify1: {:?}, commitment: {:?}, slot: {}",
+                hashmap_key, commitment.commitment, slot
+            );
             let bank = bank_forks.read().unwrap().get(slot).cloned();
+            info!("check_commitment_and_notify2: {:?}", hashmap_key);
             let results = bank
                 .clone()
                 .map(|desired_bank| bank_method(&desired_bank, hashmap_key))
                 .unwrap_or_default();
             let mut w_last_notified_slot = last_notified_slot.write().unwrap();
+            info!(
+                "check_commitment_and_notify3: {:?}, last_notified: {}",
+                hashmap_key, w_last_notified_slot,
+            );
             let (filter_results, result_slot) = filter_results(
                 results,
                 hashmap_key,
@@ -216,7 +226,12 @@ where
                 config.as_ref().cloned(),
                 bank,
             );
+            info!(
+                "check_commitment_and_notify4: {:?}, result_slot: {}",
+                hashmap_key, result_slot
+            );
             for result in filter_results {
+                info!("notifying!");
                 notifier.notify(
                     Response {
                         context: RpcResponseContext { slot },
@@ -252,6 +267,10 @@ fn filter_account_result(
     bank: Option<Arc<Bank>>,
 ) -> (Box<dyn Iterator<Item = UiAccount>>, Slot) {
     if let Some((account, fork)) = result {
+        info!(
+            "filter_account_result: {}, {}, {}",
+            pubkey, last_notified_slot, fork
+        );
         // If fork < last_notified_slot this means that we last notified for a fork
         // and should notify that the account state has been reverted.
         if fork != last_notified_slot {
@@ -263,6 +282,7 @@ fn filter_account_result(
                     fork,
                 );
             } else {
+                info!("filter_account_result encode result {}", pubkey,);
                 return (
                     Box::new(iter::once(UiAccount::encode(
                         pubkey, account, encoding, None, None,
@@ -901,6 +921,10 @@ impl RpcSubscriptions {
             subs.keys().cloned().collect()
         };
         for pubkey in &pubkeys {
+            info!(
+                "notify_accounts_programs_signatures checking account: {}",
+                pubkey
+            );
             Self::check_account(
                 pubkey,
                 bank_forks,

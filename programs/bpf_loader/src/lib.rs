@@ -206,7 +206,12 @@ pub fn process_instruction(
                     }
                 };
 
-            log!(logger, "Call BPF program {}", program.unsigned_key());
+            log!(
+                logger,
+                "Call BPF program {}, accounts: {:?}",
+                program.unsigned_key(),
+                keyed_accounts.iter().map(|k| k.key)
+            );
             match vm.execute_program(parameter_bytes.as_slice(), &[], &[heap_region]) {
                 Ok(status) => {
                     if status != SUCCESS {

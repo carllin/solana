@@ -120,7 +120,7 @@ impl Account {
 pub struct KeyedAccount<'a> {
     is_signer: bool, // Transaction was signed by this account's key
     is_writable: bool,
-    key: &'a Pubkey,
+    pub key: &'a Pubkey,
     pub account: &'a RefCell<Account>,
 }
 
