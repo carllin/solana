@@ -997,6 +997,11 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
             funding_key_balance, max_fee, lamports_per_account, extra, total
         );
 
+        println!(
+            "balance: {}, {}",
+            client.get_balance(&funding_key.pubkey()).unwrap_or(0),
+            total
+        );
         if client.get_balance(&funding_key.pubkey()).unwrap_or(0) < total {
             airdrop_lamports(client.as_ref(), &faucet_addr.unwrap(), funding_key, total)?;
         }
@@ -1236,6 +1241,7 @@ fn create_token_account_ix(
 ) -> Vec<Instruction> {
     println!("Creating token account {}", fee_payer);
     let spl_token_id = to_this_pubkey(&spl_token_v1_0::id());
+    println!("token id: {}", spl_token_id);
     let seed = "token";
     let derived_key = token_account_from_system_account(new_account_pubkey);
     vec![
@@ -1339,15 +1345,18 @@ fn token_account_from_system_account(system_account: &Pubkey) -> Pubkey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solana_runtime::bank::Bank;
-    use solana_runtime::bank_client::BankClient;
-    use solana_sdk::client::SyncClient;
-    use solana_sdk::fee_calculator::FeeRateGovernor;
-    use solana_sdk::genesis_config::create_genesis_config;
+    use solana_runtime::{bank::Bank, bank_client::BankClient};
+    use solana_sdk::{
+        account::Account,
+        client::SyncClient,
+        fee_calculator::FeeRateGovernor,
+        genesis_config::{create_genesis_config, OperatingMode},
+    };
+    use std::{fs::File, io::Read, str::FromStr};
 
     #[test]
     fn test_create_token() {
-        let (genesis_config, genesis_keypair) = create_genesis_config(100_000_000);
+        let (genesis_config, genesis_keypair) = create_genesis_config(1_000_000_000);
         let bank = Bank::new(&genesis_config);
         let client = BankClient::new(bank);
         create_token_transaction(
@@ -1364,8 +1373,45 @@ mod tests {
 
     #[test]
     fn test_bench_token_bank_client() {
-        let (genesis_config, id) = create_genesis_config(100_000_000);
-        let bank = Bank::new(&genesis_config);
+        solana_logger::setup();
+        let (mut genesis_config, id) = create_genesis_config(1_000_000_000);
+        let spl_programs = vec![
+            (
+                Pubkey::from_str("TokenSVp5gheXUvJ6jGWGeCsgPKgnE3YgdGKRVCMY9o").unwrap(),
+                Pubkey::from_str("BPFLoader1111111111111111111111111111111111").unwrap(),
+                "/Users/carl/.cache/solana-spl/spl_token-1.0.0.so",
+            ),
+            (
+                Pubkey::from_str("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo").unwrap(),
+                Pubkey::from_str("BPFLoader1111111111111111111111111111111111").unwrap(),
+                "/Users/carl/.cache/solana-spl/spl_memo-1.0.0.so",
+            ),
+        ];
+
+        for (address, loader, program) in spl_programs {
+            let mut program_data = vec![];
+            File::open(program)
+                .and_then(|mut file| file.read_to_end(&mut program_data))
+                .unwrap_or_else(|err| {
+                    panic!("Error: failed to read {}: {}", program, err);
+                });
+            genesis_config.add_account(
+                address,
+                Account {
+                    lamports: genesis_config.rent.minimum_balance(program_data.len()),
+                    data: program_data,
+                    executable: true,
+                    owner: loader,
+                    rent_epoch: 0,
+                },
+            );
+        }
+
+        let mut bank = Bank::new(&genesis_config);
+
+        // Add BPF loader
+        solana_genesis_programs::get_entered_epoch_callback(OperatingMode::Development)(&mut bank);
+
         let client = Arc::new(BankClient::new(bank));
 
         let mut config = Config::default();
@@ -1383,7 +1429,7 @@ mod tests {
 
     #[test]
     fn test_bench_token_fund_keys() {
-        let (genesis_config, id) = create_genesis_config(100_000_000);
+        let (genesis_config, id) = create_genesis_config(1_000_000_000);
         let bank = Bank::new(&genesis_config);
         let client = Arc::new(BankClient::new(bank));
         let keypair_count = 20;
@@ -1404,7 +1450,7 @@ mod tests {
 
     #[test]
     fn test_bench_token_fund_keys_with_fees() {
-        let (mut genesis_config, id) = create_genesis_config(100_000_000);
+        let (mut genesis_config, id) = create_genesis_config(1_000_000_000);
         let fee_rate_governor = FeeRateGovernor::new(11, 0);
         genesis_config.fee_rate_governor = fee_rate_governor;
         let bank = Bank::new(&genesis_config);

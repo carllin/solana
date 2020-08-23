@@ -1192,6 +1192,7 @@ impl Bank {
         self.update_fees();
 
         for (pubkey, account) in genesis_config.accounts.iter() {
+            println!("{} in genesis", pubkey);
             if self.get_account(&pubkey).is_some() {
                 panic!("{} repeated in genesis config", pubkey);
             }
@@ -1242,6 +1243,7 @@ impl Bank {
 
         // Add additional native programs specified in the genesis config
         for (name, program_id) in &genesis_config.native_instruction_processors {
+            println!("native {} {} in genesis", name, program_id);
             self.add_native_program(name, program_id);
         }
     }

@@ -220,6 +220,7 @@ impl Accounts {
             {
                 Some(program) => program,
                 None => {
+                    println!("couldn't find: {}", program_id);
                     error_counters.account_not_found += 1;
                     return Err(TransactionError::ProgramAccountNotFound);
                 }

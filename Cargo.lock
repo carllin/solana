@@ -3393,6 +3393,7 @@ dependencies = [
  "solana-core",
  "solana-faucet",
  "solana-genesis",
+ "solana-genesis-programs",
  "solana-local-cluster",
  "solana-logger 1.4.0",
  "solana-measure",
