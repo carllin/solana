@@ -765,6 +765,8 @@ pub fn fund_keys<T: 'static + Client + Send + Sync>(
             let start = not_funded.len() - MAX_SPENDS_PER_TX as usize;
             let dests: Vec<_> = not_funded.drain(start..).collect();
             let spends: Vec<_> = dests.iter().map(|k| (*k, to_lamports)).collect();
+            info!("to_lamports: {}, num: {}", to_lamports, dests.len());
+            verify_balance(&client, &f.pubkey(), 0);
             to_fund.push((f, spends));
             new_funded.extend(dests.into_iter());
         }
@@ -985,11 +987,17 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
         let fee_rate_governor = client.get_fee_rate_governor().unwrap();
         let max_fee = fee_rate_governor.max_lamports_per_signature;
         let extra_fees = extra * max_fee;
-        let total_keypairs = keypairs.len() as u64 + 1; // Add one for funding keypair
-        let total = (lamports_per_account + token_account_minimum_balance_for_rent_exemption)
+        let total_keypairs = keypairs.len() as u64;
+        let funding_total = (lamports_per_account
+            + token_account_minimum_balance_for_rent_exemption)
             * total_keypairs
-            + extra_fees
-            + mint_minimum_balance_for_rent_exemption;
+            + extra_fees;
+
+        // Account for mint creation and funding
+        let total = funding_total
+            + mint_minimum_balance_for_rent_exemption
+            + 2 * max_fee
+            + token_account_minimum_balance_for_rent_exemption;
 
         let funding_key_balance = client.get_balance(&funding_key.pubkey()).unwrap_or(0);
         info!(
@@ -997,11 +1005,7 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
             funding_key_balance, max_fee, lamports_per_account, extra, total
         );
 
-        println!(
-            "balance: {}, {}",
-            client.get_balance(&funding_key.pubkey()).unwrap_or(0),
-            total
-        );
+        println!("total: {}", total);
         if client.get_balance(&funding_key.pubkey()).unwrap_or(0) < total {
             airdrop_lamports(client.as_ref(), &faucet_addr.unwrap(), funding_key, total)?;
         }
@@ -1037,7 +1041,7 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
             &token_account_from_system_account(&funding_key.pubkey()),
             &funding_key,
             mint_minimum_balance_for_rent_exemption,
-            total,
+            funding_total,
             NUM_DECIMALS,
         )
         .unwrap()
@@ -1061,7 +1065,7 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
         if !verify_token_balance(
             &client,
             &token_account_from_system_account(&funding_key.pubkey()),
-            total,
+            funding_total,
         )
         .unwrap()
         {
@@ -1069,11 +1073,14 @@ pub fn generate_and_fund_keypairs<T: 'static + Client + Send + Sync>(
         }
         info!("Issued token balance verified!");
 
+        if !verify_balance(&client, &funding_key.pubkey(), funding_total).unwrap() {
+            panic!("Funding key has wrong remaining balance");
+        }
         fund_keys(
             client,
             funding_key,
             &keypairs,
-            total,
+            funding_total,
             max_fee,
             lamports_per_account,
             &new_mint_keypair.pubkey(),
@@ -1354,41 +1361,22 @@ mod tests {
         account::Account,
         client::SyncClient,
         fee_calculator::FeeRateGovernor,
-        genesis_config::{create_genesis_config, OperatingMode},
+        genesis_config::{create_genesis_config, ClusterType, GenesisConfig},
     };
     use std::{fs::File, io::Read, str::FromStr};
 
-    #[test]
-    fn test_create_token() {
-        let (genesis_config, genesis_keypair) = create_genesis_config(1_000_000_000);
-        let bank = Bank::new(&genesis_config);
-        let client = BankClient::new(bank);
-        create_token_transaction(
-            &client,
-            &Keypair::new(),
-            &Keypair::new().pubkey(),
-            &genesis_keypair,
-            10,
-            10000,
-            NUM_DECIMALS,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn test_bench_token_bank_client() {
-        solana_logger::setup();
-        let (mut genesis_config, id) = create_genesis_config(1_000_000_000);
+    fn init_spl_genesis() -> (GenesisConfig, Keypair) {
+        let (mut genesis_config, id) = create_genesis_config(220383960);
         let spl_programs = vec![
             (
                 Pubkey::from_str("TokenSVp5gheXUvJ6jGWGeCsgPKgnE3YgdGKRVCMY9o").unwrap(),
                 Pubkey::from_str("BPFLoader1111111111111111111111111111111111").unwrap(),
-                "/Users/carl/.cache/solana-spl/spl_token-1.0.0.so",
+                "../spl_token-1.0.0.so",
             ),
             (
                 Pubkey::from_str("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo").unwrap(),
                 Pubkey::from_str("BPFLoader1111111111111111111111111111111111").unwrap(),
-                "/Users/carl/.cache/solana-spl/spl_memo-1.0.0.so",
+                "../spl_memo-1.0.0.so",
             ),
         ];
 
@@ -1411,10 +1399,43 @@ mod tests {
             );
         }
 
-        let mut bank = Bank::new(&genesis_config);
+        (genesis_config, id)
+    }
 
+    fn init_spl_bank(fee_rate_governor: Option<FeeRateGovernor>) -> (Bank, Keypair) {
+        let (mut genesis_config, id) = init_spl_genesis();
+        if let Some(fee_rate_governor) = fee_rate_governor {
+            genesis_config.fee_rate_governor = fee_rate_governor;
+        }
+
+        let mut bank = Bank::new(&genesis_config);
         // Add BPF loader
-        solana_genesis_programs::get_entered_epoch_callback(OperatingMode::Development)(&mut bank);
+        bank.initiate_entered_epoch_callback(solana_genesis_programs::get_entered_epoch_callback(
+            ClusterType::Development,
+        ));
+        (bank, id)
+    }
+
+    #[test]
+    fn test_create_token() {
+        let (bank, genesis_keypair) = init_spl_bank(None);
+        let client = BankClient::new(bank);
+        create_token_transaction(
+            &client,
+            &Keypair::new(),
+            &Keypair::new().pubkey(),
+            &genesis_keypair,
+            10,
+            10000,
+            NUM_DECIMALS,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_bench_token_bank_client() {
+        solana_logger::setup();
+        let (bank, id) = init_spl_bank(None);
 
         let client = Arc::new(BankClient::new(bank));
 
@@ -1432,9 +1453,9 @@ mod tests {
     }
 
     #[test]
-    fn test_bench_token_fund_keys() {
-        let (genesis_config, id) = create_genesis_config(1_000_000_000);
-        let bank = Bank::new(&genesis_config);
+    fn test_bench_token_fund_keys2() {
+        solana_logger::setup();
+        let (bank, id) = init_spl_bank(None);
         let client = Arc::new(BankClient::new(bank));
         let keypair_count = 20;
         let lamports = 20;
@@ -1443,21 +1464,21 @@ mod tests {
             generate_and_fund_keypairs(client.clone(), None, &id, keypair_count, lamports).unwrap();
 
         for kp in &keypairs {
-            assert_eq!(
+            println!(
+                "checking: {} {}",
+                kp.pubkey(),
                 client
                     .get_balance_with_commitment(&kp.pubkey(), CommitmentConfig::recent())
                     .unwrap(),
-                lamports
             );
         }
     }
 
     #[test]
     fn test_bench_token_fund_keys_with_fees() {
-        let (mut genesis_config, id) = create_genesis_config(1_000_000_000);
+        solana_logger::setup();
         let fee_rate_governor = FeeRateGovernor::new(11, 0);
-        genesis_config.fee_rate_governor = fee_rate_governor;
-        let bank = Bank::new(&genesis_config);
+        let (bank, id) = init_spl_bank(Some(fee_rate_governor));
         let client = Arc::new(BankClient::new(bank));
         let keypair_count = 20;
         let lamports = 20;
