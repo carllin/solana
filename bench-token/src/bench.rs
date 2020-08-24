@@ -785,7 +785,7 @@ pub fn fund_keys<T: 'static + Client + Send + Sync>(
 
         info!("funded: {} left: {}", new_funded.len(), not_funded.len());
         funded = new_funded;
-        funded_funds = to_lamports;
+        funded_funds = to_lamports - minimum_balance_for_rent_exemption;
     }
 }
 
@@ -1290,8 +1290,12 @@ fn create_system_and_token_account_ixs(
 ) -> Vec<Instruction> {
     assert!(num_lamports > minimum_balance_for_rent_exemption);
     let mut ixs = vec![
-        // Create a system account with `num_lamports`
-        system_instruction::transfer(fee_payer, new_account_pubkey, num_lamports),
+        // Create a system account with `num_lamports - minimum_balance_for_rent_exemption`
+        system_instruction::transfer(
+            fee_payer,
+            new_account_pubkey,
+            num_lamports - minimum_balance_for_rent_exemption,
+        ),
     ];
     ixs.extend(
         // Now make a new token account, owned by `new_account_pubkey`
