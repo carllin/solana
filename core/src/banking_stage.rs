@@ -122,7 +122,6 @@ impl BankingStage {
                 Builder::new()
                     .name("solana-banking-stage-tx".to_string())
                     .spawn(move || {
-                        thread_mem_usage::datapoint("solana-banking-stage-tx");
                         Self::process_loop(
                             my_pubkey,
                             &verified_receiver,
@@ -366,6 +365,7 @@ impl BankingStage {
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
         let mut buffered_packets = vec![];
         loop {
+            thread_mem_usage::datapoint("memory-solana-banking-stage-loop");
             while !buffered_packets.is_empty() {
                 let decision = Self::process_buffered_packets(
                     &my_pubkey,
