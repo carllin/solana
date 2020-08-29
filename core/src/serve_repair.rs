@@ -229,7 +229,7 @@ impl ServeRepair {
 
         let mut time = Measure::start("repair::handle_packets");
         for reqs in reqs_v {
-            Self::handle_packets(obj, &recycler, blockstore, reqs, response_sender, stats);
+            //Self::handle_packets(obj, &recycler, blockstore, reqs, response_sender, stats);
         }
         time.stop();
         if total_packets >= *max_packets {

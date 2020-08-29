@@ -131,7 +131,7 @@ impl BankingStage {
                             enable_forwarding,
                             i,
                             batch_limit,
-                            transaction_status_sender.clone(),
+                            None,
                         );
                     })
                     .unwrap()

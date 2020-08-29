@@ -275,14 +275,14 @@ impl StandardBroadcastRun {
         } else {
             shreds.to_vec()
         };
-        blockstore
+        /*blockstore
             .insert_shreds(data_shreds, None, true)
             .expect("Failed to insert shreds in blockstore");
         let insert_shreds_elapsed = insert_shreds_start.elapsed();
         let new_insert_shreds_stats = InsertShredsStats {
             insert_shreds_elapsed: duration_as_us(&insert_shreds_elapsed),
             num_shreds: shreds.len(),
-        };
+        };*/
         self.update_insertion_metrics(&new_insert_shreds_stats, &broadcast_shred_batch_info);
         Ok(())
     }
