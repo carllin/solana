@@ -646,7 +646,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b584a330336237c1eecd3e94266efb216c56ed91225d634cb2991c5f3fd1aeab"
 dependencies = [
- "generic-array 0.14.3",
+ "generic-array 0.14.4",
  "subtle 2.2.2",
 ]
 
@@ -738,7 +738,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3dd60d1080a57a05ab032377049e0591415d2b31afd7028356dbf3cc6dcb066"
 dependencies = [
- "generic-array 0.14.3",
+ "generic-array 0.14.4",
 ]
 
 [[package]]
@@ -1139,9 +1139,9 @@ dependencies = [
 
 [[package]]
 name = "generic-array"
-version = "0.14.3"
+version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60fb4bb6bba52f78a471264d9a3b7d026cc0af47b22cd2cffbc0b787ca003e63"
+checksum = "501466ecc8a30d1d3b7fc9229b122b2ce8ed6e9d9223f1138d4babb253e51817"
 dependencies = [
  "serde",
  "typenum",
@@ -4234,7 +4234,7 @@ dependencies = [
  "chrono",
  "curve25519-dalek",
  "ed25519-dalek",
- "generic-array 0.14.3",
+ "generic-array 0.14.4",
  "hex",
  "hmac",
  "itertools 0.9.0",
@@ -4271,7 +4271,7 @@ dependencies = [
  "chrono",
  "curve25519-dalek",
  "ed25519-dalek",
- "generic-array 0.14.3",
+ "generic-array 0.14.4",
  "hex",
  "hmac",
  "itertools 0.9.0",
