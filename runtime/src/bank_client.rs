@@ -152,7 +152,8 @@ impl SyncClient for BankClient {
         let last_valid_slot = self
             .bank
             .get_blockhash_last_valid_slot(&blockhash)
-            .expect("bank blockhash queue should contain blockhash");
+            .expect("bank blockhash queue should contain blockhash")
+            .0;
         Ok((blockhash, fee_calculator, last_valid_slot))
     }
 

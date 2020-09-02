@@ -64,6 +64,10 @@ impl BlockhashQueue {
             .map(|age| self.hash_height - age.hash_height)
     }
 
+    pub fn get_hash_height(&self, hash: &Hash) -> Option<u64> {
+        self.ages.get(hash).map(|age| age.hash_height)
+    }
+
     /// check if hash is valid
     #[cfg(test)]
     pub fn check_hash(&self, hash: Hash) -> bool {

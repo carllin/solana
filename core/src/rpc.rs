@@ -320,7 +320,7 @@ impl JsonRpcRequestProcessor {
     fn get_fees(&self, commitment: Option<CommitmentConfig>) -> Result<RpcResponse<RpcFees>> {
         let bank = self.bank(commitment)?;
         let (blockhash, fee_calculator) = bank.confirmed_last_blockhash();
-        let last_valid_slot = bank
+        let (last_valid_slot, _, _) = bank
             .get_blockhash_last_valid_slot(&blockhash)
             .expect("bank blockhash queue should contain blockhash");
         new_response(
@@ -2049,7 +2049,9 @@ impl RpcSol for RpcSolImpl {
             let blockhash = bank.confirmed_last_blockhash().0;
             (
                 blockhash,
-                bank.get_blockhash_last_valid_slot(&blockhash).unwrap_or(0),
+                bank.get_blockhash_last_valid_slot(&blockhash)
+                    .map(|x| x.0)
+                    .unwrap_or(0),
             )
         };
 
@@ -2077,10 +2079,20 @@ impl RpcSol for RpcSolImpl {
         let config = config.unwrap_or_default();
         let (wire_transaction, transaction) = deserialize_bs58_transaction(data)?;
         let bank = &*meta.bank(None)?;
-        let last_valid_slot = bank
+        let (last_valid_slot, blockhash_height, current_height) = bank
             .get_blockhash_last_valid_slot(&transaction.message.recent_blockhash)
-            .unwrap_or(0);
+            .unwrap_or((0, 0, 0));
 
+        info!(
+            "send_transaction(): signature: {:?}, bank slot: {}, blockhash: {}, last valid slot: {},
+            blockhash_height: {}, current_height: {}",
+            transaction.signatures.first(),
+            bank.slot(),
+            transaction.message.recent_blockhash,
+            last_valid_slot,
+            blockhash_height,
+            current_height,
+        );
         if !config.skip_preflight {
             if transaction.verify().is_err() {
                 return Err(RpcCustomError::SendTransactionPreflightFailure {

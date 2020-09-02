@@ -1041,13 +1041,17 @@ impl Bank {
         &self.fee_rate_governor
     }
 
-    pub fn get_blockhash_last_valid_slot(&self, blockhash: &Hash) -> Option<Slot> {
+    pub fn get_blockhash_last_valid_slot(&self, blockhash: &Hash) -> Option<(Slot, u64, u64)> {
         let blockhash_queue = self.blockhash_queue.read().unwrap();
         // This calculation will need to be updated to consider epoch boundaries if BlockhashQueue
         // length is made variable by epoch
-        blockhash_queue
-            .get_hash_age(blockhash)
-            .map(|age| self.slot + blockhash_queue.len() as u64 - age)
+        blockhash_queue.get_hash_age(blockhash).map(|age| {
+            (
+                self.slot + blockhash_queue.len() as u64 - age,
+                blockhash_queue.get_hash_height(blockhash).unwrap(),
+                blockhash_queue.hash_height(),
+            )
+        })
     }
 
     pub fn confirmed_last_blockhash(&self) -> (Hash, FeeCalculator) {
@@ -1120,6 +1124,7 @@ impl Bank {
         let mut w_blockhash_queue = self.blockhash_queue.write().unwrap();
         let current_tick_height = self.tick_height.fetch_add(1, Ordering::Relaxed) as u64;
         if self.is_block_boundary(current_tick_height + 1) {
+            info!("blockhash: {}, slot: {}", hash, self.slot());
             w_blockhash_queue.register_hash(hash, &self.fee_calculator);
             if self.fix_recent_blockhashes_sysvar_delay() {
                 self.update_recent_blockhashes_locked(&w_blockhash_queue);

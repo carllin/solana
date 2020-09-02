@@ -139,6 +139,7 @@ impl SendTransactionService {
                             &send_socket,
                             &tpu_address,
                             &transaction_info.wire_transaction,
+                            signature,
                         );
                         true
                     }
@@ -164,15 +165,20 @@ impl SendTransactionService {
         send_socket: &UdpSocket,
         tpu_address: &SocketAddr,
         wire_transaction: &[u8],
+        signature: &Signature,
     ) {
         if let Err(err) = send_socket.send_to(wire_transaction, tpu_address) {
-            warn!("Failed to send transaction to {}: {:?}", tpu_address, err);
+            warn!(
+                "Failed to send transaction {} to {}: {:?}",
+                signature, tpu_address, err
+            );
         }
     }
 
     pub fn send(&self, signature: Signature, wire_transaction: Vec<u8>, last_valid_slot: Slot) {
         inc_new_counter_info!("send_transaction_service-enqueue", 1, 1);
-        Self::send_transaction(&self.send_socket, &self.tpu_address, &wire_transaction);
+        info!("send_transacton_service(): First sending transaction: {}, before adding to retry queue", signature);
+        Self::send_transaction(&self.send_socket, &self.tpu_address, &wire_transaction, &signature);
 
         self.sender
             .lock()
