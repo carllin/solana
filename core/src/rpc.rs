@@ -2624,6 +2624,7 @@ pub mod tests {
             Arc::new(SendTransactionService::new(
                 &cluster_info,
                 &bank_forks,
+                None,
                 &exit,
             )),
             &runtime::Runtime::new().unwrap(),
@@ -2677,6 +2678,7 @@ pub mod tests {
             Arc::new(SendTransactionService::new(
                 &cluster_info,
                 &bank_forks,
+                None,
                 &exit,
             )),
             &runtime::Runtime::new().unwrap(),
@@ -3826,6 +3828,7 @@ pub mod tests {
             Arc::new(SendTransactionService::new(
                 &cluster_info,
                 &bank_forks,
+                None,
                 &exit,
             )),
             &runtime::Runtime::new().unwrap(),
@@ -3872,6 +3875,7 @@ pub mod tests {
             Arc::new(SendTransactionService::new(
                 &cluster_info,
                 &bank_forks,
+                None,
                 &exit,
             )),
             &runtime::Runtime::new().unwrap(),
@@ -4068,6 +4072,7 @@ pub mod tests {
             Arc::new(SendTransactionService::new(
                 &cluster_info,
                 &bank_forks,
+                None,
                 &exit,
             )),
             &runtime::Runtime::new().unwrap(),
@@ -4102,6 +4107,7 @@ pub mod tests {
             Arc::new(SendTransactionService::new(
                 &cluster_info,
                 &bank_forks,
+                None,
                 &exit,
             )),
             &runtime::Runtime::new().unwrap(),
@@ -4195,6 +4201,7 @@ pub mod tests {
             Arc::new(SendTransactionService::new(
                 &cluster_info,
                 &bank_forks,
+                None,
                 &exit,
             )),
             &runtime::Runtime::new().unwrap(),
