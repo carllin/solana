@@ -1300,13 +1300,25 @@ impl AccountsDB {
 
     fn create_and_insert_store(&self, slot: Slot, size: u64) -> Arc<AccountStorageEntry> {
         let path_index = thread_rng().gen_range(0, self.paths.len());
+        let mut new_storage_entry_time = Measure::start("new_storage_entry_time");
         let store =
             Arc::new(self.new_storage_entry(slot, &Path::new(&self.paths[path_index]), size));
         let store_for_index = store.clone();
+        new_storage_entry_time.stop();
 
+        let mut storage_lock_time = Measure::start("storage_lock_time");
         let mut stores = self.storage.write().unwrap();
+        storage_lock_time.stop();
         let slot_storage = stores.0.entry(slot).or_insert_with(HashMap::new);
         slot_storage.insert(store.id, store_for_index);
+
+        if new_storage_entry_time.as_us() + storage_lock_time.as_us() > 10000 {
+            info!(
+                "create_and_insert_store: {} {}",
+                new_storage_entry_time, storage_lock_time
+            );
+        }
+
         store
     }
 

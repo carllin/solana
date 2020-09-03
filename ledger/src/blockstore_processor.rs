@@ -614,6 +614,7 @@ pub fn confirm_slot(
     .map_err(BlockstoreProcessorError::from);
     replay_elapsed.stop();
     timing.replay_elapsed += replay_elapsed.as_us();
+    info!("bank {} replay_elapsed: {}", bank.slot(), replay_elapsed);
 
     if let Some(mut verifier) = verifier {
         let verified = verifier.finish_verify(&entries);

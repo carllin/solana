@@ -1583,7 +1583,7 @@ impl Bank {
 
         execution_time.stop();
 
-        debug!(
+        info!(
             "load: {}us execute: {}us txs_len={}",
             load_time.as_us(),
             execution_time.as_us(),

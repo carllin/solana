@@ -178,7 +178,12 @@ impl SendTransactionService {
     pub fn send(&self, signature: Signature, wire_transaction: Vec<u8>, last_valid_slot: Slot) {
         inc_new_counter_info!("send_transaction_service-enqueue", 1, 1);
         info!("send_transacton_service(): First sending transaction: {}, before adding to retry queue", signature);
-        Self::send_transaction(&self.send_socket, &self.tpu_address, &wire_transaction, &signature);
+        Self::send_transaction(
+            &self.send_socket,
+            &self.tpu_address,
+            &wire_transaction,
+            &signature,
+        );
 
         self.sender
             .lock()
