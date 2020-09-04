@@ -37,6 +37,7 @@ use solana_faucet::faucet::request_airdrop_transaction;
 use solana_ledger::{
     bank_forks::BankForks, blockstore::Blockstore, blockstore_db::BlockstoreError,
 };
+use solana_measure::measure::Measure;
 use solana_perf::packet::PACKET_DATA_SIZE;
 use solana_runtime::{accounts::AccountAddressFilter, bank::Bank, log_collector::LogCollector};
 use solana_sdk::{
@@ -414,6 +415,7 @@ impl JsonRpcRequestProcessor {
         &self,
         config: Option<RpcLargestAccountsConfig>,
     ) -> Result<RpcResponse<Vec<RpcAccountBalance>>> {
+        let mut get_largest_start = Measure::start("get_largest_start");
         let config = config.unwrap_or_default();
         let bank = self.bank(config.commitment)?;
         let (addresses, address_filter) = if let Some(filter) = config.filter {
@@ -427,7 +429,8 @@ impl JsonRpcRequestProcessor {
         } else {
             (HashSet::new(), AccountAddressFilter::Exclude)
         };
-        new_response(
+
+        let res = new_response(
             &bank,
             bank.get_largest_accounts(NUM_LARGEST_ACCOUNTS, &addresses, address_filter)
                 .into_iter()
@@ -436,7 +439,15 @@ impl JsonRpcRequestProcessor {
                     lamports,
                 })
                 .collect(),
-        )
+        );
+
+        get_largest_start.stop();
+
+        datapoint_info!(
+            "get_largest_duration",
+            ("duration", get_largest_start.as_us(), i64),
+        );
+        res
     }
 
     fn get_supply(&self, commitment: Option<CommitmentConfig>) -> Result<RpcResponse<RpcSupply>> {
@@ -1763,6 +1774,7 @@ impl RpcSol for RpcSolImpl {
             "get_program_accounts rpc request received: {:?}",
             program_id_str
         );
+        let mut start = Measure::start("get_program_accounts");
         let program_id = verify_pubkey(program_id_str)?;
         let (config, filters) = if let Some(config) = config {
             (
@@ -1773,9 +1785,26 @@ impl RpcSol for RpcSolImpl {
             (None, vec![])
         };
         for filter in &filters {
-            verify_filter(filter)?;
+            start.stop();
+            let res = verify_filter(filter);
+            if res.is_err() {
+                start.stop();
+                datapoint_info!(
+                    "get_program_accounts",
+                    ("duration", start.as_us(), i64),
+                    ("program_id", program_id.to_string(), String)
+                );
+            }
+            res?;
         }
-        meta.get_program_accounts(&program_id, config, filters)
+        let res = meta.get_program_accounts(&program_id, config, filters);
+        start.stop();
+        datapoint_info!(
+            "get_program_accounts",
+            ("duration", start.as_us(), i64),
+            ("program_id", program_id.to_string(), String)
+        );
+        res
     }
 
     fn get_inflation_governor(

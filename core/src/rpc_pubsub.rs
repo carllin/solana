@@ -267,7 +267,10 @@ impl RpcSolPubSub for RpcSolPubSubImpl {
                 self.subscriptions
                     .add_signature_subscription(signature, commitment, sub_id, subscriber);
             }
-            Err(e) => subscriber.reject(e).unwrap(),
+            Err(e) => {
+                info!("signature_subscribe error: {}, err: {:?}", signature_str, e);
+                subscriber.reject(e).unwrap()
+            }
         }
     }
 
