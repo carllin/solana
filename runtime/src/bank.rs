@@ -1187,10 +1187,6 @@ impl Bank {
     }
 
     pub fn exhaustively_free_unused_resource(&self) {
-        let mut reclaim = Measure::start("reclaim");
-        self.process_dead_slots();
-        reclaim.stop();
-
         let mut clean = Measure::start("clean");
         self.clean_accounts();
         clean.stop();
@@ -1200,8 +1196,10 @@ impl Bank {
         shrink.stop();
 
         info!(
-            "exhaustively_free_unused_resource(): {} {} {}",
-            reclaim, clean, shrink,
+            "exhaustively_free_unused_resource()
+            clean: {},
+            shrink: {}",
+            clean, shrink,
         );
     }
 
@@ -3358,10 +3356,6 @@ impl Bank {
 
     pub fn clean_accounts(&self) {
         self.rc.accounts.accounts_db.clean_accounts();
-    }
-
-    pub fn process_dead_slots(&self) {
-        self.rc.accounts.accounts_db.process_dead_slots(None);
     }
 
     pub fn shrink_all_slots(&self) {
