@@ -147,34 +147,6 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
         self.update(slot, pubkey, account_info, reclaims);
     }
 
-    // Try to update an item in account_maps. If the account is not
-    // already present, then the function will return back Some(account_info) which
-    // the caller can then take the write lock and do an 'insert' with the item.
-    // It returns None if the item is already present and thus successfully updated.
-    pub fn update(
-        &self,
-        slot: Slot,
-        pubkey: &Pubkey,
-        account_info: T,
-        reclaims: &mut SlotList<T>,
-    ) -> Option<T> {
-        if let Some(lock) = self.account_maps.get(pubkey) {
-            let mut list = &mut lock.1.write().unwrap();
-            // filter out other dirty entries
-            reclaims.extend(list.iter().filter(|(f, _)| *f == slot).cloned());
-            list.retain(|(f, _)| *f != slot);
-
-            lock.0.fetch_add(1, Ordering::Relaxed);
-            list.push((slot, account_info));
-            // now, do lazy clean
-            self.purge_older_root_entries(&mut list, reclaims);
-
-            None
-        } else {
-            Some(account_info)
-        }
-    }
-
     pub fn unref_from_storage(&self, pubkey: &Pubkey) {
         let locked_entry = self.account_maps.get(pubkey);
         if let Some(entry) = locked_entry {
@@ -188,6 +160,31 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
             entry.0.load(Ordering::Relaxed)
         } else {
             0
+        }
+    }
+
+    // Try to update an item in account_maps. If the account is not
+    // already present, then the function will return back Some(account_info) which
+    // the caller can then take the write lock and do an 'insert' with the item.
+    // It returns None if the item is already present and thus successfully updated.
+    pub fn update(
+        &self,
+        slot: Slot,
+        pubkey: &Pubkey,
+        account_info: T,
+        reclaims: &mut SlotList<T>,
+    ) -> Option<T> {
+        if let Some(lock) = self.account_maps.get(pubkey) {
+            let list = &mut lock.1.write().unwrap();
+            // filter out other dirty entries from the same slot
+            reclaims.extend(list.iter().filter(|(f, _)| *f == slot).cloned());
+            list.retain(|(f, _)| *f != slot);
+
+            lock.0.fetch_add(1, Ordering::Relaxed);
+            list.push((slot, account_info));
+            None
+        } else {
+            Some(account_info)
         }
     }
 
