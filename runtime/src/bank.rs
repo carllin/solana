@@ -2875,7 +2875,13 @@ impl Bank {
     }
 
     pub fn clean_accounts(&self) {
+        let mut clean_accounts_time = Measure::start("clean_accounts_time");
         self.rc.accounts.accounts_db.clean_accounts();
+        clean_accounts_time.stop();
+        datapoint_info!(
+            "clean_accounts_elapsed",
+            ("elapsed", clean_accounts_time.as_us(), i64)
+        );
     }
 
     pub fn process_dead_slots(&self) {

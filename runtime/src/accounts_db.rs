@@ -731,7 +731,7 @@ impl AccountsDB {
         });
         purge_filter.stop();
 
-        let mut reclaims_time = Measure::start("reclaims");
+        let mut purge_keys_exact_time = Measure::start("purge_keys_exact");
         // Recalculate reclaims with new purge set
         let purges_key_to_slot_set: Vec<_> = purges
             .into_iter()
@@ -742,20 +742,25 @@ impl AccountsDB {
                 )
             })
             .collect();
-
         let (reclaims, dead_keys) = self.purge_keys_exact(purges_key_to_slot_set);
+        purge_keys_exact_time.stop();
 
+        let mut handle_dead_keys_time = Measure::start("handle_dead_keys");
         self.handle_dead_keys(dead_keys);
+        handle_dead_keys_time.stop();
 
+        let mut reclaims_time = Measure::start("purge_keys_exact");
         self.handle_reclaims_maybe_cleanup(&reclaims);
-
         reclaims_time.stop();
+
         datapoint_info!(
             "clean_accounts",
             ("accounts_scan", accounts_scan.as_us() as i64, i64),
             ("store_counts", store_counts_time.as_us() as i64, i64),
             ("purge_filter", purge_filter.as_us() as i64, i64),
             ("calc_deps", calc_deps_time.as_us() as i64, i64),
+            ("purge_keys", purge_keys_exact_time.as_us() as i64, i64),
+            ("handle_dead_keys", handle_dead_keys_time.as_us() as i64, i64),
             ("reclaims", reclaims_time.as_us() as i64, i64),
         );
     }
@@ -1996,7 +2001,13 @@ impl AccountsDB {
         update_index.stop();
         trace!("reclaim: {}", reclaims.len());
 
+        let mut start = Measure::start("handle_reclaims");
         self.handle_reclaims_maybe_cleanup(&reclaims);
+        start.stop();
+        datapoint_info!(
+            "store_with_hashes_reclaims",
+            ("elapsed", start.as_us() as i64, i64)
+        );
     }
 
     pub fn add_root(&self, slot: Slot) {
