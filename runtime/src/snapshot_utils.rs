@@ -157,7 +157,7 @@ pub fn package_snapshot<P: AsRef<Path>, Q: AsRef<Path>>(
     bank: &Bank,
     snapshot_files: &SlotSnapshotPaths,
     snapshot_path: Q,
-    slots_to_snapshot: &[Slot],
+    status_cache_slot_deltas: Vec<BankSlotDelta>,
     snapshot_package_output_path: P,
     snapshot_storages: SnapshotStorages,
     compression: CompressionType,
@@ -186,7 +186,7 @@ pub fn package_snapshot<P: AsRef<Path>, Q: AsRef<Path>>(
     let package = AccountsPackage::new(
         bank.slot(),
         bank.block_height(),
-        bank.src.slot_deltas(slots_to_snapshot),
+        status_cache_slot_deltas,
         snapshot_hard_links_dir,
         snapshot_storages,
         snapshot_package_output_file,
