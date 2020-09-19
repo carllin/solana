@@ -1711,7 +1711,7 @@ fn main() {
             for result in &bad_results {
                 let good_result = good_results.remove(&result.0);
                 if let Some(good_value) = good_result {
-                    if good_value.1 != (result.1).1 {
+                    if good_value != *result.1 {
                         println!(
                             "Value mismatch for pubkey: {:?}, good_value: {:?}, bad_value: {:?}",
                             result.0, good_value, result.1
