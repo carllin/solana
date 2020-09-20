@@ -3387,6 +3387,8 @@ impl Bank {
                 consumed_budget += shrunken_account_count;
             }
         }
+
+        datapoint_info!("shrink_budget", ("budget", consumed_budget, i64));
         consumed_budget.saturating_sub(budget_recovery_delta)
     }
 
