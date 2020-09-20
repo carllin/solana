@@ -867,8 +867,9 @@ impl AccountsDB {
     // Reads all accounts in given slot's AppendVecs and filter only to alive,
     // then create a minimum AppendVec filled with the alive.
     fn do_shrink_slot(&self, slot: Slot, forced: bool) -> usize {
-        trace!("shrink_stale_slot: slot: {}", slot);
+        info!("shrink_stale_slot: slot: {}", slot);
 
+        let mut total_stored_size = 0;
         let mut stored_accounts = vec![];
         {
             let storage = self.storage.read().unwrap();
@@ -896,6 +897,7 @@ impl AccountsDB {
                     return 0;
                 }
                 for store in stores.values() {
+                    total_stored_size += store.accounts.capacity();
                     let mut start = 0;
                     while let Some((account, next)) = store.accounts.get_account(start) {
                         stored_accounts.push((
@@ -946,9 +948,10 @@ impl AccountsDB {
             .sum();
         let aligned_total: u64 = (alive_total + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1);
 
-        debug!(
-            "shrinking: slot: {}, stored_accounts: {} => alive_accounts: {} ({} bytes; aligned to: {})",
+        info!(
+            "shrinking: slot: {}, total_stored_size: {}, stored_accounts: {} => alive_accounts: {} ({} bytes; aligned to: {})",
             slot,
+            total_stored_size,
             stored_accounts.len(),
             alive_accounts.len(),
             alive_total,
@@ -1039,6 +1042,7 @@ impl AccountsDB {
         // with clean_accounts().
         let mut candidates = candidates.unwrap();
 
+        datapoint_info!("shrink_candidates_size", ("size", candidates.len(), i64));
         let count = self.shrink_stale_slot(&mut candidates);
         measure.stop();
         inc_new_counter_info!("stale_slot_shrink-ms", measure.as_ms() as usize);
