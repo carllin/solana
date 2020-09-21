@@ -880,9 +880,10 @@ impl AccountsDB {
 
         let mut total_stored_size = 0;
         let mut stored_accounts = vec![];
+        let mut storage_read_elapsed = Measure::start("storage_read_elapsed");
         {
-            let storage = self.storage.read().unwrap();
-            if let Some(stores) = storage.0.get(&slot) {
+            let slot_storages = self.storage.read().unwrap().0.get(&slot).cloned();
+            if let Some(stores) = slot_storages {
                 let mut alive_count = 0;
                 let mut stored_count = 0;
                 for store in stores.values() {
@@ -922,9 +923,10 @@ impl AccountsDB {
                 }
             }
         }
+        storage_read_elapsed.stop();
 
+        let mut index_read_elapsed = Measure::start("index_read_elapsed");
         let alive_accounts: Vec<_> = {
-            let accounts_index = self.accounts_index.read().unwrap();
             stored_accounts
                 .iter()
                 .filter(
@@ -936,7 +938,9 @@ impl AccountsDB {
                         (store_id, offset),
                         _write_version,
                     )| {
-                        if let Some((list, _)) = accounts_index.get(pubkey, None, None) {
+                        if let Some((list, _)) =
+                            self.accounts_index.read().unwrap().get(pubkey, None, None)
+                        {
                             list.iter()
                                 .any(|(_slot, i)| i.store_id == *store_id && i.offset == *offset)
                         } else {
@@ -946,6 +950,7 @@ impl AccountsDB {
                 )
                 .collect()
         };
+        index_read_elapsed.stop();
 
         let alive_total: u64 = alive_accounts
             .iter()
@@ -967,7 +972,16 @@ impl AccountsDB {
             aligned_total
         );
 
+        let mut rewrite_elapsed = Measure::start("rewrite_elapsed");
+        let mut dead_storages = vec![];
+        let mut find_alive_elapsed = 0;
+        let mut create_and_insert_store_elapsed = 0;
+        let mut store_accounts_elapsed = 0;
+        let mut update_index_elapsed = 0;
+        let mut handle_reclaims_elapsed = 0;
+        let mut write_storage_elapsed = 0;
         if aligned_total > 0 {
+            let mut start = Measure::start("find_alive_elapsed");
             let mut accounts = Vec::with_capacity(alive_accounts.len());
             let mut hashes = Vec::with_capacity(alive_accounts.len());
             let mut write_versions = Vec::with_capacity(alive_accounts.len());
@@ -978,12 +992,18 @@ impl AccountsDB {
                 hashes.push(*account_hash);
                 write_versions.push(*write_version);
             }
+            start.stop();
+            find_alive_elapsed = start.as_ms();
 
+            let mut start = Measure::start("create_and_insert_store_elapsed");
             let shrunken_store = self.create_and_insert_store(slot, aligned_total);
+            start.stop();
+            create_and_insert_store_elapsed = start.as_ms();
 
             // here, we're writing back alive_accounts. That should be an atomic operation
             // without use of rather wide locks in this whole function, because we're
             // mutating rooted slots; There should be no writers to them.
+            let mut start = Measure::start("store_accounts_elapsed");
             let infos = self.store_accounts_to(
                 slot,
                 &accounts,
@@ -991,16 +1011,59 @@ impl AccountsDB {
                 |_| shrunken_store.clone(),
                 write_versions.into_iter(),
             );
+            start.stop();
+            store_accounts_elapsed = start.as_ms();
+
+            let mut start = Measure::start("update_index_elapsed");
             let reclaims = self.update_index(slot, infos, &accounts);
+            start.stop();
+            update_index_elapsed = start.as_ms();
 
+            let mut start = Measure::start("handle_reclaims_elapsed");
             self.handle_reclaims(&reclaims, Some(slot), true);
+            start.stop();
+            handle_reclaims_elapsed = start.as_ms();
 
+            let mut start = Measure::start("write_storage_elapsed");
             let mut storage = self.storage.write().unwrap();
             if let Some(slot_storage) = storage.0.get_mut(&slot) {
-                slot_storage.retain(|_key, store| store.count() > 0);
+                slot_storage.retain(|_key, store| {
+                    if store.count() == 0 {
+                        dead_storages.push(store.clone());
+                    }
+                    store.count() > 0
+                });
             }
+            start.stop();
+            write_storage_elapsed = start.as_ms();
         }
+        rewrite_elapsed.stop();
 
+        let mut drop_dead_storages_elapsed = Measure::start("drop_dead_storages_elapsed");
+        drop(dead_storages);
+        drop_dead_storages_elapsed.stop();
+
+        datapoint_info!(
+            "do_shrink_slot_time",
+            ("storage_read_elapsed", storage_read_elapsed.as_ms(), i64),
+            ("index_read_elapsed", index_read_elapsed.as_ms(), i64),
+            ("find_alive_elapsed", find_alive_elapsed, i64),
+            (
+                "create_and_insert_store_elapsed",
+                create_and_insert_store_elapsed,
+                i64
+            ),
+            ("store_accounts_elapsed", store_accounts_elapsed, i64),
+            ("update_index_elapsed", update_index_elapsed, i64),
+            ("handle_reclaims_elapsed", handle_reclaims_elapsed, i64),
+            ("write_storage_elapsed", write_storage_elapsed, i64),
+            ("rewrite_elapsed", rewrite_elapsed.as_ms(), i64),
+            (
+                "drop_dead_storages_elapsed",
+                drop_dead_storages_elapsed.as_ms(),
+                i64
+            ),
+        );
         alive_accounts.len()
     }
 
