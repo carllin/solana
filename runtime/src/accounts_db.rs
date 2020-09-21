@@ -1292,6 +1292,7 @@ impl AccountsDB {
         let mut storage = self.storage.write().unwrap();
         storage_lock.stop();
 
+        let mut test = vec![];
         let mut remove_time = Measure::start("remove_time");
         let mut total_removed = 0;
         let mut total_removed_size = 0;
@@ -1299,10 +1300,15 @@ impl AccountsDB {
             let removed = storage.0.remove(&slot);
             total_removed += removed.as_ref().map(|x| x.len()).unwrap_or(0);
             total_removed_size += removed
+                .as_ref()
                 .map(|x| x.values().map(|i| i.accounts.capacity()).sum())
                 .unwrap_or(0);
+            test.push(removed);
         }
         remove_time.stop();
+        drop(storage);
+
+        println!("test length: {}", test.len());
 
         datapoint_info!(
             "purge_slots_time",
