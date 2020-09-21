@@ -94,18 +94,16 @@ impl AccountsBackgroundService {
                     // Safe, see proof above
                     assert!(last_cleaned_slot <= snapshotted_slot);
                     last_cleaned_slot = snapshotted_slot;
-                } else {
-                    consumed_budget = bank.process_stale_slot_with_budget(
-                        consumed_budget,
-                        SHRUNKEN_ACCOUNT_PER_INTERVAL,
-                    );
+                }
 
-                    /*if bank.block_height() - last_cleaned_slot
-                        > (CLEAN_INTERVAL_SLOTS + thread_rng().gen_range(0, 10))
-                    {
-                        bank.clean_accounts(None);
-                        last_cleaned_slot = bank.block_height();
-                    }*/
+                consumed_budget = bank
+                    .process_stale_slot_with_budget(0, SHRUNKEN_ACCOUNT_PER_INTERVAL);
+
+                if bank.block_height() - last_cleaned_slot
+                    > (CLEAN_INTERVAL_SLOTS + thread_rng().gen_range(0, 10))
+                {
+                    bank.clean_accounts(None);
+                    last_cleaned_slot = bank.block_height();
                 }
 
                 sleep(Duration::from_millis(INTERVAL_MS));
@@ -133,12 +131,12 @@ impl AccountsBackgroundService {
                     status_cache_slot_deltas,
                 } = snapshot_request;
 
-                snapshot_root_bank.process_stale_slot_with_budget(0, SHRUNKEN_ACCOUNT_PER_INTERVAL);
+                /*snapshot_root_bank.process_stale_slot_with_budget(0, SHRUNKEN_ACCOUNT_PER_INTERVAL);
                 // Don't clean the slot we're snapshotting becaue it may have zero-lamport
                 // accounts that were included in the bank delta hash when the bank was frozen,
                 // and if we clean them here, the newly created snapshot's hash may not match
                 // the frozen hash.
-                snapshot_root_bank.clean_accounts(Some(snapshot_root_bank.slot() - 1));
+                snapshot_root_bank.clean_accounts(Some(snapshot_root_bank.slot() - 1));*/
 
                 // Generate an accounts package
                 let mut snapshot_time = Measure::start("total-snapshot-ms");
