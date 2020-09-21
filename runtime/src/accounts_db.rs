@@ -814,7 +814,17 @@ impl AccountsDB {
         no_dead_slot: bool,
     ) {
         if !reclaims.is_empty() {
+            let mut remove_dead_accounts_elapsed = Measure::start("remove_dead_accounts_elapsed");
             let dead_slots = self.remove_dead_accounts(reclaims, expected_single_dead_slot);
+            remove_dead_accounts_elapsed.stop();
+            datapoint_info!(
+                "remove_dead_accounts",
+                (
+                    "remove_dead_accounts_elapsed",
+                    remove_dead_accounts_elapsed.as_ms(),
+                    i64
+                )
+            );
             if no_dead_slot {
                 assert!(dead_slots.is_empty());
             } else if let Some(expected_single_dead_slot) = expected_single_dead_slot {
@@ -832,7 +842,7 @@ impl AccountsDB {
     // Must be kept private!, does sensitive cleanup that should only be called from
     // supported pipelines in AccountsDb
     fn process_dead_slots(&self, dead_slots: &HashSet<Slot>) {
-        let mut clean_dead_slots = Measure::start("reclaims::purge_slots");
+        let mut clean_dead_slots = Measure::start("reclaims::clean_dead_slots");
         self.clean_dead_slots(&dead_slots);
         clean_dead_slots.stop();
 
@@ -840,11 +850,10 @@ impl AccountsDB {
         self.purge_slots(&dead_slots);
         purge_slots.stop();
 
-        debug!(
-            "process_dead_slots({}): {} {}",
-            dead_slots.len(),
-            clean_dead_slots,
-            purge_slots
+        datapoint_info!(
+            "process_dead_slots",
+            ("clean_dead_slots", clean_dead_slots.as_ms(), i64),
+            ("purge_slots", purge_slots.as_ms(), i64)
         );
     }
 
@@ -1267,16 +1276,44 @@ impl AccountsDB {
 
     fn purge_slots(&self, slots: &HashSet<Slot>) {
         //add_root should be called first
+        let mut index_lock = Measure::start("index_lock");
         let accounts_index = self.accounts_index.read().unwrap();
+        index_lock.stop();
+
+        let mut iteration_time = Measure::start("iteration_time");
         let non_roots: Vec<_> = slots
             .iter()
             .filter(|slot| !accounts_index.is_root(**slot))
             .collect();
         drop(accounts_index);
+        iteration_time.stop();
+
+        let mut storage_lock = Measure::start("storage_lock");
         let mut storage = self.storage.write().unwrap();
+        storage_lock.stop();
+
+        let mut remove_time = Measure::start("remove_time");
+        let mut total_removed = 0;
+        let mut total_removed_size = 0;
         for slot in non_roots {
-            storage.0.remove(&slot);
+            let removed = storage.0.remove(&slot);
+            total_removed += removed.as_ref().map(|x| x.len()).unwrap_or(0);
+            total_removed_size += removed
+                .map(|x| x.values().map(|i| i.accounts.capacity()).sum())
+                .unwrap_or(0);
         }
+        remove_time.stop();
+
+        datapoint_info!(
+            "purge_slots_time",
+            ("index_lock", index_lock.as_ms(), i64),
+            ("iteration_time", iteration_time.as_ms(), i64),
+            ("storage_lock", storage_lock.as_ms(), i64),
+            ("remove_time", remove_time.as_ms(), i64),
+            ("total_removed", total_removed, i64),
+            ("total_removed_size", total_removed_size, i64),
+            ("num_slots", slots.len(), i64)
+        );
     }
 
     pub fn remove_unrooted_slot(&self, remove_slot: Slot) {
@@ -1929,7 +1966,11 @@ impl AccountsDB {
         reclaims: SlotSlice<AccountInfo>,
         expected_slot: Option<Slot>,
     ) -> HashSet<Slot> {
+        let mut storage_lock = Measure::start("storage_lock");
         let storage = self.storage.read().unwrap();
+        storage_lock.stop();
+
+        let mut iter_elapsed = Measure::start("iter_elapsed");
         let mut dead_slots = HashSet::new();
         for (slot, account_info) in reclaims {
             if let Some(expected_slot) = expected_slot {
@@ -1959,6 +2000,12 @@ impl AccountsDB {
             }
             true
         });
+        iter_elapsed.stop();
+        datapoint_info!(
+            "remove_dead_accounts_internal",
+            ("storage_lock", storage_lock.as_us() as i64, i64),
+            ("iter_elapsed", iter_elapsed.as_us() as i64, i64),
+        );
 
         dead_slots
     }
