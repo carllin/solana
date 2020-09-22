@@ -980,6 +980,11 @@ impl AccountsDB {
         let mut update_index_elapsed = 0;
         let mut handle_reclaims_elapsed = 0;
         let mut write_storage_elapsed = 0;
+
+        let mut new_storage_elapsed = 0;
+        let mut write_locks_elapsed = 0;
+        let mut insert_new_storage_elapsed = 0;
+
         if aligned_total > 0 {
             let mut start = Measure::start("find_alive_elapsed");
             let mut accounts = Vec::with_capacity(alive_accounts.len());
@@ -996,7 +1001,10 @@ impl AccountsDB {
             find_alive_elapsed = start.as_ms();
 
             let mut start = Measure::start("create_and_insert_store_elapsed");
-            let shrunken_store = self.create_and_insert_store(slot, aligned_total);
+            let (shrunken_store, x, y, z) = self.create_and_insert_store(slot, aligned_total);
+            new_storage_elapsed = x;
+            write_locks_elapsed = y;
+            insert_new_storage_elapsed = z;
             start.stop();
             create_and_insert_store_elapsed = start.as_ms();
 
@@ -1048,6 +1056,13 @@ impl AccountsDB {
             ("storage_read_elapsed", storage_read_elapsed.as_ms(), i64),
             ("index_read_elapsed", index_read_elapsed.as_ms(), i64),
             ("find_alive_elapsed", find_alive_elapsed, i64),
+            ("new_storage_elapsed", new_storage_elapsed, i64),
+            ("write_locks_elapsed", write_locks_elapsed, i64),
+            (
+                "insert_new_storage_elapsed",
+                insert_new_storage_elapsed,
+                i64
+            ),
             (
                 "create_and_insert_store_elapsed",
                 create_and_insert_store_elapsed,
@@ -1300,7 +1315,7 @@ impl AccountsDB {
                         let ret = store.clone();
                         drop(stores);
                         if create_extra {
-                            self.create_and_insert_store(slot, self.file_size);
+                            self.create_and_insert_store(slot, self.file_size).0;
                         }
                         return ret;
                     }
@@ -1314,21 +1329,37 @@ impl AccountsDB {
 
         drop(stores);
 
-        let store = self.create_and_insert_store(slot, self.file_size);
+        let store = self.create_and_insert_store(slot, self.file_size).0;
         store.try_available();
         store
     }
 
-    fn create_and_insert_store(&self, slot: Slot, size: u64) -> Arc<AccountStorageEntry> {
+    fn create_and_insert_store(
+        &self,
+        slot: Slot,
+        size: u64,
+    ) -> (Arc<AccountStorageEntry>, u64, u64, u64) {
         let path_index = thread_rng().gen_range(0, self.paths.len());
+        let mut new_storage_elapsed = Measure::start("new_storage_elapsed");
         let store =
             Arc::new(self.new_storage_entry(slot, &Path::new(&self.paths[path_index]), size));
+        new_storage_elapsed.stop();
         let store_for_index = store.clone();
 
+        let mut write_locks_elapsed = Measure::start("write_locks_elapsed");
         let mut stores = self.storage.write().unwrap();
+        write_locks_elapsed.stop();
+
+        let mut insert_elapsed = Measure::start("insert_elapsed");
         let slot_storage = stores.0.entry(slot).or_insert_with(HashMap::new);
         slot_storage.insert(store.id, store_for_index);
-        store
+        insert_elapsed.stop();
+        (
+            store,
+            new_storage_elapsed.as_ms(),
+            write_locks_elapsed.as_ms(),
+            insert_elapsed.as_ms(),
+        )
     }
 
     pub fn purge_slot(&self, slot: Slot) {
@@ -1659,7 +1690,7 @@ impl AccountsDB {
                 // See if an account overflows the default append vec size.
                 let data_len = (with_meta[infos.len()].1.data.len() + 4096) as u64;
                 if data_len > self.file_size {
-                    self.create_and_insert_store(slot, data_len * 2);
+                    self.create_and_insert_store(slot, data_len * 2).0;
                 }
                 continue;
             }

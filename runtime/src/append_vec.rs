@@ -1,6 +1,7 @@
 use log::*;
 use memmap::MmapMut;
 use serde::{Deserialize, Serialize};
+use solana_measure::measure::Measure;
 use solana_sdk::{
     account::Account,
     clock::{Epoch, Slot},
@@ -125,10 +126,13 @@ impl AppendVec {
         let initial_len = 0;
         AppendVec::sanitize_len_and_size(initial_len, size).unwrap();
 
+        let mut remove_time = Measure::start("remove_time");
         if create {
             let _ignored = remove_file(file);
         }
+        remove_time.stop();
 
+        let mut open_time = Measure::start("open_time");
         let mut data = OpenOptions::new()
             .read(true)
             .write(true)
@@ -152,12 +156,20 @@ impl AppendVec {
                 );
             })
             .unwrap();
+        open_time.stop();
 
+        let mut seek_and_write = Measure::start("seek_write");
         data.seek(SeekFrom::Start((size - 1) as u64)).unwrap();
         data.write_all(&[0]).unwrap();
         data.seek(SeekFrom::Start(0)).unwrap();
+        seek_and_write.stop();
+
+        let mut data_flush_elapsed = Measure::start("data_flush_elapsed");
         data.flush().unwrap();
+        data_flush_elapsed.stop();
+
         //UNSAFE: Required to create a Mmap
+        let mut create_map_elapsed = Measure::start("create_map_elapsed");
         let map = unsafe { MmapMut::map_mut(&data) };
         let map = map.unwrap_or_else(|e| {
             error!(
@@ -167,6 +179,16 @@ impl AppendVec {
             );
             std::process::exit(1);
         });
+        create_map_elapsed.stop();
+
+        datapoint_info!(
+            "append_vec_time",
+            ("open_time", open_time.as_ms() as i64, i64),
+            ("remove_time", remove_time.as_ms() as i64, i64),
+            ("seek_and_write", seek_and_write.as_ms() as i64, i64),
+            ("data_flush_elapsed", data_flush_elapsed.as_ms() as i64, i64),
+            ("create_map_elapsed", create_map_elapsed.as_ms() as i64, i64),
+        );
 
         AppendVec {
             path: file.to_path_buf(),
