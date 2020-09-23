@@ -142,12 +142,12 @@ impl AccountsBackgroundService {
                         SHRUNKEN_ACCOUNT_PER_INTERVAL,
                     );
 
-                    /*if bank.block_height() - last_cleaned_slot
+                    if bank.block_height() - last_cleaned_block_height
                         > (CLEAN_INTERVAL_SLOTS + thread_rng().gen_range(0, 10))
                     {
                         bank.clean_accounts(None);
-                        last_cleaned_slot = bank.block_height();
-                    }*/
+                        last_cleaned_block_height = bank.block_height();
+                    }
                 }
 
                 sleep(Duration::from_millis(INTERVAL_MS));
