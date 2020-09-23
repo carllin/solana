@@ -288,7 +288,16 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
             // Only keep the slots that have yet to be cleaned
             !is_cleaned
         });
-        std::mem::replace(&mut self.previous_uncleaned_roots, cleaned_roots)
+
+        // Don't reset because it's too early to try and shrink these (max_cleaned_slot.is_some(),
+        // implies this was an early clean for a snapshot).
+        if max_cleaned_slot.is_some() {
+            self.previous_uncleaned_roots
+                .extend(cleaned_roots.into_iter());
+            HashSet::new()
+        } else {
+            std::mem::replace(&mut self.previous_uncleaned_roots, cleaned_roots)
+        }
     }
 }
 
