@@ -3423,7 +3423,7 @@ impl Bank {
         );
     }
 
-    pub fn clean_accounts(&self, max_clean_slot: Option<Slot>) -> Vec<Slot> {
+    pub fn clean_accounts(&self, max_clean_slot: Option<Slot>) -> HashSet<Slot> {
         self.rc.accounts.accounts_db.clean_accounts(max_clean_slot)
     }
 
@@ -3435,8 +3435,8 @@ impl Bank {
         self.rc.accounts.accounts_db.print_accounts_stats("");
     }
 
-    pub fn process_stale_slot_with_budget(&self, shrink_slots: &[Slot]) {
-        for slot in shrink_slots {
+    pub fn process_stale_slot_with_budget(&self, shrink_slots: &HashSet<Slot>) {
+        for slot in shrink_slots.iter() {
             let shrunken_account_count = self.rc.accounts.accounts_db.do_shrink_slot(*slot, false);
             if shrunken_account_count > 0 {
                 datapoint_info!(

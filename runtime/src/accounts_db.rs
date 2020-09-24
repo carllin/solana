@@ -568,7 +568,7 @@ impl AccountsDB {
         inc_new_counter_info!("clean-old-root-reclaim-ms", measure.as_ms() as usize);
     }
 
-    fn do_reset_uncleaned_roots(&self, max_clean_root: Option<Slot>) -> Vec<Slot> {
+    fn do_reset_uncleaned_roots(&self, max_clean_root: Option<Slot>) -> HashSet<Slot> {
         self.accounts_index
             .write()
             .unwrap()
@@ -653,7 +653,7 @@ impl AccountsDB {
     // collection
     // Only remove those accounts where the entire rooted history of the account
     // can be purged because there are no live append vecs in the ancestors
-    pub fn clean_accounts(&self, max_clean_root: Option<Slot>) -> Vec<Slot> {
+    pub fn clean_accounts(&self, max_clean_root: Option<Slot>) -> HashSet<Slot> {
         // hold a lock to prevent slot shrinking from running because it might modify some rooted
         // slot storages which can not happen as long as we're cleaning accounts because we're also
         // modifying the rooted slot storages!
