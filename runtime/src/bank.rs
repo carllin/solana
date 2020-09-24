@@ -3423,8 +3423,8 @@ impl Bank {
         );
     }
 
-    pub fn clean_accounts(&self, max_clean_slot: Option<Slot>) {
-        self.rc.accounts.accounts_db.clean_accounts(max_clean_slot);
+    pub fn clean_accounts(&self, max_clean_slot: Option<Slot>) -> Vec<Slot> {
+        self.rc.accounts.accounts_db.clean_accounts(max_clean_slot)
     }
 
     pub fn shrink_all_slots(&self) {
@@ -3435,22 +3435,16 @@ impl Bank {
         self.rc.accounts.accounts_db.print_accounts_stats("");
     }
 
-    pub fn process_stale_slot_with_budget(
-        &self,
-        mut consumed_budget: usize,
-        budget_recovery_delta: usize,
-    ) -> usize {
-        if consumed_budget == 0 {
-            let shrunken_account_count = self.rc.accounts.accounts_db.process_stale_slot();
+    pub fn process_stale_slot_with_budget(&self, shrink_slots: &[Slot]) {
+        for slot in shrink_slots {
+            let shrunken_account_count = self.rc.accounts.accounts_db.do_shrink_slot(*slot, false);
             if shrunken_account_count > 0 {
                 datapoint_info!(
                     "stale_slot_shrink",
                     ("accounts", shrunken_account_count, i64)
                 );
-                consumed_budget += shrunken_account_count;
             }
         }
-        consumed_budget.saturating_sub(budget_recovery_delta)
     }
 
     // This is called from snapshot restore AND for each epoch boundary

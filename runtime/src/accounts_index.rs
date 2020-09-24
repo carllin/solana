@@ -282,19 +282,19 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
         self.previous_uncleaned_roots.remove(&slot);
     }
 
-    pub fn reset_uncleaned_roots(&mut self, max_clean_root: Option<Slot>) -> HashSet<Slot> {
-        let mut cleaned_roots = HashSet::new();
+    pub fn reset_uncleaned_roots(&mut self, max_clean_root: Option<Slot>) -> Vec<Slot> {
+        let mut cleaned_roots = Vec::new();
         self.uncleaned_roots.retain(|root| {
             let is_cleaned = max_clean_root
                 .map(|max_clean_root| *root <= max_clean_root)
                 .unwrap_or(true);
             if is_cleaned {
-                cleaned_roots.insert(*root);
+                cleaned_roots.push(*root);
             }
             // Only keep the slots that have yet to be cleaned
             !is_cleaned
         });
-        std::mem::replace(&mut self.previous_uncleaned_roots, cleaned_roots)
+        cleaned_roots
     }
 }
 

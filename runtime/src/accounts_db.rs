@@ -568,22 +568,16 @@ impl AccountsDB {
         inc_new_counter_info!("clean-old-root-reclaim-ms", measure.as_ms() as usize);
     }
 
-    fn do_reset_uncleaned_roots(
-        &self,
-        candidates: &mut MutexGuard<Vec<Slot>>,
-        max_clean_root: Option<Slot>,
-    ) {
-        let previous_roots = self
-            .accounts_index
+    fn do_reset_uncleaned_roots(&self, max_clean_root: Option<Slot>) -> Vec<Slot> {
+        self.accounts_index
             .write()
             .unwrap()
-            .reset_uncleaned_roots(max_clean_root);
-        candidates.extend(previous_roots);
+            .reset_uncleaned_roots(max_clean_root)
     }
 
     #[cfg(test)]
     fn reset_uncleaned_roots(&self) {
-        self.do_reset_uncleaned_roots(&mut self.shrink_candidate_slots.lock().unwrap(), None);
+        self.do_reset_uncleaned_roots(None);
     }
 
     fn calc_delete_dependencies(
@@ -659,7 +653,7 @@ impl AccountsDB {
     // collection
     // Only remove those accounts where the entire rooted history of the account
     // can be purged because there are no live append vecs in the ancestors
-    pub fn clean_accounts(&self, max_clean_root: Option<Slot>) {
+    pub fn clean_accounts(&self, max_clean_root: Option<Slot>) -> Vec<Slot> {
         // hold a lock to prevent slot shrinking from running because it might modify some rooted
         // slot storages which can not happen as long as we're cleaning accounts because we're also
         // modifying the rooted slot storages!
@@ -705,7 +699,7 @@ impl AccountsDB {
         if !purges_in_root.is_empty() {
             self.clean_old_rooted_accounts(purges_in_root, max_clean_root);
         }
-        self.do_reset_uncleaned_roots(&mut candidates, max_clean_root);
+        let cleaned_roots = self.do_reset_uncleaned_roots(max_clean_root);
         clean_old_rooted.stop();
 
         let mut store_counts_time = Measure::start("store_counts");
@@ -778,6 +772,8 @@ impl AccountsDB {
             ("calc_deps", calc_deps_time.as_us() as i64, i64),
             ("reclaims", reclaims_time.as_us() as i64, i64),
         );
+
+        cleaned_roots
     }
 
     fn handle_dead_keys(&self, dead_keys: Vec<Pubkey>) {
@@ -870,7 +866,7 @@ impl AccountsDB {
 
     // Reads all accounts in given slot's AppendVecs and filter only to alive,
     // then create a minimum AppendVec filled with the alive.
-    fn do_shrink_slot(&self, slot: Slot, forced: bool) -> usize {
+    pub fn do_shrink_slot(&self, slot: Slot, forced: bool) -> usize {
         trace!("shrink_stale_slot: slot: {}", slot);
 
         let mut stored_accounts = vec![];

@@ -51,17 +51,18 @@ impl SnapshotRequestHandler {
                     status_cache_slot_deltas,
                 } = snapshot_request;
 
-                let mut shrink_time = Measure::start("shrink_time");
-                snapshot_root_bank.process_stale_slot_with_budget(0, SHRUNKEN_ACCOUNT_PER_INTERVAL);
-                shrink_time.stop();
-
                 let mut clean_time = Measure::start("clean_time");
                 // Don't clean the slot we're snapshotting because it may have zero-lamport
                 // accounts that were included in the bank delta hash when the bank was frozen,
                 // and if we clean them here, the newly created snapshot's hash may not match
                 // the frozen hash.
-                snapshot_root_bank.clean_accounts(Some(snapshot_root_bank.slot() - 1));
+                let cleaned_slots =
+                    snapshot_root_bank.clean_accounts(Some(snapshot_root_bank.slot() - 1));
                 clean_time.stop();
+
+                let mut shrink_time = Measure::start("shrink_time");
+                snapshot_root_bank.process_stale_slot_with_budget(&cleaned_slots);
+                shrink_time.stop();
 
                 // Generate an accounts package
                 let mut snapshot_time = Measure::start("snapshot_time");
@@ -92,6 +93,7 @@ impl SnapshotRequestHandler {
                     "handle_snapshot_requests-timing",
                     ("shrink_time", shrink_time.as_us(), i64),
                     ("clean_time", clean_time.as_us(), i64),
+                    ("cleaned_slots", cleaned_slots.len(), i64),
                     ("snapshot_time", snapshot_time.as_us(), i64),
                     (
                         "purge_old_snapshots_time",
@@ -153,19 +155,19 @@ impl AccountsBackgroundService {
                     // Safe, see proof above
                     assert!(last_cleaned_block_height <= snapshot_block_height);
                     last_cleaned_block_height = snapshot_block_height;
-                } else {
-                    consumed_budget = bank.process_stale_slot_with_budget(
-                        consumed_budget,
-                        SHRUNKEN_ACCOUNT_PER_INTERVAL,
-                    );
+                } /*else {
+                      consumed_budget = bank.process_stale_slot_with_budget(
+                          consumed_budget,
+                          SHRUNKEN_ACCOUNT_PER_INTERVAL,
+                      );
 
-                    if bank.block_height() - last_cleaned_block_height
-                        > (CLEAN_INTERVAL_BLOCKS + thread_rng().gen_range(0, 10))
-                    {
-                        bank.clean_accounts(None);
-                        last_cleaned_block_height = bank.block_height();
-                    }
-                }
+                      if bank.block_height() - last_cleaned_block_height
+                          > (CLEAN_INTERVAL_BLOCKS + thread_rng().gen_range(0, 10))
+                      {
+                          bank.clean_accounts(None);
+                          last_cleaned_block_height = bank.block_height();
+                      }
+                  }*/
 
                 sleep(Duration::from_millis(INTERVAL_MS));
             })
