@@ -47,7 +47,7 @@ use std::{
     ops::RangeBounds,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    sync::{Arc, Mutex, MutexGuard, RwLock, RwLockWriteGuard},
+    sync::{Arc, Mutex, MutexGuard, RwLock},
     time::Instant,
 };
 use tempfile::TempDir;
@@ -2071,7 +2071,7 @@ impl AccountsDB {
             let mut stores: Vec<Arc<AccountStorageEntry>> = vec![];
             for slot in dead_slots.iter() {
                 if let Some(slot_storage) = self.storage.get_slot_stores(*slot) {
-                    for store in slot_storage.values() {
+                    for store in slot_storage.read().unwrap().values() {
                         stores.push(store.clone());
                     }
                 }
