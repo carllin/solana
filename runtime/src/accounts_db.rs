@@ -123,17 +123,12 @@ pub struct AccountStorage(pub DashMap<Slot, Arc<RwLock<SlotStores>>>);
 impl AccountStorage {
     fn get_account_storage_entry(
         &self,
-        account_info: &AccountInfo,
+        store_id: AppendVecId,
         slot: Slot,
     ) -> Option<Arc<AccountStorageEntry>> {
-        self.0.get(&slot).and_then(|storage_map| {
-            storage_map
-                .value()
-                .read()
-                .unwrap()
-                .get(&account_info.store_id)
-                .cloned()
-        })
+        self.0
+            .get(&slot)
+            .and_then(|storage_map| storage_map.value().read().unwrap().get(&store_id).cloned())
     }
 
     fn get_slot_stores(&self, slot: Slot) -> Option<Arc<RwLock<SlotStores>>> {
@@ -734,7 +729,7 @@ impl AccountsDB {
             for (slot, account_info) in account_infos {
                 let store = self
                     .storage
-                    .get_account_storage_entry(&account_info, *slot)
+                    .get_account_storage_entry(account_info.store_id, *slot)
                     .unwrap();
                 if let Some(store_count) = store_counts.get_mut(&account_info.store_id) {
                     store_count.0 -= 1;
@@ -1147,7 +1142,9 @@ impl AccountsDB {
         let mut collector = A::default();
         let accounts_index = self.accounts_index.read().unwrap();
         accounts_index.scan_accounts(ancestors, |pubkey, (account_info, slot)| {
-            let account_storage_entry = self.storage.get_account_storage_entry(account_info, slot);
+            let account_storage_entry = self
+                .storage
+                .get_account_storage_entry(account_info.store_id, slot);
             let account_slot = account_storage_entry
                 .and_then(|account_storage_entry| account_storage_entry.get_account(account_info))
                 .map(|account| (pubkey, account, slot));
@@ -1165,7 +1162,9 @@ impl AccountsDB {
         let mut collector = A::default();
         let accounts_index = self.accounts_index.read().unwrap();
         accounts_index.range_scan_accounts(ancestors, range, |pubkey, (account_info, slot)| {
-            let account_storage_entry = self.storage.get_account_storage_entry(account_info, slot);
+            let account_storage_entry = self
+                .storage
+                .get_account_storage_entry(account_info.store_id, slot);
             let account_slot = account_storage_entry
                 .and_then(|account_storage_entry| account_storage_entry.get_account(account_info))
                 .map(|account| (pubkey, account, slot));
@@ -1237,7 +1236,7 @@ impl AccountsDB {
         let slot = lock[index].0;
         //TODO: thread this as a ref
         storage
-            .get_account_storage_entry(&lock[index].1, slot)
+            .get_account_storage_entry(lock[index].1.store_id, slot)
             .and_then(|store| {
                 let info = &lock[index].1;
                 store
@@ -1253,7 +1252,10 @@ impl AccountsDB {
         let (lock, index) = accounts_index.get(pubkey, Some(ancestors), None).unwrap();
         let slot = lock[index].0;
         let info = &lock[index].1;
-        let entry = self.storage.get_account_storage_entry(&info, slot).unwrap();
+        let entry = self
+            .storage
+            .get_account_storage_entry(info.store_id, slot)
+            .unwrap();
         let account = entry.accounts.get_account(info.offset);
         *account.as_ref().unwrap().0.hash
     }
@@ -1854,7 +1856,7 @@ impl AccountsDB {
                     let (slot, account_info) = &list[index];
                     if account_info.lamports != 0 {
                         self.storage
-                            .get_account_storage_entry(account_info, *slot)
+                            .get_account_storage_entry(account_info.store_id, *slot)
                             .and_then(|store| {
                                 let account = store.accounts.get_account(account_info.offset)?.0;
                                 let balance = Self::account_balance_for_capitalization(
@@ -2039,7 +2041,10 @@ impl AccountsDB {
             if let Some(expected_slot) = expected_slot {
                 assert_eq!(*slot, expected_slot);
             }
-            if let Some(store) = self.storage.get_account_storage_entry(&account_info, *slot) {
+            if let Some(store) = self
+                .storage
+                .get_account_storage_entry(account_info.store_id, *slot)
+            {
                 assert_eq!(
                     *slot, store.slot,
                     "AccountDB::accounts_index corrupted. Storage should only point to one slot"
