@@ -1505,12 +1505,11 @@ mod tests {
         let mut error_counters = ErrorCounters::default();
         let ancestors = vec![(0, 0)].into_iter().collect();
 
-        let accounts_index = accounts.accounts_db.accounts_index.read().unwrap();
         assert_eq!(
             Accounts::load_executable_accounts(
                 &accounts.accounts_db.storage,
                 &ancestors,
-                &accounts_index,
+                &accounts.accounts_db.accounts_index,
                 &Pubkey::new_rand(),
                 &mut error_counters
             ),
