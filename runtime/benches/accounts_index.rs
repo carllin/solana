@@ -18,7 +18,7 @@ fn bench_accounts_index(bencher: &mut Bencher) {
     let mut index = AccountsIndex::<AccountInfo>::default();
     for f in 0..NUM_FORKS {
         for pubkey in pubkeys.iter().take(NUM_PUBKEYS) {
-            index.insert(f, pubkey, AccountInfo::default(), &mut reclaims);
+            index.update_or_create_if_missing(f, pubkey, AccountInfo::default(), &mut reclaims);
         }
     }
 
@@ -27,7 +27,7 @@ fn bench_accounts_index(bencher: &mut Bencher) {
     bencher.iter(|| {
         for _p in 0..NUM_PUBKEYS {
             let pubkey = thread_rng().gen_range(0, NUM_PUBKEYS);
-            index.insert(
+            index.update_or_create_if_missing(
                 fork,
                 &pubkeys[pubkey],
                 AccountInfo::default(),

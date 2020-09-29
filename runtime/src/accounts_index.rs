@@ -42,10 +42,10 @@ pub type AccountMap<K, V> = BTreeMap<K, V>;
 #[derive(Clone, Debug)]
 pub struct AccountMapEntry<T> {
     ref_count: Arc<AtomicU64>,
-    slot_list: Arc<RwLock<SlotList<T>>>,
+    pub slot_list: Arc<RwLock<SlotList<T>>>,
 }
 
-struct ReadAccountMapEntry<T: 'static> {
+pub struct ReadAccountMapEntry<T: 'static> {
     ref_count: Arc<AtomicU64>,
     slot_list: OwningReadGuard<SlotList<T>>,
 }
@@ -57,9 +57,17 @@ impl<T: Clone> ReadAccountMapEntry<T> {
             slot_list: OwningReadGuard::new(account_map_entry.slot_list, |s| s.read().unwrap()),
         }
     }
+
+    pub fn slot_list(&self) -> &SlotList<T> {
+        &*self.slot_list
+    }
+
+    pub fn ref_count(&self) -> u64 {
+        self.ref_count.load(Ordering::Relaxed)
+    }
 }
 
-struct WriteAccountMapEntry<T: 'static> {
+pub struct WriteAccountMapEntry<T: 'static> {
     ref_count: Arc<AtomicU64>,
     slot_list: OwningWriteGuard<SlotList<T>>,
 }
@@ -72,17 +80,19 @@ impl<T: 'static + Clone> WriteAccountMapEntry<T> {
         }
     }
 
+    pub fn slot_list(&self) -> &SlotList<T> {
+        &*self.slot_list
+    }
+
+    pub fn ref_count(&self) -> u64 {
+        self.ref_count.load(Ordering::Relaxed)
+    }
+
     // Try to update an item in account_maps. If the account is not
     // already present, then the function will return back Some(account_info) which
     // the caller can then take the write lock and do an 'insert' with the item.
     // It returns None if the item is already present and thus successfully updated.
-    pub fn update(
-        &mut self,
-        slot: Slot,
-        pubkey: &Pubkey,
-        account_info: T,
-        reclaims: &mut SlotList<T>,
-    ) {
+    pub fn update(&mut self, slot: Slot, account_info: T, reclaims: &mut SlotList<T>) {
         // filter out other dirty entries from the same slot
         let mut same_slot_previous_updates: Vec<(usize, (Slot, &T))> = self
             .slot_list
@@ -111,15 +121,15 @@ impl<T: 'static + Clone> WriteAccountMapEntry<T> {
 
 #[derive(Debug, Default)]
 pub struct RootsTracker {
-    pub roots: HashSet<Slot>,
-    pub uncleaned_roots: HashSet<Slot>,
-    pub previous_uncleaned_roots: HashSet<Slot>,
+    roots: HashSet<Slot>,
+    uncleaned_roots: HashSet<Slot>,
+    previous_uncleaned_roots: HashSet<Slot>,
 }
 
 #[derive(Debug, Default)]
 pub struct AccountsIndex<T> {
     pub account_maps: RwLock<AccountMap<Pubkey, AccountMapEntry<T>>>,
-    pub roots_tracker: RwLock<RootsTracker>,
+    roots_tracker: RwLock<RootsTracker>,
 }
 
 impl<T: 'static + Clone> AccountsIndex<T> {
@@ -142,7 +152,7 @@ impl<T: 'static + Clone> AccountsIndex<T> {
             .unwrap()
             .get(pubkey)
             .cloned()
-            .map(|account_entry| ReadAccountMapEntry::from_account_map_entry(account_entry))
+            .map(ReadAccountMapEntry::from_account_map_entry)
     }
 
     fn get_account_write_entry(&self, pubkey: &Pubkey) -> Option<WriteAccountMapEntry<T>> {
@@ -151,7 +161,7 @@ impl<T: 'static + Clone> AccountsIndex<T> {
             .unwrap()
             .get(pubkey)
             .cloned()
-            .map(|account_entry| WriteAccountMapEntry::from_account_map_entry(account_entry))
+            .map(WriteAccountMapEntry::from_account_map_entry)
     }
 
     fn get_account_write_entry_else_create(&self, pubkey: &Pubkey) -> WriteAccountMapEntry<T> {
@@ -169,6 +179,19 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         }
 
         w_account_entry.unwrap()
+    }
+
+    pub fn handle_dead_keys(&self, dead_keys: Vec<Pubkey>) {
+        if !dead_keys.is_empty() {
+            for key in &dead_keys {
+                let mut w_index = self.account_maps.write().unwrap();
+                if let Some(account_entry) = w_index.get(key) {
+                    if account_entry.slot_list.read().unwrap().is_empty() {
+                        w_index.remove(key);
+                    }
+                }
+            }
+        }
     }
 
     /// call func with every pubkey and index visible from a given set of ancestors
@@ -192,24 +215,12 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         );
     }
 
-    fn get_rooted_entries(&self, slice: SlotSlice<T>) -> SlotList<T> {
+    pub fn get_rooted_entries(&self, slice: SlotSlice<T>) -> SlotList<T> {
         slice
             .iter()
             .filter(|(slot, _)| self.is_root(*slot))
             .cloned()
             .collect()
-    }
-
-    // returns the rooted entries and the storage ref count
-    pub fn would_purge(&self, pubkey: &Pubkey) -> (SlotList<T>, RefCount) {
-        let ReadAccountMapEntry {
-            ref_count,
-            slot_list,
-        } = self.get_account_read_entry(pubkey).unwrap();
-        (
-            self.get_rooted_entries(&slot_list),
-            ref_count.load(Ordering::Relaxed),
-        )
     }
 
     // filter any rooted entries and return them along with a bool that indicates
@@ -273,11 +284,11 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         pubkey: &Pubkey,
         ancestors: Option<&Ancestors>,
         max_root: Option<Slot>,
-    ) -> Option<(OwningReadGuard<SlotList<T>>, usize)> {
+    ) -> Option<(ReadAccountMapEntry<T>, usize)> {
         self.get_account_read_entry(pubkey)
             .and_then(|locked_entry| {
                 let found_index = self.latest_slot(ancestors, &locked_entry.slot_list, max_root)?;
-                Some((locked_entry.slot_list, found_index))
+                Some((locked_entry, found_index))
             })
     }
 
@@ -301,15 +312,15 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         max_root
     }
 
-    pub fn insert(
-        &mut self,
+    pub fn update_or_create_if_missing(
+        &self,
         slot: Slot,
         pubkey: &Pubkey,
         account_info: T,
         reclaims: &mut SlotList<T>,
     ) {
         let mut w_account_entry = self.get_account_write_entry_else_create(pubkey);
-        w_account_entry.update(slot, pubkey, account_info, reclaims);
+        w_account_entry.update(slot, account_info, reclaims);
     }
 
     pub fn unref_from_storage(&self, pubkey: &Pubkey) {
@@ -373,7 +384,7 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         }
     }
 
-    pub fn add_index(&mut self, slot: Slot, pubkey: &Pubkey, account_info: T) {
+    pub fn add_index(&self, slot: Slot, pubkey: &Pubkey, account_info: T) {
         let mut locked_entry = self.get_account_write_entry_else_create(pubkey);
         locked_entry.ref_count.fetch_add(1, Ordering::Relaxed);
         locked_entry.slot_list.push((slot, account_info));
@@ -387,21 +398,21 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         self.roots_tracker.read().unwrap().roots.contains(&slot)
     }
 
-    pub fn add_root(&mut self, slot: Slot) {
+    pub fn add_root(&self, slot: Slot) {
         let mut w_roots_tracker = self.roots_tracker.write().unwrap();
         w_roots_tracker.roots.insert(slot);
         w_roots_tracker.uncleaned_roots.insert(slot);
     }
     /// Remove the slot when the storage for the slot is freed
     /// Accounts no longer reference this slot.
-    pub fn clean_dead_slot(&mut self, slot: Slot) {
+    pub fn clean_dead_slot(&self, slot: Slot) {
         let mut w_roots_tracker = self.roots_tracker.write().unwrap();
         w_roots_tracker.roots.remove(&slot);
         w_roots_tracker.uncleaned_roots.remove(&slot);
         w_roots_tracker.previous_uncleaned_roots.remove(&slot);
     }
 
-    pub fn reset_uncleaned_roots(&mut self, max_clean_root: Option<Slot>) -> HashSet<Slot> {
+    pub fn reset_uncleaned_roots(&self, max_clean_root: Option<Slot>) -> HashSet<Slot> {
         let mut cleaned_roots = HashSet::new();
         let mut w_roots_tracker = self.roots_tracker.write().unwrap();
         w_roots_tracker.uncleaned_roots.retain(|root| {
@@ -415,6 +426,29 @@ impl<T: 'static + Clone> AccountsIndex<T> {
             !is_cleaned
         });
         std::mem::replace(&mut w_roots_tracker.previous_uncleaned_roots, cleaned_roots)
+    }
+
+    pub fn is_uncleaned_root(&self, slot: Slot) -> bool {
+        self.roots_tracker
+            .read()
+            .unwrap()
+            .uncleaned_roots
+            .contains(&slot)
+    }
+
+    pub fn all_roots(&self) -> Vec<Slot> {
+        self.roots_tracker
+            .read()
+            .unwrap()
+            .roots
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub fn clear_roots(&self) {
+        self.roots_tracker.write().unwrap().roots.clear()
     }
 }
 
@@ -441,7 +475,7 @@ mod tests {
         let key = Keypair::new();
         let mut index = AccountsIndex::<bool>::default();
         let mut gc = Vec::new();
-        index.insert(0, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(0, &key.pubkey(), true, &mut gc);
         assert!(gc.is_empty());
 
         let ancestors = HashMap::new();
@@ -458,7 +492,7 @@ mod tests {
         let key = Keypair::new();
         let mut index = AccountsIndex::<bool>::default();
         let mut gc = Vec::new();
-        index.insert(0, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(0, &key.pubkey(), true, &mut gc);
         assert!(gc.is_empty());
 
         let ancestors = vec![(1, 1)].into_iter().collect();
@@ -474,7 +508,7 @@ mod tests {
         let key = Keypair::new();
         let mut index = AccountsIndex::<bool>::default();
         let mut gc = Vec::new();
-        index.insert(0, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(0, &key.pubkey(), true, &mut gc);
         assert!(gc.is_empty());
 
         let ancestors = vec![(0, 0)].into_iter().collect();
@@ -506,7 +540,7 @@ mod tests {
         let key = Keypair::new();
         let mut index = AccountsIndex::<bool>::default();
         let mut gc = Vec::new();
-        index.insert(0, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(0, &key.pubkey(), true, &mut gc);
         assert!(gc.is_empty());
 
         index.add_root(0);
@@ -572,14 +606,14 @@ mod tests {
         let mut index = AccountsIndex::<bool>::default();
         let ancestors = vec![(0, 0)].into_iter().collect();
         let mut gc = Vec::new();
-        index.insert(0, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(0, &key.pubkey(), true, &mut gc);
         assert!(gc.is_empty());
         let (list, idx) = index.get(&key.pubkey(), Some(&ancestors), None).unwrap();
         assert_eq!(list[idx], (0, true));
         drop(list);
 
         let mut gc = Vec::new();
-        index.insert(0, &key.pubkey(), false, &mut gc);
+        index.update_or_create_if_missing(0, &key.pubkey(), false, &mut gc);
         assert_eq!(gc, vec![(0, true)]);
         let (list, idx) = index.get(&key.pubkey(), Some(&ancestors), None).unwrap();
         assert_eq!(list[idx], (0, false));
@@ -592,9 +626,9 @@ mod tests {
         let mut index = AccountsIndex::<bool>::default();
         let ancestors = vec![(0, 0)].into_iter().collect();
         let mut gc = Vec::new();
-        index.insert(0, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(0, &key.pubkey(), true, &mut gc);
         assert!(gc.is_empty());
-        index.insert(1, &key.pubkey(), false, &mut gc);
+        index.update_or_create_if_missing(1, &key.pubkey(), false, &mut gc);
         assert!(gc.is_empty());
         let (list, idx) = index.get(&key.pubkey(), Some(&ancestors), None).unwrap();
         assert_eq!(list[idx], (0, true));
@@ -608,15 +642,15 @@ mod tests {
         let key = Keypair::new();
         let mut index = AccountsIndex::<bool>::default();
         let mut gc = Vec::new();
-        index.insert(0, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(0, &key.pubkey(), true, &mut gc);
         assert!(gc.is_empty());
-        index.insert(1, &key.pubkey(), false, &mut gc);
-        index.insert(2, &key.pubkey(), true, &mut gc);
-        index.insert(3, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(1, &key.pubkey(), false, &mut gc);
+        index.update_or_create_if_missing(2, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(3, &key.pubkey(), true, &mut gc);
         index.add_root(0);
         index.add_root(1);
         index.add_root(3);
-        index.insert(4, &key.pubkey(), true, &mut gc);
+        index.update_or_create_if_missing(4, &key.pubkey(), true, &mut gc);
 
         // Updating index should not purge older roots, only purges
         // previous updates within the same slot
@@ -644,7 +678,7 @@ mod tests {
         let mut gc = Vec::new();
         assert_eq!(Some(12), index.update(1, &key.pubkey(), 12, &mut gc));
 
-        index.insert(1, &key.pubkey(), 12, &mut gc);
+        index.update_or_create_if_missing(1, &key.pubkey(), 12, &mut gc);
 
         assert_eq!(None, index.update(1, &key.pubkey(), 10, &mut gc));
 

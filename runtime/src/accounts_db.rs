@@ -402,7 +402,7 @@ struct FrozenAccountInfo {
 #[derive(Debug)]
 pub struct AccountsDB {
     /// Keeps tracks of index into AppendVec on a per slot basis
-    pub accounts_index: RwLock<AccountsIndex<AccountInfo>>,
+    pub accounts_index: AccountsIndex<AccountInfo>,
 
     pub storage: AccountStorage,
 
@@ -480,7 +480,7 @@ impl Default for AccountsDB {
         let mut bank_hashes = HashMap::new();
         bank_hashes.insert(0, BankHashInfo::default());
         AccountsDB {
-            accounts_index: RwLock::new(AccountsIndex::default()),
+            accounts_index: AccountsIndex::default(),
             storage: AccountStorage(DashMap::new()),
             next_id: AtomicUsize::new(0),
             shrink_candidate_slots: Mutex::new(Vec::new()),
@@ -578,9 +578,12 @@ impl AccountsDB {
                 .par_chunks(INDEX_CLEAN_BULK_COUNT)
                 .map(|pubkeys: &[Pubkey]| {
                     let mut reclaims = Vec::new();
-                    let accounts_index = self.accounts_index.read().unwrap();
                     for pubkey in pubkeys {
-                        accounts_index.clean_rooted_entries(&pubkey, &mut reclaims, max_clean_root);
+                        self.accounts_index.clean_rooted_entries(
+                            &pubkey,
+                            &mut reclaims,
+                            max_clean_root,
+                        );
                     }
                     reclaims
                 });
@@ -602,17 +605,13 @@ impl AccountsDB {
         candidates: &mut MutexGuard<Vec<Slot>>,
         max_clean_root: Option<Slot>,
     ) {
-        let previous_roots = self
-            .accounts_index
-            .write()
-            .unwrap()
-            .reset_uncleaned_roots(max_clean_root);
+        let previous_roots = self.accounts_index.reset_uncleaned_roots(max_clean_root);
         candidates.extend(previous_roots);
     }
 
     #[cfg(test)]
     fn reset_uncleaned_roots(&self) {
-        self.do_reset_uncleaned_roots(&mut self.shrink_candidate_slots.lock().unwrap(), None);
+        self.do_reset_uncleaned_roots(&self.shrink_candidate_slots.lock().unwrap(), None);
     }
 
     fn calc_delete_dependencies(
@@ -690,9 +689,8 @@ impl AccountsDB {
         let mut reclaims = Vec::new();
         let mut dead_keys = Vec::new();
 
-        let accounts_index = self.accounts_index.read().unwrap();
         for (pubkey, slots_set) in pubkey_to_slot_set {
-            let (new_reclaims, is_empty) = accounts_index.purge_exact(&pubkey, slots_set);
+            let (new_reclaims, is_empty) = self.accounts_index.purge_exact(&pubkey, slots_set);
             if is_empty {
                 dead_keys.push(pubkey);
             }
@@ -715,8 +713,14 @@ impl AccountsDB {
         self.report_store_stats();
 
         let mut accounts_scan = Measure::start("accounts_scan");
-        let accounts_index = self.accounts_index.read().unwrap();
-        let pubkeys: Vec<Pubkey> = accounts_index.account_maps.keys().cloned().collect();
+        let pubkeys: Vec<Pubkey> = self
+            .accounts_index
+            .account_maps
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
         // parallel scan the index.
         let (mut purges, purges_in_root) = pubkeys
             .par_chunks(4096)
@@ -724,19 +728,24 @@ impl AccountsDB {
                 let mut purges_in_root = Vec::new();
                 let mut purges = HashMap::new();
                 for pubkey in pubkeys {
-                    if let Some((list, index)) = accounts_index.get(pubkey, None, max_clean_root) {
-                        let (slot, account_info) = &list[index];
+                    if let Some((locked_entry, index)) =
+                        self.accounts_index.get(pubkey, None, max_clean_root)
+                    {
+                        let (slot, account_info) = &locked_entry.slot_list()[index];
                         if account_info.lamports == 0 {
-                            debug!("purging zero lamport {}, slot: {}", pubkey, slot);
-                            purges.insert(*pubkey, accounts_index.would_purge(pubkey));
+                            let purge_entry = (
+                                self.accounts_index
+                                    .get_rooted_entries(&locked_entry.slot_list()),
+                                locked_entry.ref_count(),
+                            );
+                            purges.insert(*pubkey, purge_entry);
                         }
-                        if accounts_index.uncleaned_roots.contains(slot) {
-                            // Assertion enforced by `accounts_index.get()`, the latest slot
-                            // will not be greater than the given `max_clean_root`
-                            if let Some(max_clean_root) = max_clean_root {
-                                assert!(*slot <= max_clean_root);
-                            }
-                            debug!("purging uncleaned {}, slot: {}", pubkey, slot);
+
+                        // Release the lock
+                        let slot = *slot;
+                        drop(locked_entry);
+
+                        if self.accounts_index.is_uncleaned_root(slot) {
                             purges_in_root.push(*pubkey);
                         }
                     }
@@ -752,8 +761,6 @@ impl AccountsDB {
                     m1
                 },
             );
-
-        drop(accounts_index);
         accounts_scan.stop();
 
         let mut clean_old_rooted = Measure::start("clean_old_roots");
@@ -769,11 +776,7 @@ impl AccountsDB {
         let mut store_counts: HashMap<AppendVecId, (usize, HashSet<Pubkey>)> = HashMap::new();
         for (key, (account_infos, ref_count)) in purges.iter_mut() {
             if purged_account_slots.contains_key(&key) {
-                *ref_count = self
-                    .accounts_index
-                    .read()
-                    .unwrap()
-                    .ref_count_from_storage(&key);
+                *ref_count = self.accounts_index.ref_count_from_storage(&key);
             }
             account_infos.retain(|(slot, account_info)| {
                 let was_slot_purged = purged_account_slots
@@ -847,7 +850,7 @@ impl AccountsDB {
 
         let (reclaims, dead_keys) = self.purge_keys_exact(pubkey_to_slot_set);
 
-        self.handle_dead_keys(dead_keys);
+        self.accounts_index.handle_dead_keys(dead_keys);
 
         self.handle_reclaims(&reclaims, None, false, None);
 
@@ -860,19 +863,6 @@ impl AccountsDB {
             ("calc_deps", calc_deps_time.as_us() as i64, i64),
             ("reclaims", reclaims_time.as_us() as i64, i64),
         );
-    }
-
-    fn handle_dead_keys(&self, dead_keys: Vec<Pubkey>) {
-        if !dead_keys.is_empty() {
-            let mut accounts_index = self.accounts_index.write().unwrap();
-            for key in &dead_keys {
-                if let Some((_ref_count, list)) = accounts_index.account_maps.get(key) {
-                    if list.read().unwrap().is_empty() {
-                        accounts_index.account_maps.remove(key);
-                    }
-                }
-            }
-        }
     }
 
     // Removes the accounts in the input `reclaims` from the tracked "count" of
@@ -1017,7 +1007,6 @@ impl AccountsDB {
 
         let mut index_read_elapsed = Measure::start("index_read_elapsed");
         let alive_accounts: Vec<_> = {
-            let accounts_index = self.accounts_index.read().unwrap();
             stored_accounts
                 .iter()
                 .filter(
@@ -1029,8 +1018,11 @@ impl AccountsDB {
                         (store_id, offset),
                         _write_version,
                     )| {
-                        if let Some((list, _)) = accounts_index.get(pubkey, None, None) {
-                            list.iter()
+                        if let Some((locked_entry, _)) = self.accounts_index.get(pubkey, None, None)
+                        {
+                            locked_entry
+                                .slot_list()
+                                .iter()
                                 .any(|(_slot, i)| i.store_id == *store_id && i.offset == *offset)
                         } else {
                             false
@@ -1179,8 +1171,7 @@ impl AccountsDB {
     }
 
     fn all_root_slots_in_index(&self) -> Vec<Slot> {
-        let index = self.accounts_index.read().unwrap();
-        index.roots.iter().cloned().collect()
+        self.accounts_index.all_roots()
     }
 
     fn all_slots_in_storage(&self) -> Vec<Slot> {
@@ -1225,16 +1216,18 @@ impl AccountsDB {
         A: Default,
     {
         let mut collector = A::default();
-        let accounts_index = self.accounts_index.read().unwrap();
-        accounts_index.scan_accounts(ancestors, |pubkey, (account_info, slot)| {
-            let account_storage_entry = self
-                .storage
-                .get_account_storage_entry(slot, account_info.store_id);
-            let account_slot = account_storage_entry
-                .and_then(|account_storage_entry| account_storage_entry.get_account(account_info))
-                .map(|account| (pubkey, account, slot));
-            scan_func(&mut collector, account_slot)
-        });
+        self.accounts_index
+            .scan_accounts(ancestors, |pubkey, (account_info, slot)| {
+                let account_storage_entry = self
+                    .storage
+                    .get_account_storage_entry(slot, account_info.store_id);
+                let account_slot = account_storage_entry
+                    .and_then(|account_storage_entry| {
+                        account_storage_entry.get_account(account_info)
+                    })
+                    .map(|account| (pubkey, account, slot));
+                scan_func(&mut collector, account_slot)
+            });
         collector
     }
 
@@ -1245,16 +1238,21 @@ impl AccountsDB {
         R: RangeBounds<Pubkey>,
     {
         let mut collector = A::default();
-        let accounts_index = self.accounts_index.read().unwrap();
-        accounts_index.range_scan_accounts(ancestors, range, |pubkey, (account_info, slot)| {
-            let account_storage_entry = self
-                .storage
-                .get_account_storage_entry(slot, account_info.store_id);
-            let account_slot = account_storage_entry
-                .and_then(|account_storage_entry| account_storage_entry.get_account(account_info))
-                .map(|account| (pubkey, account, slot));
-            scan_func(&mut collector, account_slot)
-        });
+        self.accounts_index.range_scan_accounts(
+            ancestors,
+            range,
+            |pubkey, (account_info, slot)| {
+                let account_storage_entry = self
+                    .storage
+                    .get_account_storage_entry(slot, account_info.store_id);
+                let account_slot = account_storage_entry
+                    .and_then(|account_storage_entry| {
+                        account_storage_entry.get_account(account_info)
+                    })
+                    .map(|account| (pubkey, account, slot));
+                scan_func(&mut collector, account_slot)
+            },
+        );
         collector
     }
 
@@ -1317,37 +1315,49 @@ impl AccountsDB {
         accounts_index: &AccountsIndex<AccountInfo>,
         pubkey: &Pubkey,
     ) -> Option<(Account, Slot)> {
-        let (lock, index) = accounts_index.get(pubkey, Some(ancestors), None)?;
-        let slot = lock[index].0;
+        let (slot, store_id, offset) = {
+            let (lock, index) = accounts_index.get(pubkey, Some(ancestors), None)?;
+            let slot_list = lock.slot_list();
+            let slot = slot_list[index].0;
+            let store_id = slot_list[index].1.store_id;
+            let offset = slot_list[index].1.offset;
+            (slot, store_id, offset)
+            // `lock` released here
+        };
+
         //TODO: thread this as a ref
         storage
-            .get_account_storage_entry(slot, lock[index].1.store_id)
+            .get_account_storage_entry(slot, store_id)
             .and_then(|store| {
-                let info = &lock[index].1;
                 store
                     .accounts
-                    .get_account(info.offset)
+                    .get_account(offset)
                     .map(|account| (account.0.clone_account(), slot))
             })
     }
 
     #[cfg(test)]
     fn load_account_hash(&self, ancestors: &Ancestors, pubkey: &Pubkey) -> Hash {
-        let accounts_index = self.accounts_index.read().unwrap();
-        let (lock, index) = accounts_index.get(pubkey, Some(ancestors), None).unwrap();
-        let slot = lock[index].0;
-        let info = &lock[index].1;
+        let (slot, store_id, offset) = {
+            let (lock, index) = accounts_index.get(pubkey, Some(ancestors), None).unwrap();
+            let slot_list = lock.slot_list();
+            let slot = slot_list[index].0;
+            let store_id = slot_list[index].1.store_id;
+            let offset = slot_list[index].1.offset;
+            (slot, store_id, offset)
+            // lock released here
+        };
+
         let entry = self
             .storage
-            .get_account_storage_entry(slot, info.store_id)
+            .get_account_storage_entry(slot, store_id)
             .unwrap();
-        let account = entry.accounts.get_account(info.offset);
+        let account = entry.accounts.get_account(offset);
         *account.as_ref().unwrap().0.hash
     }
 
     pub fn load_slow(&self, ancestors: &Ancestors, pubkey: &Pubkey) -> Option<(Account, Slot)> {
-        let accounts_index = self.accounts_index.read().unwrap();
-        Self::load(&self.storage, ancestors, &accounts_index, pubkey)
+        Self::load(&self.storage, ancestors, &self.accounts_index, pubkey)
     }
 
     fn find_storage_candidate(&self, slot: Slot) -> Arc<AccountStorageEntry> {
@@ -1418,12 +1428,10 @@ impl AccountsDB {
 
     fn purge_slots(&self, slots: &HashSet<Slot>) {
         //add_root should be called first
-        let accounts_index = self.accounts_index.read().unwrap();
         let non_roots: Vec<_> = slots
             .iter()
-            .filter(|slot| !accounts_index.is_root(**slot))
+            .filter(|slot| !self.accounts_index.is_root(**slot))
             .collect();
-        drop(accounts_index);
         let mut all_removed_slot_storages = vec![];
         let mut total_removed_storage_entries = 0;
         let mut total_removed_bytes = 0;
@@ -1475,7 +1483,7 @@ impl AccountsDB {
     }
 
     pub fn remove_unrooted_slot(&self, remove_slot: Slot) {
-        if self.accounts_index.read().unwrap().is_root(remove_slot) {
+        if self.accounts_index.is_root(remove_slot) {
             panic!("Trying to remove accounts for rooted slot {}", remove_slot);
         }
 
@@ -1490,10 +1498,12 @@ impl AccountsDB {
         let mut reclaims = vec![];
         {
             let pubkeys = pubkey_sets.iter().flatten();
-            let accounts_index = self.accounts_index.read().unwrap();
-
             for pubkey in pubkeys {
-                accounts_index.clean_unrooted_entries_by_slot(remove_slot, pubkey, &mut reclaims);
+                self.accounts_index.clean_unrooted_entries_by_slot(
+                    remove_slot,
+                    pubkey,
+                    &mut reclaims,
+                );
             }
         }
 
@@ -1931,14 +1941,21 @@ impl AccountsDB {
     ) -> Result<(Hash, u64), BankHashVerificationError> {
         use BankHashVerificationError::*;
         let mut scan = Measure::start("scan");
-        let accounts_index = self.accounts_index.read().unwrap();
-        let keys: Vec<_> = accounts_index.account_maps.keys().collect();
+        let keys: Vec<_> = self
+            .accounts_index
+            .account_maps
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
         let mismatch_found = AtomicU64::new(0);
-        let hashes: Vec<_> = keys
+        let hashes: Vec<(Pubkey, Hash, u64)> = keys
             .par_iter()
             .filter_map(|pubkey| {
-                if let Some((list, index)) = accounts_index.get(pubkey, Some(ancestors), None) {
-                    let (slot, account_info) = &list[index];
+                if let Some((lock, index)) = self.accounts_index.get(pubkey, Some(ancestors), None)
+                {
+                    let (slot, account_info) = &lock.slot_list()[index];
                     if account_info.lamports != 0 {
                         self.storage
                             .get_account_storage_entry(*slot, account_info.store_id)
@@ -1964,7 +1981,7 @@ impl AccountsDB {
                                     }
                                 }
 
-                                Some((**pubkey, *account.hash, balance))
+                                Some((*pubkey, *account.hash, balance))
                             })
                     } else {
                         None
@@ -2094,24 +2111,10 @@ impl AccountsDB {
         accounts: &[(&Pubkey, &Account)],
     ) -> SlotList<AccountInfo> {
         let mut reclaims = SlotList::<AccountInfo>::with_capacity(infos.len() * 2);
-        let index = self.accounts_index.read().unwrap();
-        let inserts: Vec<_> = infos
-            .into_iter()
-            .zip(accounts.iter())
-            .filter_map(|(info, pubkey_account)| {
-                let pubkey = pubkey_account.0;
-                index
-                    .update(slot, pubkey, info, &mut reclaims)
-                    .map(|info| (pubkey, info))
-            })
-            .collect();
-
-        drop(index);
-        if !inserts.is_empty() {
-            let mut index = self.accounts_index.write().unwrap();
-            for (pubkey, info) in inserts {
-                index.insert(slot, pubkey, info, &mut reclaims);
-            }
+        for (info, pubkey_account) in infos.into_iter().zip(accounts.iter()) {
+            let pubkey = pubkey_account.0;
+            self.accounts_index
+                .update_or_create_if_missing(slot, pubkey, info, &mut reclaims)
         }
         reclaims
     }
@@ -2167,49 +2170,44 @@ impl AccountsDB {
         dead_slots: &HashSet<Slot>,
         mut purged_account_slots: Option<&mut AccountSlots>,
     ) {
-        {
-            let mut measure = Measure::start("clean_dead_slots-ms");
-            let mut stores: Vec<Arc<AccountStorageEntry>> = vec![];
-            for slot in dead_slots.iter() {
-                if let Some(slot_storage) = self.storage.get_slot_stores(*slot) {
-                    for store in slot_storage.read().unwrap().values() {
-                        stores.push(store.clone());
-                    }
+        let mut measure = Measure::start("clean_dead_slots-ms");
+        let mut stores: Vec<Arc<AccountStorageEntry>> = vec![];
+        for slot in dead_slots.iter() {
+            if let Some(slot_storage) = self.storage.get_slot_stores(*slot) {
+                for store in slot_storage.read().unwrap().values() {
+                    stores.push(store.clone());
                 }
             }
-            datapoint_debug!("clean_dead_slots", ("stores", stores.len(), i64));
-            let slot_pubkeys: HashSet<(Slot, Pubkey)> = {
-                self.thread_pool_clean.install(|| {
-                    stores
-                        .into_par_iter()
-                        .map(|store| {
-                            let accounts = store.accounts.accounts(0);
-                            accounts
-                                .into_iter()
-                                .map(|account| (store.slot, account.meta.pubkey))
-                                .collect::<HashSet<(Slot, Pubkey)>>()
-                        })
-                        .reduce(HashSet::new, |mut reduced, store_pubkeys| {
-                            reduced.extend(store_pubkeys);
-                            reduced
-                        })
-                })
-            };
-            let index = self.accounts_index.read().unwrap();
-            for (slot, pubkey) in slot_pubkeys {
-                if let Some(ref mut purged_account_slots) = purged_account_slots {
-                    purged_account_slots.entry(pubkey).or_default().insert(slot);
-                }
-                index.unref_from_storage(&pubkey);
+        }
+        datapoint_debug!("clean_dead_slots", ("stores", stores.len(), i64));
+        let slot_pubkeys: HashSet<(Slot, Pubkey)> = {
+            self.thread_pool_clean.install(|| {
+                stores
+                    .into_par_iter()
+                    .map(|store| {
+                        let accounts = store.accounts.accounts(0);
+                        accounts
+                            .into_iter()
+                            .map(|account| (store.slot, account.meta.pubkey))
+                            .collect::<HashSet<(Slot, Pubkey)>>()
+                    })
+                    .reduce(HashSet::new, |mut reduced, store_pubkeys| {
+                        reduced.extend(store_pubkeys);
+                        reduced
+                    })
+            })
+        };
+        for (slot, pubkey) in slot_pubkeys {
+            if let Some(ref mut purged_account_slots) = purged_account_slots {
+                purged_account_slots.entry(pubkey).or_default().insert(slot);
             }
-            drop(index);
-            measure.stop();
-            inc_new_counter_info!("clean_dead_slots-unref-ms", measure.as_ms() as usize);
+            self.accounts_index.unref_from_storage(&pubkey);
+        }
+        measure.stop();
+        inc_new_counter_info!("clean_dead_slots-unref-ms", measure.as_ms() as usize);
 
-            let mut index = self.accounts_index.write().unwrap();
-            for slot in dead_slots.iter() {
-                index.clean_dead_slot(*slot);
-            }
+        for slot in dead_slots.iter() {
+            self.accounts_index.clean_dead_slot(*slot);
         }
         {
             let mut bank_hashes = self.bank_hashes.write().unwrap();
@@ -2321,17 +2319,16 @@ impl AccountsDB {
     }
 
     pub fn add_root(&self, slot: Slot) {
-        self.accounts_index.write().unwrap().add_root(slot)
+        self.accounts_index.add_root(slot)
     }
 
     pub fn get_snapshot_storages(&self, snapshot_slot: Slot) -> SnapshotStorages {
-        let accounts_index = self.accounts_index.read().unwrap();
         self.storage
             .0
             .iter()
             .filter(|iter_item| {
                 let slot = *iter_item.key();
-                slot <= snapshot_slot && accounts_index.is_root(slot)
+                slot <= snapshot_slot && self.accounts_index.is_root(slot)
             })
             .map(|iter_item| {
                 iter_item
@@ -2362,7 +2359,6 @@ impl AccountsDB {
     }
 
     pub fn generate_index(&self) {
-        let mut accounts_index = self.accounts_index.write().unwrap();
         let mut slots: Vec<Slot> = self.storage.all_slots();
         slots.sort();
 
@@ -2409,19 +2405,24 @@ impl AccountsDB {
                 for (pubkey, account_infos) in accounts_map.iter_mut() {
                     account_infos.sort_by(|a, b| a.0.cmp(&b.0));
                     for (_, account_info) in account_infos {
-                        accounts_index.insert(*slot, pubkey, account_info.clone(), &mut _reclaims);
+                        self.accounts_index.update_or_create_if_missing(
+                            *slot,
+                            pubkey,
+                            account_info.clone(),
+                            &mut _reclaims,
+                        );
                     }
                 }
             }
         }
         // Need to add these last, otherwise older updates will be cleaned
         for slot in slots {
-            accounts_index.add_root(slot);
+            self.accounts_index.add_root(slot);
         }
 
         let mut counts = HashMap::new();
-        for slot_list in accounts_index.account_maps.values() {
-            for (_slot, account_entry) in slot_list.1.read().unwrap().iter() {
+        for account_entry in self.accounts_index.account_maps.read().unwrap().values() {
+            for (_slot, account_entry) in account_entry.slot_list.read().unwrap().iter() {
                 *counts.entry(account_entry.store_id).or_insert(0) += 1;
             }
         }
@@ -2452,19 +2453,15 @@ impl AccountsDB {
     }
 
     fn print_index(&self, label: &'static str) {
-        let mut roots: Vec<_> = self
-            .accounts_index
-            .read()
-            .unwrap()
-            .roots
-            .iter()
-            .cloned()
-            .collect();
+        let mut roots: Vec<_> = self.accounts_index.all_roots();
         roots.sort();
         info!("{}: accounts_index roots: {:?}", label, roots,);
-        for (pubkey, list) in &self.accounts_index.read().unwrap().account_maps {
+        for (pubkey, account_entry) in self.accounts_index.account_maps.read().unwrap().iter() {
             info!("  key: {}", pubkey);
-            info!("      slots: {:?}", *list.1.read().unwrap());
+            info!(
+                "      slots: {:?}",
+                *account_entry.slot_list.read().unwrap()
+            );
         }
     }
 
@@ -4728,7 +4725,7 @@ pub mod tests {
         actual_slots.sort();
         assert_eq!(actual_slots, vec![0, 1, 2]);
 
-        accounts.accounts_index.write().unwrap().roots.clear();
+        accounts.accounts_index.clear_roots();
         let mut actual_slots = (0..5)
             .map(|_| accounts.next_shrink_slot())
             .collect::<Vec<_>>();
@@ -4883,12 +4880,12 @@ pub mod tests {
             lamports: 0,
         };
         let mut reclaims = vec![];
-        accounts_index.insert(0, &key0, info0, &mut reclaims);
-        accounts_index.insert(1, &key0, info1.clone(), &mut reclaims);
-        accounts_index.insert(1, &key1, info1, &mut reclaims);
-        accounts_index.insert(2, &key1, info2.clone(), &mut reclaims);
-        accounts_index.insert(2, &key2, info2, &mut reclaims);
-        accounts_index.insert(3, &key2, info3, &mut reclaims);
+        accounts_index.update_or_create_if_missing(0, &key0, info0, &mut reclaims);
+        accounts_index.update_or_create_if_missing(1, &key0, info1.clone(), &mut reclaims);
+        accounts_index.update_or_create_if_missing(1, &key1, info1, &mut reclaims);
+        accounts_index.update_or_create_if_missing(2, &key1, info2.clone(), &mut reclaims);
+        accounts_index.update_or_create_if_missing(2, &key2, info2, &mut reclaims);
+        accounts_index.update_or_create_if_missing(3, &key2, info3, &mut reclaims);
         accounts_index.add_root(0);
         accounts_index.add_root(1);
         accounts_index.add_root(2);
