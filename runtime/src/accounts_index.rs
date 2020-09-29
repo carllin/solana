@@ -3,8 +3,34 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ops::RangeBounds,
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, RwLock},
 };
+
+rental! {
+    mod owning_lock {
+        use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+        #[rental(deref_suffix)]
+        pub struct OwningReadGuard<T>
+        where
+            T: 'static,
+        {
+            lock: Arc<RwLock<T>>,
+            guard: RwLockReadGuard<'lock, T>,
+        }
+
+        #[rental(deref_mut_suffix)]
+        pub struct OwningWriteGuard<T>
+        where
+            T: 'static,
+        {
+            lock: Arc<RwLock<T>>,
+            guard: RwLockWriteGuard<'lock, T>,
+        }
+    }
+}
+
+use owning_lock::{OwningReadGuard, OwningWriteGuard};
 
 pub type SlotList<T> = Vec<(Slot, T)>;
 pub type SlotSlice<'s, T> = &'s [(Slot, T)];
@@ -13,38 +39,36 @@ pub type Ancestors = HashMap<Slot, usize>;
 pub type RefCount = u64;
 pub type AccountMap<K, V> = BTreeMap<K, V>;
 
-#[derive(Debug)]
-struct AccountMapEntry<T> {
+#[derive(Clone, Debug)]
+pub struct AccountMapEntry<T> {
     ref_count: Arc<AtomicU64>,
     slot_list: Arc<RwLock<SlotList<T>>>,
 }
 
-struct ReadAccountMapEntry<'a, T> {
+struct ReadAccountMapEntry<T: 'static> {
     ref_count: Arc<AtomicU64>,
-    slot_list: RwLockReadGuard<'a, SlotList<T>>,
+    slot_list: OwningReadGuard<SlotList<T>>,
 }
 
-impl<'a, T: 'a + Clone> ReadAccountMapEntry<'a, T> {
-    pub fn from_account_map_entry(account_map_entry: &'a AccountMapEntry<T>) -> Self {
-        let r_slot_list = account_map_entry.slot_list.read().unwrap();
+impl<T: Clone> ReadAccountMapEntry<T> {
+    pub fn from_account_map_entry(account_map_entry: AccountMapEntry<T>) -> Self {
         Self {
             ref_count: account_map_entry.ref_count.clone(),
-            slot_list: r_slot_list,
+            slot_list: OwningReadGuard::new(account_map_entry.slot_list, |s| s.read().unwrap()),
         }
     }
 }
 
-struct WriteAccountMapEntry<'a, T> {
+struct WriteAccountMapEntry<T: 'static> {
     ref_count: Arc<AtomicU64>,
-    slot_list: RwLockWriteGuard<'a, SlotList<T>>,
+    slot_list: OwningWriteGuard<SlotList<T>>,
 }
 
-impl<'a, T: 'a + Clone> WriteAccountMapEntry<'a, T> {
-    pub fn from_account_map_entry(account_map_entry: &'a AccountMapEntry<T>) -> Self {
-        let w_slot_list = account_map_entry.slot_list.write().unwrap();
+impl<T: 'static + Clone> WriteAccountMapEntry<T> {
+    pub fn from_account_map_entry(account_map_entry: AccountMapEntry<T>) -> Self {
         Self {
             ref_count: account_map_entry.ref_count.clone(),
-            slot_list: w_slot_list,
+            slot_list: OwningWriteGuard::new(account_map_entry.slot_list, |s| s.write().unwrap()),
         }
     }
 
@@ -52,7 +76,13 @@ impl<'a, T: 'a + Clone> WriteAccountMapEntry<'a, T> {
     // already present, then the function will return back Some(account_info) which
     // the caller can then take the write lock and do an 'insert' with the item.
     // It returns None if the item is already present and thus successfully updated.
-    pub fn update(&self, slot: Slot, pubkey: &Pubkey, account_info: T, reclaims: &mut SlotList<T>) {
+    pub fn update(
+        &mut self,
+        slot: Slot,
+        pubkey: &Pubkey,
+        account_info: T,
+        reclaims: &mut SlotList<T>,
+    ) {
         // filter out other dirty entries from the same slot
         let mut same_slot_previous_updates: Vec<(usize, (Slot, &T))> = self
             .slot_list
@@ -80,7 +110,7 @@ impl<'a, T: 'a + Clone> WriteAccountMapEntry<'a, T> {
 }
 
 #[derive(Debug, Default)]
-struct RootsTracker {
+pub struct RootsTracker {
     pub roots: HashSet<Slot>,
     pub uncleaned_roots: HashSet<Slot>,
     pub previous_uncleaned_roots: HashSet<Slot>,
@@ -92,8 +122,8 @@ pub struct AccountsIndex<T> {
     pub roots_tracker: RwLock<RootsTracker>,
 }
 
-impl<'a, T: 'a + Clone> AccountsIndex<T> {
-    fn do_scan_accounts<F, I>(&self, ancestors: &Ancestors, mut func: F, iter: I)
+impl<T: 'static + Clone> AccountsIndex<T> {
+    fn do_scan_accounts<'a, F, I>(&'a self, ancestors: &Ancestors, mut func: F, iter: I)
     where
         F: FnMut(&Pubkey, (&T, Slot)),
         I: Iterator<Item = (&'a Pubkey, &'a AccountMapEntry<T>)>,
@@ -111,7 +141,8 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
             .read()
             .unwrap()
             .get(pubkey)
-            .map(|pubkey_entry| ReadAccountMapEntry::from_account_map_entry(&pubkey_entry))
+            .cloned()
+            .map(|account_entry| ReadAccountMapEntry::from_account_map_entry(account_entry))
     }
 
     fn get_account_write_entry(&self, pubkey: &Pubkey) -> Option<WriteAccountMapEntry<T>> {
@@ -119,7 +150,8 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
             .read()
             .unwrap()
             .get(pubkey)
-            .map(|pubkey_entry| WriteAccountMapEntry::from_account_map_entry(&pubkey_entry))
+            .cloned()
+            .map(|account_entry| WriteAccountMapEntry::from_account_map_entry(account_entry))
     }
 
     fn get_account_write_entry_else_create(&self, pubkey: &Pubkey) -> WriteAccountMapEntry<T> {
@@ -129,9 +161,11 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
                 ref_count: Arc::new(AtomicU64::new(0)),
                 slot_list: Arc::new(RwLock::new(SlotList::with_capacity(32))),
             };
-            let w_account_maps = self.account_maps.write().unwrap();
-            let pubkey_entry = w_account_maps.entry(*pubkey).or_insert_with(|| new_entry);
-            w_account_entry = Some(WriteAccountMapEntry::from_account_map_entry(&pubkey_entry));
+            let mut w_account_maps = self.account_maps.write().unwrap();
+            let account_entry = w_account_maps.entry(*pubkey).or_insert_with(|| new_entry);
+            w_account_entry = Some(WriteAccountMapEntry::from_account_map_entry(
+                account_entry.clone(),
+            ));
         }
 
         w_account_entry.unwrap()
@@ -181,14 +215,16 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
     // filter any rooted entries and return them along with a bool that indicates
     // if this account has no more entries.
     pub fn purge(&self, pubkey: &Pubkey) -> (SlotList<T>, bool) {
-        let WriteAccountMapEntry { slot_list, .. } = self.get_account_write_entry(pubkey).unwrap();
+        let WriteAccountMapEntry { mut slot_list, .. } =
+            self.get_account_write_entry(pubkey).unwrap();
         let reclaims = self.get_rooted_entries(&slot_list);
         slot_list.retain(|(slot, _)| !self.is_root(*slot));
         (reclaims, slot_list.is_empty())
     }
 
     pub fn purge_exact(&self, pubkey: &Pubkey, slots: HashSet<Slot>) -> (SlotList<T>, bool) {
-        let WriteAccountMapEntry { slot_list, .. } = self.get_account_write_entry(pubkey).unwrap();
+        let WriteAccountMapEntry { mut slot_list, .. } =
+            self.get_account_write_entry(pubkey).unwrap();
         let reclaims = slot_list
             .iter()
             .filter(|(slot, _)| slots.contains(&slot))
@@ -237,7 +273,7 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
         pubkey: &Pubkey,
         ancestors: Option<&Ancestors>,
         max_root: Option<Slot>,
-    ) -> Option<(RwLockReadGuard<SlotList<T>>, usize)> {
+    ) -> Option<(OwningReadGuard<SlotList<T>>, usize)> {
         self.get_account_read_entry(pubkey)
             .and_then(|locked_entry| {
                 let found_index = self.latest_slot(ancestors, &locked_entry.slot_list, max_root)?;
@@ -272,7 +308,7 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
         account_info: T,
         reclaims: &mut SlotList<T>,
     ) {
-        let w_account_entry = self.get_account_write_entry_else_create(pubkey);
+        let mut w_account_entry = self.get_account_write_entry_else_create(pubkey);
         w_account_entry.update(slot, pubkey, account_info, reclaims);
     }
 
@@ -315,7 +351,7 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
         max_clean_root: Option<Slot>,
     ) {
         if let Some(locked_entry) = self.get_account_write_entry(pubkey) {
-            let WriteAccountMapEntry { slot_list, .. } = locked_entry;
+            let WriteAccountMapEntry { mut slot_list, .. } = locked_entry;
             self.purge_older_root_entries(&mut *slot_list, reclaims, max_clean_root);
         }
     }
@@ -327,7 +363,7 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
         reclaims: &mut SlotList<T>,
     ) {
         if let Some(locked_entry) = self.get_account_write_entry(pubkey) {
-            let WriteAccountMapEntry { slot_list, .. } = locked_entry;
+            let WriteAccountMapEntry { mut slot_list, .. } = locked_entry;
             slot_list.retain(|(slot, entry)| {
                 if *slot == purge_slot {
                     reclaims.push((*slot, entry.clone()));
@@ -338,7 +374,7 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
     }
 
     pub fn add_index(&mut self, slot: Slot, pubkey: &Pubkey, account_info: T) {
-        let locked_entry = self.get_account_write_entry_else_create(pubkey);
+        let mut locked_entry = self.get_account_write_entry_else_create(pubkey);
         locked_entry.ref_count.fetch_add(1, Ordering::Relaxed);
         locked_entry.slot_list.push((slot, account_info));
     }
@@ -352,14 +388,14 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
     }
 
     pub fn add_root(&mut self, slot: Slot) {
-        let w_roots_tracker = self.roots_tracker.write().unwrap();
+        let mut w_roots_tracker = self.roots_tracker.write().unwrap();
         w_roots_tracker.roots.insert(slot);
         w_roots_tracker.uncleaned_roots.insert(slot);
     }
     /// Remove the slot when the storage for the slot is freed
     /// Accounts no longer reference this slot.
     pub fn clean_dead_slot(&mut self, slot: Slot) {
-        let w_roots_tracker = self.roots_tracker.write().unwrap();
+        let mut w_roots_tracker = self.roots_tracker.write().unwrap();
         w_roots_tracker.roots.remove(&slot);
         w_roots_tracker.uncleaned_roots.remove(&slot);
         w_roots_tracker.previous_uncleaned_roots.remove(&slot);
@@ -367,7 +403,7 @@ impl<'a, T: 'a + Clone> AccountsIndex<T> {
 
     pub fn reset_uncleaned_roots(&mut self, max_clean_root: Option<Slot>) -> HashSet<Slot> {
         let mut cleaned_roots = HashSet::new();
-        let w_roots_tracker = self.roots_tracker.write().unwrap();
+        let mut w_roots_tracker = self.roots_tracker.write().unwrap();
         w_roots_tracker.uncleaned_roots.retain(|root| {
             let is_cleaned = max_clean_root
                 .map(|max_clean_root| *root <= max_clean_root)

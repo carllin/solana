@@ -34,6 +34,8 @@ pub mod transaction_batch;
 pub mod transaction_utils;
 pub mod vote_sender_types;
 
+#[macro_use]
+extern crate rental;
 extern crate solana_config_program;
 extern crate solana_stake_program;
 extern crate solana_vote_program;
