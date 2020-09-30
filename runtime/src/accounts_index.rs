@@ -1,10 +1,16 @@
 use solana_sdk::{clock::Slot, pubkey::Pubkey};
+use std::ops::{
+    Bound,
+    Bound::{Excluded, Included, Unbounded},
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ops::RangeBounds,
     sync::{Arc, RwLock},
 };
+
+const ITER_BATCH_SIZE: usize = 1000;
 
 rental! {
     mod owning_lock {
@@ -126,6 +132,63 @@ pub struct RootsTracker {
     previous_uncleaned_roots: HashSet<Slot>,
 }
 
+pub struct AccountsIndexIterator<'a, T> {
+    account_maps: &'a RwLock<AccountMap<Pubkey, AccountMapEntry<T>>>,
+    start_bound: Bound<Pubkey>,
+    end_bound: Bound<Pubkey>,
+}
+
+impl<'a, T> AccountsIndexIterator<'a, T> {
+    fn clone_bound(bound: Bound<&Pubkey>) -> Bound<Pubkey> {
+        match bound {
+            Unbounded => Unbounded,
+            Included(k) => Included(*k),
+            Excluded(k) => Excluded(*k),
+        }
+    }
+
+    pub fn new<R>(
+        account_maps: &'a RwLock<AccountMap<Pubkey, AccountMapEntry<T>>>,
+        range: Option<R>,
+    ) -> Self
+    where
+        R: RangeBounds<Pubkey>,
+    {
+        Self {
+            start_bound: range
+                .as_ref()
+                .map(|r| Self::clone_bound(r.start_bound()))
+                .unwrap_or(Unbounded),
+            end_bound: range
+                .as_ref()
+                .map(|r| Self::clone_bound(r.end_bound()))
+                .unwrap_or(Unbounded),
+            account_maps,
+        }
+    }
+}
+
+impl<'a, T: 'static + Clone> Iterator for AccountsIndexIterator<'a, T> {
+    type Item = Vec<(Pubkey, AccountMapEntry<T>)>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let chunk: Vec<(Pubkey, AccountMapEntry<T>)> = self
+            .account_maps
+            .read()
+            .unwrap()
+            .range((self.start_bound, self.end_bound))
+            .map(|(pubkey, account_map_entry)| (*pubkey, account_map_entry.clone()))
+            .take(ITER_BATCH_SIZE)
+            .collect();
+
+        if chunk.is_empty() {
+            return None;
+        }
+
+        self.start_bound = Excluded(chunk.last().unwrap().0);
+        Some(chunk)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct AccountsIndex<T> {
     pub account_maps: RwLock<AccountMap<Pubkey, AccountMapEntry<T>>>,
@@ -133,15 +196,24 @@ pub struct AccountsIndex<T> {
 }
 
 impl<T: 'static + Clone> AccountsIndex<T> {
-    fn do_scan_accounts<'a, F, I>(&'a self, ancestors: &Ancestors, mut func: F, iter: I)
+    fn iter<R>(&self, range: Option<R>) -> AccountsIndexIterator<T>
+    where
+        R: RangeBounds<Pubkey>,
+    {
+        AccountsIndexIterator::new(&self.account_maps, range)
+    }
+
+    fn do_scan_accounts<'a, F, R>(&'a self, ancestors: &Ancestors, mut func: F, range: Option<R>)
     where
         F: FnMut(&Pubkey, (&T, Slot)),
-        I: Iterator<Item = (&'a Pubkey, &'a AccountMapEntry<T>)>,
+        R: RangeBounds<Pubkey>,
     {
-        for (pubkey, list) in iter {
-            let list_r = &list.slot_list.read().unwrap();
-            if let Some(index) = self.latest_slot(Some(ancestors), &list_r, None) {
-                func(pubkey, (&list_r[index].1, list_r[index].0));
+        for pubkey_list in self.iter(range) {
+            for (pubkey, list) in pubkey_list {
+                let list_r = &list.slot_list.read().unwrap();
+                if let Some(index) = self.latest_slot(Some(ancestors), &list_r, None) {
+                    func(&pubkey, (&list_r[index].1, list_r[index].0));
+                }
             }
         }
     }
@@ -206,7 +278,7 @@ impl<T: 'static + Clone> AccountsIndex<T> {
     where
         F: FnMut(&Pubkey, (&T, Slot)),
     {
-        self.do_scan_accounts(ancestors, func, self.account_maps.read().unwrap().iter());
+        self.do_scan_accounts(ancestors, func, Some(Pubkey::default()..));
     }
 
     /// call func with every pubkey and index visible from a given set of ancestors with range
@@ -215,11 +287,7 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         F: FnMut(&Pubkey, (&T, Slot)),
         R: RangeBounds<Pubkey>,
     {
-        self.do_scan_accounts(
-            ancestors,
-            func,
-            self.account_maps.read().unwrap().range(range),
-        );
+        self.do_scan_accounts(ancestors, func, Some(range));
     }
 
     pub fn get_rooted_entries(&self, slice: SlotSlice<T>) -> SlotList<T> {
