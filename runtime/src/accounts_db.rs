@@ -93,7 +93,7 @@ const CACHE_VIRTUAL_WRITE_VERSION: u64 = 0;
 const CACHE_VIRTUAL_OFFSET: usize = 0;
 const CACHE_VIRTUAL_STORED_SIZE: usize = 0;
 
-type DashMapVersionHash = DashMap<Pubkey, (u64, Hash)>;
+type DashMapVersionHash = DashMap<Pubkey, (u64, u64, Hash)>;
 
 lazy_static! {
     // FROZEN_ACCOUNT_PANIC is used to signal local_cluster that an AccountsDb panic has occurred,
@@ -3280,7 +3280,7 @@ impl AccountsDb {
                         "flush slot cache slot: {}, key: {}, hash: {} lamports: {}",
                         slot,
                         key,
-                        iter_item.value().hash(),
+                        iter_item.value().hash,
                         iter_item.value().account.lamports()
                     );
                     if should_flush {
@@ -3832,7 +3832,12 @@ impl AccountsDb {
                 slot,
                 |loaded_account: LoadedAccount| {
                     // Cache only has one version per key, don't need to worry about versioning
-                    Some((*loaded_account.pubkey(), *loaded_account.loaded_hash()))
+                    Some((
+                        *loaded_account.pubkey(),
+                        *loaded_account.loaded_hash(),
+                        loaded_account.lamports(),
+                        loaded_account.write_version(),
+                    ))
                 },
                 |accum: &DashMap<Pubkey, (u64, u64, Hash)>, loaded_account: LoadedAccount| {
                     let lamports = loaded_account.lamports();
@@ -3880,13 +3885,7 @@ impl AccountsDb {
         };
         let dirty_keys = hashes
             .iter()
-            .map(|(pubkey, hash, lamports)| {
-                // Only enable for finding account diff mismatch
-                println!("x: {:?}", pubkey);
-                println!("y: {:?}", hash);
-                println!("z: {:?}", lamports);
-                *pubkey
-            })
+            .map(|(pubkey, hash, lamports)| *pubkey)
             .collect();
 
         let hashes = hashes
