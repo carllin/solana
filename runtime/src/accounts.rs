@@ -552,8 +552,8 @@ impl Accounts {
     }
 
     /// Slow because lock is held for 1 operation instead of many
-    pub fn store_slow(&self, slot: Slot, pubkey: &Pubkey, account: &Account) {
-        self.accounts_db.store(slot, &[(pubkey, account)]);
+    pub fn store_slow(&self, slot: Slot, pubkey: &Pubkey, account: &Account) -> (u64, u64) {
+        self.accounts_db.store(slot, &[(pubkey, account)])
     }
 
     fn is_locked_readonly(&self, key: &Pubkey) -> bool {

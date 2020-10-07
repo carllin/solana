@@ -1074,7 +1074,7 @@ impl AccountsDB {
             find_alive_elapsed = start.as_us();
 
             let mut start = Measure::start("create_and_insert_store_elapsed");
-            let shrunken_store = self.create_and_insert_store(slot, aligned_total);
+            let shrunken_store = self.create_and_insert_store(slot, aligned_total).0;
             start.stop();
             create_and_insert_store_elapsed = start.as_us();
 
@@ -1082,18 +1082,20 @@ impl AccountsDB {
             // without use of rather wide locks in this whole function, because we're
             // mutating rooted slots; There should be no writers to them.
             let mut start = Measure::start("store_accounts_elapsed");
-            let infos = self.store_accounts_to(
-                slot,
-                &accounts,
-                &hashes,
-                |_| shrunken_store.clone(),
-                write_versions.into_iter(),
-            );
+            let infos = self
+                .store_accounts_to(
+                    slot,
+                    &accounts,
+                    &hashes,
+                    |_| (shrunken_store.clone(), 0),
+                    write_versions.into_iter(),
+                )
+                .0;
             start.stop();
             store_accounts_elapsed = start.as_us();
 
             let mut start = Measure::start("update_index_elapsed");
-            let reclaims = self.update_index(slot, infos, &accounts);
+            let reclaims = self.update_index(slot, infos, &accounts).0;
             start.stop();
             update_index_elapsed = start.as_us();
 
@@ -1361,11 +1363,19 @@ impl AccountsDB {
         Self::load(&self.storage, ancestors, &self.accounts_index, pubkey)
     }
 
-    fn find_storage_candidate(&self, slot: Slot) -> Arc<AccountStorageEntry> {
+    fn find_storage_candidate(&self, slot: Slot) -> (Arc<AccountStorageEntry>, u64) {
         let mut create_extra = false;
+        let mut storage_elapsed = 0;
+
+        let mut start = Measure::start("start");
         let slot_stores_lock = self.storage.get_slot_stores(slot);
+        start.stop();
+        storage_elapsed += start.as_us();
         if let Some(slot_stores_lock) = slot_stores_lock {
+            let mut start = Measure::start("start");
             let slot_stores = slot_stores_lock.read().unwrap();
+            start.stop();
+            storage_elapsed += start.as_us();
             if !slot_stores.is_empty() {
                 if slot_stores.len() <= self.min_num_stores {
                     let mut total_accounts = 0;
@@ -1387,9 +1397,9 @@ impl AccountsDB {
                         let ret = store.clone();
                         drop(slot_stores);
                         if create_extra {
-                            self.create_and_insert_store(slot, self.file_size);
+                            storage_elapsed += self.create_and_insert_store(slot, self.file_size).1;
                         }
-                        return ret;
+                        return (ret, storage_elapsed);
                     }
                     // looked at every store, bail...
                     if i == slot_stores.len() {
@@ -1399,16 +1409,18 @@ impl AccountsDB {
             }
         }
 
-        let store = self.create_and_insert_store(slot, self.file_size);
+        let (store, elapsed) = self.create_and_insert_store(slot, self.file_size);
+        storage_elapsed += elapsed;
         store.try_available();
-        store
+        (store, storage_elapsed)
     }
 
-    fn create_and_insert_store(&self, slot: Slot, size: u64) -> Arc<AccountStorageEntry> {
+    fn create_and_insert_store(&self, slot: Slot, size: u64) -> (Arc<AccountStorageEntry>, u64) {
         let path_index = thread_rng().gen_range(0, self.paths.len());
         let store =
             Arc::new(self.new_storage_entry(slot, &Path::new(&self.paths[path_index]), size));
         let store_for_index = store.clone();
+        let mut start = Measure::start("start");
         let slot_storage = self
             .storage
             .0
@@ -1418,7 +1430,8 @@ impl AccountsDB {
             .write()
             .unwrap()
             .insert(store.id, store_for_index);
-        store
+        start.stop();
+        (store, start.as_us())
     }
 
     pub fn purge_slot(&self, slot: Slot) {
@@ -1702,7 +1715,7 @@ impl AccountsDB {
         slot: Slot,
         accounts: &[(&Pubkey, &Account)],
         hashes: &[Hash],
-    ) -> Vec<AccountInfo> {
+    ) -> (Vec<AccountInfo>, u64) {
         let mut current_version = self.bulk_assign_write_version(accounts.len());
         let write_version_producer = std::iter::from_fn(move || {
             let ret = current_version;
@@ -1720,14 +1733,18 @@ impl AccountsDB {
         )
     }
 
-    fn store_accounts_to<F: FnMut(Slot) -> Arc<AccountStorageEntry>, P: Iterator<Item = u64>>(
+    fn store_accounts_to<
+        F: FnMut(Slot) -> (Arc<AccountStorageEntry>, u64),
+        P: Iterator<Item = u64>,
+    >(
         &self,
         slot: Slot,
         accounts: &[(&Pubkey, &Account)],
         hashes: &[Hash],
         mut storage_finder: F,
         mut write_version_producer: P,
-    ) -> Vec<AccountInfo> {
+    ) -> (Vec<AccountInfo>, u64) {
+        let mut storage_elapsed = 0;
         let default_account = Account::default();
         let with_meta: Vec<(StoredMeta, &Account)> = accounts
             .iter()
@@ -1749,7 +1766,8 @@ impl AccountsDB {
             .collect();
         let mut infos: Vec<AccountInfo> = Vec::with_capacity(with_meta.len());
         while infos.len() < with_meta.len() {
-            let storage = storage_finder(slot);
+            let (storage, elapsed) = storage_finder(slot);
+            storage_elapsed += elapsed;
             let rvs = storage
                 .accounts
                 .append_accounts(&with_meta[infos.len()..], &hashes[infos.len()..]);
@@ -1774,7 +1792,7 @@ impl AccountsDB {
             // restore the state to available
             storage.set_status(AccountStorageStatus::Available);
         }
-        infos
+        (infos, storage_elapsed)
     }
 
     fn report_store_stats(&self) {
@@ -2110,14 +2128,17 @@ impl AccountsDB {
         slot: Slot,
         infos: Vec<AccountInfo>,
         accounts: &[(&Pubkey, &Account)],
-    ) -> SlotList<AccountInfo> {
+    ) -> (SlotList<AccountInfo>, u64) {
         let mut reclaims = SlotList::<AccountInfo>::with_capacity(infos.len() * 2);
+        let mut total_elapsed = 0;
         for (info, pubkey_account) in infos.into_iter().zip(accounts.iter()) {
             let pubkey = pubkey_account.0;
-            self.accounts_index
-                .update_or_create_if_missing(slot, pubkey, info, &mut reclaims);
+            let (_, elapsed) =
+                self.accounts_index
+                    .update_or_create_if_missing(slot, pubkey, info, &mut reclaims);
+            total_elapsed += elapsed;
         }
-        reclaims
+        (reclaims, total_elapsed)
     }
 
     fn remove_dead_accounts(
@@ -2292,7 +2313,7 @@ impl AccountsDB {
     }
 
     /// Store the account update.
-    pub fn store(&self, slot: Slot, accounts: &[(&Pubkey, &Account)]) {
+    pub fn store(&self, slot: Slot, accounts: &[(&Pubkey, &Account)]) -> (u64, u64) {
         self.assert_frozen_accounts(accounts);
         let hashes = self.hash_accounts(
             slot,
@@ -2301,12 +2322,17 @@ impl AccountsDB {
                 .cluster_type
                 .expect("Cluster type must be set at initialization"),
         );
-        self.store_with_hashes(slot, accounts, &hashes);
+        self.store_with_hashes(slot, accounts, &hashes)
     }
 
-    fn store_with_hashes(&self, slot: Slot, accounts: &[(&Pubkey, &Account)], hashes: &[Hash]) {
-        let infos = self.store_accounts(slot, accounts, hashes);
-        let reclaims = self.update_index(slot, infos, accounts);
+    fn store_with_hashes(
+        &self,
+        slot: Slot,
+        accounts: &[(&Pubkey, &Account)],
+        hashes: &[Hash],
+    ) -> (u64, u64) {
+        let (infos, storage_elapsed) = self.store_accounts(slot, accounts, hashes);
+        let (reclaims, index_elapsed) = self.update_index(slot, infos, accounts);
 
         // A store for a single slot should:
         // 1) Only make "reclaims" for the same slot
@@ -2317,6 +2343,7 @@ impl AccountsDB {
         //
         // From 1) and 2) we guarantee passing Some(slot), true is safe
         self.handle_reclaims(&reclaims, Some(slot), true, None);
+        (storage_elapsed, index_elapsed)
     }
 
     pub fn add_root(&self, slot: Slot) {

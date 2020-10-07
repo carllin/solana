@@ -233,12 +233,19 @@ fn bench_concurrent_scan_write(bencher: &mut Bencher) {
         .collect();
     bencher.iter(|| {
         let mut start = Instant::now();
-        for account in &new_accounts {
-            // Write to a different slot than the one being read from. Because
-            // there's a new account pubkey being written to every time, will
-            // compete for the accounts index lock on every store
-            accounts.store_slow(slot + 1, &Pubkey::new_rand(), &account);
+        let mut storage_elapsed = 0;
+        let mut index_elapsed = 0;
+        for i in 0..num_new_keys {
+            // Write to a different slot than the one being read from
+            let (se, ie) = accounts.store_slow(slot + 1, &Pubkey::new_rand(), &new_accounts[i]);
+            storage_elapsed += se;
+            index_elapsed += ie;
         }
-        println!("Finished one iteration {}", start.elapsed().as_nanos());
+        println!(
+            "storage_elapsed: {}, index_elapsed: {}, elaspsed: {}",
+            storage_elapsed,
+            index_elapsed,
+            start.elapsed().as_nanos()
+        );
     })
 }
