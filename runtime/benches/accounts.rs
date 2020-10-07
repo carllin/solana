@@ -2,6 +2,7 @@
 
 extern crate test;
 
+use rand::Rng;
 use solana_runtime::{
     accounts::{create_test_accounts, Accounts},
     bank::*,
@@ -11,7 +12,7 @@ use solana_sdk::{
     genesis_config::{create_genesis_config, ClusterType},
     pubkey::Pubkey,
 };
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, sync::RwLock, thread::Builder};
 use test::Bencher;
 
 fn deposit_many(bank: &Bank, pubkeys: &mut Vec<Pubkey>, num: usize) {
@@ -139,4 +140,61 @@ fn bench_delete_dependencies(bencher: &mut Bencher) {
     bencher.iter(|| {
         accounts.accounts_db.clean_accounts(None);
     });
+}
+
+#[bench]
+fn bench_concurrent_read_write(bencher: &mut Bencher) {
+    let num_readers = 5;
+    let num_writers = 5;
+    let accounts = Arc::new(RwLock::new(Accounts::new(
+        vec![PathBuf::from("concurrent_read_write")],
+        &ClusterType::Development,
+    )));
+    //let size = accounts.read().unwrap().accounts_db.file_size();
+    let num_keys = 1000;
+    let slot = 0;
+    accounts.write().unwrap().add_root(slot);
+    let pubkeys: Arc<Vec<_>> = Arc::new(
+        (0..num_keys)
+            .map(|_| {
+                let pubkey = Pubkey::new_rand();
+                let account = Account::new(1, 0, &Account::default().owner);
+                accounts
+                    .write()
+                    .unwrap()
+                    .store_slow(slot, &pubkey, &account);
+                pubkey
+            })
+            .collect(),
+    );
+    let readers: Vec<_> = (0..5)
+        .map(|_| {
+            let accounts = accounts.clone();
+            let pubkeys = pubkeys.clone();
+            Builder::new()
+                .name("readers".to_string())
+                .spawn(move || {
+                    let mut rng = rand::thread_rng();
+                    let i = rng.gen_range(0, num_keys);
+                    loop {
+                        accounts
+                            .read()
+                            .unwrap()
+                            .load_slow(&HashMap::new(), &pubkeys[i]);
+                    }
+                })
+                .unwrap()
+        })
+        .collect();
+
+    //let max_size = accounts.read().unwrap().accounts_db.file_size();
+    bencher.iter(|| {
+        for _ in 0..1000 {
+            let account = Account::new(1, 0, &Account::default().owner);
+            accounts
+                .write()
+                .unwrap()
+                .store_slow(slot, &Pubkey::new_rand(), &account);
+        }
+    })
 }
