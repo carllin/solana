@@ -146,23 +146,20 @@ fn bench_delete_dependencies(bencher: &mut Bencher) {
 fn bench_concurrent_read_write(bencher: &mut Bencher) {
     let num_readers = 5;
     let num_writers = 5;
-    let accounts = Arc::new(RwLock::new(Accounts::new(
+    let accounts = Arc::new(Accounts::new(
         vec![PathBuf::from("concurrent_read_write")],
         &ClusterType::Development,
-    )));
+    ));
     //let size = accounts.read().unwrap().accounts_db.file_size();
     let num_keys = 1000;
     let slot = 0;
-    accounts.write().unwrap().add_root(slot);
+    accounts.add_root(slot);
     let pubkeys: Arc<Vec<_>> = Arc::new(
         (0..num_keys)
             .map(|_| {
                 let pubkey = Pubkey::new_rand();
                 let account = Account::new(1, 0, &Account::default().owner);
-                accounts
-                    .write()
-                    .unwrap()
-                    .store_slow(slot, &pubkey, &account);
+                accounts.store_slow(slot, &pubkey, &account);
                 pubkey
             })
             .collect(),
@@ -177,10 +174,7 @@ fn bench_concurrent_read_write(bencher: &mut Bencher) {
                     let mut rng = rand::thread_rng();
                     let i = rng.gen_range(0, num_keys);
                     loop {
-                        accounts
-                            .read()
-                            .unwrap()
-                            .load_slow(&HashMap::new(), &pubkeys[i]);
+                        accounts.load_slow(&HashMap::new(), &pubkeys[i]);
                     }
                 })
                 .unwrap()
@@ -188,14 +182,14 @@ fn bench_concurrent_read_write(bencher: &mut Bencher) {
         .collect();
 
     //let max_size = accounts.read().unwrap().accounts_db.file_size();
+    let num_new_keys = 1000;
+    let new_accounts: Vec<_> = (0..num_new_keys)
+        .map(|_| Account::new(1, 0, &Account::default().owner))
+        .collect();
     bencher.iter(|| {
-        println!("Starting one iteration");
-        for _ in 0..1000 {
-            let account = Account::new(1, 0, &Account::default().owner);
-            accounts
-                .write()
-                .unwrap()
-                .store_slow(slot, &Pubkey::new_rand(), &account);
+        for i in 0..num_new_keys {
+            // Write to a different slot than the one being read from
+            accounts.store_slow(slot + 1, &Pubkey::new_rand(), &new_accounts[i]);
         }
         println!("Finished one iteration");
     })
