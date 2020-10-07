@@ -189,6 +189,7 @@ fn bench_concurrent_read_write(bencher: &mut Bencher) {
 
     //let max_size = accounts.read().unwrap().accounts_db.file_size();
     bencher.iter(|| {
+        println!("Starting one iteration");
         for _ in 0..1000 {
             let account = Account::new(1, 0, &Account::default().owner);
             accounts
@@ -196,5 +197,6 @@ fn bench_concurrent_read_write(bencher: &mut Bencher) {
                 .unwrap()
                 .store_slow(slot, &Pubkey::new_rand(), &account);
         }
+        println!("Finished one iteration");
     })
 }
