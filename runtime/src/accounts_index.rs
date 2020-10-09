@@ -873,7 +873,7 @@ mod tests {
     #[test]
     fn test_purge_older_root_entries() {
         // No roots, should be no reclaims
-        let mut index = AccountsIndex::<bool>::default();
+        let index = AccountsIndex::<bool>::default();
         let mut slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
         let mut reclaims = vec![];
         index.purge_older_root_entries(&mut slot_list, &mut reclaims, None);

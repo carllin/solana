@@ -2493,9 +2493,8 @@ impl AccountsDB {
     #[cfg(test)]
     pub fn get_append_vec_id(&self, pubkey: &Pubkey, slot: Slot) -> Option<AppendVecId> {
         let ancestors = vec![(slot, 1)].into_iter().collect();
-        let accounts_index = self.accounts_index.read().unwrap();
-        let result = accounts_index.get(&pubkey, Some(&ancestors), None);
-        result.map(|(list, index)| list[index].1.store_id)
+        let result = self.accounts_index.get(&pubkey, Some(&ancestors), None);
+        result.map(|(list, index)| list.slot_list()[index].1.store_id)
     }
 }
 
