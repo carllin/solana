@@ -192,3 +192,52 @@ fn bench_concurrent_read_write(bencher: &mut Bencher) {
         }
     })
 }
+
+#[bench]
+fn bench_concurrent_scan_write(bencher: &mut Bencher) {
+    let num_readers = 5;
+    let accounts = Arc::new(Accounts::new(
+        vec![PathBuf::from("concurrent_read_write")],
+        &ClusterType::Development,
+    ));
+    let num_keys = 1000;
+    let slot = 0;
+    accounts.add_root(slot);
+    let default_owner = Account::default().owner;
+    let pubkeys: Arc<Vec<_>> = Arc::new(
+        (0..num_keys)
+            .map(|_| {
+                let pubkey = Pubkey::new_rand();
+                let account = Account::new(1, 0, &Account::default().owner);
+                accounts.store_slow(slot, &pubkey, &account);
+                pubkey
+            })
+            .collect(),
+    );
+
+    for _ in 0..num_readers {
+        let accounts = accounts.clone();
+        let pubkeys = pubkeys.clone();
+        Builder::new()
+            .name("readers".to_string())
+            .spawn(move || {
+                loop {
+                    accounts.load_by_program(&HashMap::new(), &default_owner);
+                }
+            })
+            .unwrap();
+    }
+
+    let num_new_keys = 1000;
+    let new_accounts: Vec<_> = (0..num_new_keys)
+        .map(|_| Account::new(1, 0, &Account::default().owner))
+        .collect();
+    bencher.iter(|| {
+        for account in &new_accounts {
+            // Write to a different slot than the one being read from. Because
+            // there's a new account pubkey being written to every time, will
+            // compete for the accounts index lock on every store
+            accounts.store_slow(slot + 1, &Pubkey::new_rand(), &account);
+        }
+    })
+}
