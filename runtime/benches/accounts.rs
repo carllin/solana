@@ -12,6 +12,7 @@ use solana_sdk::{
     genesis_config::{create_genesis_config, ClusterType},
     pubkey::Pubkey,
 };
+use std::time::Instant;
 use std::{collections::HashMap, path::PathBuf, sync::Arc, thread::Builder};
 use test::Bencher;
 
@@ -220,10 +221,8 @@ fn bench_concurrent_scan_write(bencher: &mut Bencher) {
         let pubkeys = pubkeys.clone();
         Builder::new()
             .name("readers".to_string())
-            .spawn(move || {
-                loop {
-                    accounts.load_by_program(&HashMap::new(), &default_owner);
-                }
+            .spawn(move || loop {
+                accounts.load_by_program(&HashMap::new(), &default_owner);
             })
             .unwrap();
     }
@@ -233,11 +232,13 @@ fn bench_concurrent_scan_write(bencher: &mut Bencher) {
         .map(|_| Account::new(1, 0, &Account::default().owner))
         .collect();
     bencher.iter(|| {
+        let mut start = Instant::now();
         for account in &new_accounts {
             // Write to a different slot than the one being read from. Because
             // there's a new account pubkey being written to every time, will
             // compete for the accounts index lock on every store
             accounts.store_slow(slot + 1, &Pubkey::new_rand(), &account);
         }
+        println!("Finished one iteration {}", start.elapsed().as_nanos());
     })
 }
