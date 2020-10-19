@@ -23,7 +23,7 @@ use crate::{
     append_vec::{AppendVec, StoredAccount, StoredMeta},
 };
 use blake3::traits::digest::Digest;
-use dashmap::DashMap;
+use dashmap::{DashMap, Timing};
 use lazy_static::lazy_static;
 use log::*;
 use rand::{thread_rng, Rng};
@@ -131,13 +131,17 @@ impl AccountStorage {
         slot: Slot,
         store_id: AppendVecId,
     ) -> Option<Arc<AccountStorageEntry>> {
-        self.0
-            .get(&slot)
-            .and_then(|storage_map| storage_map.value().read().unwrap().get(&store_id).cloned())
+        self.get_slot_stores(slot)
+            .and_then(|storage_map| storage_map.read().unwrap().get(&store_id).cloned())
     }
 
     fn get_slot_stores(&self, slot: Slot) -> Option<SlotStores> {
-        self.0.get(&slot).map(|result| result.value().clone())
+        self.0.get(&slot).0.map(|result| result.value().clone())
+    }
+
+    fn get_slot_stores2(&self, slot: Slot) -> (Option<SlotStores>, Timing) {
+        let (stores, timing) = self.0.get(&slot);
+        (stores.map(|result| result.value().clone()), timing)
     }
 
     fn slot_store_count(&self, slot: Slot, store_id: AppendVecId) -> Option<usize> {
@@ -461,6 +465,9 @@ struct AccountsStats {
 
     last_store_report: AtomicU64,
     get_slot_stores: AtomicU64,
+    get_slot_stores2: AtomicU64,
+    get_slot_stores3: AtomicU64,
+    get_slot_stores4: AtomicU64,
     store_hash_accounts: AtomicU64,
     store_accounts: AtomicU64,
     store_update_index: AtomicU64,
@@ -1399,9 +1406,12 @@ impl AccountsDB {
         let mut create_extra = false;
         let mut find1 = Measure::start("find_store1");
         let mut get_slot_stores = Measure::start("get_slot_stores");
-        let slot_stores_lock = self.storage.get_slot_stores(slot);
+        let (slot_stores_lock, timing) = self.storage.get_slot_stores2(slot);
         get_slot_stores.stop();
         self.stats.get_slot_stores.fetch_add(get_slot_stores.as_us(), Ordering::Relaxed);
+        self.stats.get_slot_stores2.fetch_add(timing.t1 as u64, Ordering::Relaxed);
+        self.stats.get_slot_stores3.fetch_add(timing.t2 as u64, Ordering::Relaxed);
+        self.stats.get_slot_stores4.fetch_add(timing.t3 as u64, Ordering::Relaxed);
         if let Some(slot_stores_lock) = slot_stores_lock {
             let mut store_lock = Measure::start("store_lock");
             let slot_stores = slot_stores_lock.read().unwrap();
@@ -2642,6 +2652,21 @@ impl AccountsDB {
                 (
                     "get_slot_stores",
                     self.stats.get_slot_stores.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "get_slot_stores2",
+                    self.stats.get_slot_stores2.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "get_slot_stores3",
+                    self.stats.get_slot_stores3.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "get_slot_stores4",
+                    self.stats.get_slot_stores4.swap(0, Ordering::Relaxed),
                     i64
                 ),
             );
