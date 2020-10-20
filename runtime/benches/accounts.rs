@@ -160,7 +160,7 @@ fn bench_dashmap(bencher: &mut Bencher) {
             .spawn(move || {
                 let mut rng = rand::thread_rng();
                 loop {
-                    test::black_box(map.get_mut(&5).unwrap().value());
+                    test::black_box(map.entry(5).or_insert(2));
                 }
             })
             .unwrap();
