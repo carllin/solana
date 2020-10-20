@@ -1408,10 +1408,18 @@ impl AccountsDB {
         let mut get_slot_stores = Measure::start("get_slot_stores");
         let (slot_stores_lock, timing) = self.storage.get_slot_stores2(slot);
         get_slot_stores.stop();
-        self.stats.get_slot_stores.fetch_add(get_slot_stores.as_us(), Ordering::Relaxed);
-        self.stats.get_slot_stores2.fetch_add(timing.t1 as u64, Ordering::Relaxed);
-        self.stats.get_slot_stores3.fetch_add(timing.t2 as u64, Ordering::Relaxed);
-        self.stats.get_slot_stores4.fetch_add(timing.t3 as u64, Ordering::Relaxed);
+        self.stats
+            .get_slot_stores
+            .fetch_add(get_slot_stores.as_us(), Ordering::Relaxed);
+        self.stats
+            .get_slot_stores2
+            .fetch_add(timing.t1 as u64, Ordering::Relaxed);
+        self.stats
+            .get_slot_stores3
+            .fetch_add(timing.t2 as u64, Ordering::Relaxed);
+        self.stats
+            .get_slot_stores4
+            .fetch_add(timing.t3 as u64, Ordering::Relaxed);
         if let Some(slot_stores_lock) = slot_stores_lock {
             let mut store_lock = Measure::start("store_lock");
             let slot_stores = slot_stores_lock.read().unwrap();
@@ -2597,15 +2605,18 @@ impl AccountsDB {
                 ),
                 (
                     "shrink_append_accounts",
-                    self.stats.store_shrink_append_accounts.swap(0, Ordering::Relaxed),
+                    self.stats
+                        .store_shrink_append_accounts
+                        .swap(0, Ordering::Relaxed),
                     i64
                 ),
                 (
                     "shrink_find_storage",
-                    self.stats.store_shrink_find_store.swap(0, Ordering::Relaxed),
+                    self.stats
+                        .store_shrink_find_store
+                        .swap(0, Ordering::Relaxed),
                     i64
                 ),
-
             );
             datapoint_info!(
                 "accounts_db_store_timings2",

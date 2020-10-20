@@ -2,6 +2,7 @@
 
 extern crate test;
 
+use dashmap::DashMap;
 use rand::Rng;
 use solana_runtime::{
     accounts::{create_test_accounts, Accounts},
@@ -12,10 +13,9 @@ use solana_sdk::{
     genesis_config::{create_genesis_config, ClusterType},
     pubkey::Pubkey,
 };
+use std::sync::RwLock;
 use std::{collections::HashMap, path::PathBuf, sync::Arc, thread::Builder};
 use test::Bencher;
-use std::sync::RwLock;
-use dashmap::DashMap;
 
 fn deposit_many(bank: &Bank, pubkeys: &mut Vec<Pubkey>, num: usize) {
     for t in 0..num {
@@ -160,8 +160,7 @@ fn bench_dashmap(bencher: &mut Bencher) {
             .spawn(move || {
                 let mut rng = rand::thread_rng();
                 loop {
-                    let i = rng.gen_range(0, num_keys);
-                    test::black_box(map.get(&i).0.unwrap().value());
+                    test::black_box(map.get(&5).0.unwrap().value());
                 }
             })
             .unwrap();
@@ -169,8 +168,7 @@ fn bench_dashmap(bencher: &mut Bencher) {
     let mut rng = rand::thread_rng();
     bencher.iter(|| {
         for i in 0..num_keys {
-            let i = rng.gen_range(0, num_keys);
-            test::black_box(map.get(&i).0.unwrap().value());
+            test::black_box(map.get(&5).0.unwrap().value());
         }
     })
 }
@@ -187,20 +185,15 @@ fn bench_rwlock_map(bencher: &mut Bencher) {
         let map = map.clone();
         Builder::new()
             .name("readers".to_string())
-            .spawn(move || {
-                let mut rng = rand::thread_rng();
-                loop {
-                    let i = rng.gen_range(0, num_keys);
-                    test::black_box(map.read().unwrap().get(&i));
-                }
+            .spawn(move || loop {
+                test::black_box(map.read().unwrap().get(&5));
             })
             .unwrap();
     }
     let mut rng = rand::thread_rng();
     bencher.iter(|| {
         for i in 0..num_keys {
-            let i = rng.gen_range(0, num_keys);
-            test::black_box(map.read().unwrap().get(&i));
+            test::black_box(map.read().unwrap().get(&5));
         }
     })
 }

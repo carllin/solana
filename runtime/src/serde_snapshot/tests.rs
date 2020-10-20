@@ -24,7 +24,6 @@ fn copy_append_vecs<P: AsRef<Path>>(
     accounts_db: &AccountsDB,
     output_dir: P,
 ) -> std::io::Result<()> {
-
     Ok(())
 }
 
