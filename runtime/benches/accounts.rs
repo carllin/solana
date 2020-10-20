@@ -160,7 +160,7 @@ fn bench_dashmap(bencher: &mut Bencher) {
             .spawn(move || {
                 let mut rng = rand::thread_rng();
                 loop {
-                    test::black_box(map.get(&5).0.unwrap().value());
+                    test::black_box(map.get_mut(&5).unwrap().value());
                 }
             })
             .unwrap();
@@ -186,7 +186,7 @@ fn bench_rwlock_map(bencher: &mut Bencher) {
         Builder::new()
             .name("readers".to_string())
             .spawn(move || loop {
-                test::black_box(map.read().unwrap().get(&5));
+                test::black_box(map.write().unwrap().get(&5));
             })
             .unwrap();
     }
