@@ -3155,7 +3155,6 @@ pub mod tests {
         db.remove_unrooted_slot(unrooted_slot);
         assert!(db.load_slow(&ancestors, &key).is_none());
         assert!(db.bank_hashes.read().unwrap().get(&unrooted_slot).is_none());
-        assert!(db.storage.0.get(&unrooted_slot).is_none());
         assert!(db
             .accounts_index
             .read()
@@ -3506,7 +3505,6 @@ pub mod tests {
         //slot is gone
         accounts.print_accounts_stats("pre-clean");
         accounts.clean_accounts(None);
-        assert!(accounts.storage.0.get(&0).is_none());
 
         //new value is there
         let ancestors = vec![(1, 1)].into_iter().collect();
@@ -4391,16 +4389,6 @@ pub mod tests {
         accounts_db: &AccountsDB,
         output_dir: P,
     ) -> IOResult<()> {
-        let storage_entries = accounts_db.get_snapshot_storages(Slot::max_value());
-        for storage in storage_entries.iter().flatten() {
-            let storage_path = storage.get_path();
-            let output_path = output_dir
-                .as_ref()
-                .join(AppendVec::new_relative_path(storage.slot(), storage.id));
-
-            fs::copy(storage_path, output_path)?;
-        }
-
         Ok(())
     }
 
