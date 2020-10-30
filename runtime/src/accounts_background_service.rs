@@ -20,9 +20,6 @@ use std::thread::{self, sleep, Builder, JoinHandle};
 use std::time::Duration;
 
 const INTERVAL_MS: u64 = 100;
-const SHRUNKEN_ACCOUNT_PER_SEC: usize = 250;
-const SHRUNKEN_ACCOUNT_PER_INTERVAL: usize =
-    SHRUNKEN_ACCOUNT_PER_SEC / (1000 / INTERVAL_MS as usize);
 const CLEAN_INTERVAL_BLOCKS: u64 = 100;
 
 pub type SnapshotRequestSender = Sender<SnapshotRequest>;
@@ -55,10 +52,6 @@ impl SnapshotRequestHandler {
                 snapshot_root_bank.update_accounts_hash();
                 hash_time.stop();
 
-                let mut shrink_time = Measure::start("shrink_time");
-                snapshot_root_bank.process_stale_slot_with_budget(0, SHRUNKEN_ACCOUNT_PER_INTERVAL);
-                shrink_time.stop();
-
                 let mut clean_time = Measure::start("clean_time");
                 // Don't clean the slot we're snapshotting because it may have zero-lamport
                 // accounts that were included in the bank delta hash when the bank was frozen,
@@ -66,6 +59,10 @@ impl SnapshotRequestHandler {
                 // the frozen hash.
                 snapshot_root_bank.clean_accounts(true);
                 clean_time.stop();
+
+                let mut shrink_time = Measure::start("shrink_time");
+                snapshot_root_bank.shrink_candidate_slots();
+                shrink_time.stop();
 
                 // Generate an accounts package
                 let mut snapshot_time = Measure::start("snapshot_time");
@@ -121,7 +118,6 @@ impl AccountsBackgroundService {
     ) -> Self {
         info!("AccountsBackgroundService active");
         let exit = exit.clone();
-        let mut consumed_budget = 0;
         let mut last_cleaned_block_height = 0;
         let t_background = Builder::new()
             .name("solana-accounts-background".to_string())
@@ -162,10 +158,7 @@ impl AccountsBackgroundService {
                     assert!(last_cleaned_block_height <= snapshot_block_height);
                     last_cleaned_block_height = snapshot_block_height;
                 } else {
-                    consumed_budget = bank.process_stale_slot_with_budget(
-                        consumed_budget,
-                        SHRUNKEN_ACCOUNT_PER_INTERVAL,
-                    );
+                    bank.shrink_candidate_slots();
 
                     if bank.block_height() - last_cleaned_block_height
                         > (CLEAN_INTERVAL_BLOCKS + thread_rng().gen_range(0, 10))

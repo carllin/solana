@@ -48,15 +48,18 @@ use std::{
     ops::RangeBounds,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    sync::{Arc, Mutex, MutexGuard, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::Instant,
 };
 use tempfile::TempDir;
 
-const PAGE_SIZE: u64 = 4 * 1024;
 pub const DEFAULT_FILE_SIZE: u64 = PAGE_SIZE * 1024;
 pub const DEFAULT_NUM_THREADS: u32 = 8;
 pub const DEFAULT_NUM_DIRS: u32 = 4;
+
+const PAGE_SIZE: u64 = 4 * 1024;
+const STORE_META_OVERHEAD: usize = 256;
+const SHRINK_RATIO: f64 = 0.80;
 
 lazy_static! {
     // FROZEN_ACCOUNT_PANIC is used to signal local_cluster that an AccountsDB panic has occurred,
@@ -105,6 +108,7 @@ pub(crate) type SlotStores = Arc<RwLock<HashMap<usize, Arc<AccountStorageEntry>>
 type AccountSlots = HashMap<Pubkey, HashSet<Slot>>;
 type AppendVecOffsets = HashMap<AppendVecId, HashSet<usize>>;
 type ReclaimResult = (AccountSlots, AppendVecOffsets);
+type ShrinkCandidates = HashMap<Slot, HashMap<AppendVecId, Arc<AccountStorageEntry>>>;
 
 trait Versioned {
     fn version(&self) -> u64;
@@ -414,7 +418,7 @@ pub struct AccountsDB {
 
     /// distribute the accounts across storage lists
     pub next_id: AtomicUsize,
-    pub shrink_candidate_slots: Mutex<Vec<Slot>>,
+    pub shrink_candidate_slots: Mutex<ShrinkCandidates>,
 
     pub(crate) write_version: AtomicU64,
 
@@ -499,7 +503,7 @@ impl Default for AccountsDB {
             accounts_index: AccountsIndex::default(),
             storage: AccountStorage(DashMap::new()),
             next_id: AtomicUsize::new(0),
-            shrink_candidate_slots: Mutex::new(Vec::new()),
+            shrink_candidate_slots: Mutex::new(HashMap::new()),
             write_version: AtomicU64::new(0),
             paths: vec![],
             temp_paths: None,
@@ -616,18 +620,13 @@ impl AccountsDB {
         reclaim_result
     }
 
-    fn do_reset_uncleaned_roots(
-        &self,
-        candidates: &mut MutexGuard<Vec<Slot>>,
-        max_clean_root: Option<Slot>,
-    ) {
-        let previous_roots = self.accounts_index.reset_uncleaned_roots(max_clean_root);
-        candidates.extend(previous_roots);
+    fn do_reset_uncleaned_roots(&self, max_clean_root: Option<Slot>) {
+        self.accounts_index.reset_uncleaned_roots(max_clean_root);
     }
 
     #[cfg(test)]
     fn reset_uncleaned_roots(&self) {
-        self.do_reset_uncleaned_roots(&mut self.shrink_candidate_slots.lock().unwrap(), None);
+        self.do_reset_uncleaned_roots(None);
     }
 
     fn calc_delete_dependencies(
@@ -721,11 +720,6 @@ impl AccountsDB {
     // Only remove those accounts where the entire rooted history of the account
     // can be purged because there are no live append vecs in the ancestors
     pub fn clean_accounts(&self, max_clean_root: Option<Slot>) {
-        // hold a lock to prevent slot shrinking from running because it might modify some rooted
-        // slot storages which can not happen as long as we're cleaning accounts because we're also
-        // modifying the rooted slot storages!
-        let mut candidates = self.shrink_candidate_slots.lock().unwrap();
-
         self.report_store_stats();
 
         let mut accounts_scan = Measure::start("accounts_scan");
@@ -785,7 +779,8 @@ impl AccountsDB {
         let mut clean_old_rooted = Measure::start("clean_old_roots");
         let (purged_account_slots, removed_accounts) =
             self.clean_old_rooted_accounts(purges_in_root, max_clean_root);
-        self.do_reset_uncleaned_roots(&mut candidates, max_clean_root);
+
+        self.do_reset_uncleaned_roots(max_clean_root);
         clean_old_rooted.stop();
 
         let mut store_counts_time = Measure::start("store_counts");
@@ -949,8 +944,14 @@ impl AccountsDB {
         self.purge_slots(&dead_slots);
         purge_slots.stop();
 
+        // If the slot is dead, remove the need to shrink the storages as
+        // the storage entries will be purged.
+        for slot in dead_slots {
+            self.shrink_candidate_slots.lock().unwrap().remove(slot);
+        }
+
         debug!(
-            "process_dead_slots({}): {} {} {:?}",
+            "process_dead_roots({}): {} {} {:?}",
             dead_slots.len(),
             clean_dead_slots,
             purge_slots,
@@ -958,73 +959,26 @@ impl AccountsDB {
         );
     }
 
-    fn do_shrink_stale_slot(&self, slot: Slot) -> usize {
-        self.do_shrink_slot(slot, false)
-    }
-
-    fn do_shrink_slot_forced(&self, slot: Slot) {
-        self.do_shrink_slot(slot, true);
-    }
-
-    fn shrink_stale_slot(&self, candidates: &mut MutexGuard<Vec<Slot>>) -> usize {
-        if let Some(slot) = self.do_next_shrink_slot(candidates) {
-            self.do_shrink_stale_slot(slot)
-        } else {
-            0
-        }
-    }
-
-    // Reads all accounts in given slot's AppendVecs and filter only to alive,
-    // then create a minimum AppendVec filled with the alive.
-    fn do_shrink_slot(&self, slot: Slot, forced: bool) -> usize {
-        trace!("shrink_stale_slot: slot: {}", slot);
-
+    fn do_shrink_slot<'a, I>(&'a self, slot: Slot, stores: I)
+    where
+        I: Iterator<Item = &'a Arc<AccountStorageEntry>>,
+    {
+        debug!("do_shrink_slot: slot: {}", slot);
         let mut stored_accounts = vec![];
-        let mut storage_read_elapsed = Measure::start("storage_read_elapsed");
-        {
-            if let Some(stores_lock) = self.storage.get_slot_stores(slot) {
-                let stores = stores_lock.read().unwrap();
-                let mut alive_count = 0;
-                let mut stored_count = 0;
-                for store in stores.values() {
-                    alive_count += store.count();
-                    stored_count += store.approx_stored_count();
-                }
-                if alive_count == stored_count && stores.values().len() == 1 {
-                    trace!(
-                        "shrink_stale_slot ({}): not able to shrink at all: alive/stored: {} / {} {}",
-                        slot,
-                        alive_count,
-                        stored_count,
-                        if forced { " (forced)" } else { "" },
-                    );
-                    return 0;
-                } else if (alive_count as f32 / stored_count as f32) >= 0.80 && !forced {
-                    trace!(
-                        "shrink_stale_slot ({}): not enough space to shrink: {} / {}",
-                        slot,
-                        alive_count,
-                        stored_count,
-                    );
-                    return 0;
-                }
-                for store in stores.values() {
-                    let mut start = 0;
-                    while let Some((account, next)) = store.accounts.get_account(start) {
-                        stored_accounts.push((
-                            account.meta.pubkey,
-                            account.clone_account(),
-                            *account.hash,
-                            next - start,
-                            (store.id, account.offset),
-                            account.meta.write_version,
-                        ));
-                        start = next;
-                    }
-                }
+        for store in stores {
+            let mut start = 0;
+            while let Some((account, next)) = store.accounts.get_account(start) {
+                stored_accounts.push((
+                    account.meta.pubkey,
+                    account.clone_account(),
+                    *account.hash,
+                    next - start,
+                    (store.id, account.offset),
+                    account.meta.write_version,
+                ));
+                start = next;
             }
         }
-        storage_read_elapsed.stop();
 
         let mut index_read_elapsed = Measure::start("index_read_elapsed");
         let alive_accounts: Vec<_> = {
@@ -1064,11 +1018,13 @@ impl AccountsDB {
             .sum();
         let aligned_total: u64 = (alive_total + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1);
 
+        let total_starting_accounts = stored_accounts.len();
+        let total_accounts_after_shrink = alive_accounts.len();
         debug!(
-            "shrinking: slot: {}, stored_accounts: {} => alive_accounts: {} ({} bytes; aligned to: {})",
+            "shrinking: slot: {}, total_starting_accounts: {} => total_accounts_after_shrink: {} ({} bytes; aligned to: {})",
             slot,
-            stored_accounts.len(),
-            alive_accounts.len(),
+            total_starting_accounts,
+            total_accounts_after_shrink,
             alive_total,
             aligned_total
         );
@@ -1130,7 +1086,6 @@ impl AccountsDB {
 
         datapoint_info!(
             "do_shrink_slot_time",
-            ("storage_read_elapsed", storage_read_elapsed.as_us(), i64),
             ("index_read_elapsed", index_read_elapsed.as_us(), i64),
             ("find_alive_elapsed", find_alive_elapsed, i64),
             (
@@ -1160,72 +1115,62 @@ impl AccountsDB {
                 drop_storage_entries_elapsed.as_us(),
                 i64
             ),
+            ("total_starting_accounts", total_starting_accounts, i64),
+            (
+                "total_accounts_after_shrink",
+                total_accounts_after_shrink,
+                i64
+            )
         );
-        alive_accounts.len()
     }
 
-    // Infinitely returns rooted roots in cyclic order
-    fn do_next_shrink_slot(&self, candidates: &mut MutexGuard<Vec<Slot>>) -> Option<Slot> {
-        // At this point, a lock (= candidates) is ensured to be held to keep
-        // do_reset_uncleaned_roots() (in clean_accounts()) from updating candidates.
-        // Also, candidates in the lock may be swapped here if it's empty.
-        let next = candidates.pop();
+    // Reads all accounts in given slot's AppendVecs and filter only to alive,
+    // then create a minimum AppendVec filled with the alive.
+    fn shrink_slot_forced(&self, slot: Slot) -> usize {
+        debug!("shrink_slot_forced: slot: {}", slot);
 
-        if next.is_some() {
-            next
+        if let Some(stores_lock) = self.storage.get_slot_stores(slot) {
+            let stores = stores_lock.read().unwrap();
+            let mut alive_count = 0;
+            let mut stored_count = 0;
+            for store in stores.values() {
+                alive_count += store.count();
+                stored_count += store.approx_stored_count();
+            }
+            if alive_count == stored_count && stores.values().len() == 1 {
+                debug!(
+                    "shrink_slot_forced ({}): not able to shrink at all: alive/stored: {} / {}",
+                    slot, alive_count, stored_count,
+                );
+                return 0;
+            }
+            self.do_shrink_slot(slot, stores.values());
+            alive_count
         } else {
-            let mut new_all_slots = self.all_root_slots_in_index();
-            let next = new_all_slots.pop();
-            // refresh candidates for later calls!
-            **candidates = new_all_slots;
-
-            next
+            0
         }
-    }
-
-    #[cfg(test)]
-    fn next_shrink_slot(&self) -> Option<Slot> {
-        let mut candidates = self.shrink_candidate_slots.lock().unwrap();
-        self.do_next_shrink_slot(&mut candidates)
-    }
-
-    fn all_root_slots_in_index(&self) -> Vec<Slot> {
-        self.accounts_index.all_roots()
     }
 
     fn all_slots_in_storage(&self) -> Vec<Slot> {
         self.storage.all_slots()
     }
 
-    pub fn process_stale_slot(&self) -> usize {
-        let mut measure = Measure::start("stale_slot_shrink-ms");
-        let candidates = self.shrink_candidate_slots.try_lock();
-        if candidates.is_err() {
-            // skip and return immediately if locked by clean_accounts()
-            // the calling background thread will just retry later.
-            return 0;
-        }
-        // hold this lock as long as this shrinking process is running to avoid conflicts
-        // with clean_accounts().
-        let mut candidates = candidates.unwrap();
-
-        let count = self.shrink_stale_slot(&mut candidates);
-        measure.stop();
-        inc_new_counter_info!("stale_slot_shrink-ms", measure.as_ms() as usize);
-
-        count
-    }
-
-    #[cfg(test)]
-    fn shrink_all_stale_slots(&self) {
-        for slot in self.all_slots_in_storage() {
-            self.do_shrink_stale_slot(slot);
+    pub fn shrink_candidate_slots(&self) {
+        let shrink_slots = std::mem::replace(
+            &mut *self.shrink_candidate_slots.lock().unwrap(),
+            HashMap::new(),
+        );
+        for (slot, slot_shrink_candidates) in shrink_slots {
+            let mut measure = Measure::start("shrink_candidate_slots-ms");
+            self.do_shrink_slot(slot, slot_shrink_candidates.values());
+            measure.stop();
+            inc_new_counter_info!("shrink_candidate_slots-ms", measure.as_ms() as usize);
         }
     }
 
     pub fn shrink_all_slots(&self) {
         for slot in self.all_slots_in_storage() {
-            self.do_shrink_slot_forced(slot);
+            self.shrink_slot_forced(slot);
         }
     }
 
@@ -1345,6 +1290,21 @@ impl AccountsDB {
                     .get_account(offset)
                     .map(|account| (account.0.clone_account(), slot))
             })
+    }
+
+    #[cfg(test)]
+    pub fn alive_account_count_in_slot(&self, slot: Slot) -> usize {
+        self.storage
+            .get_slot_stores(slot)
+            .map(|storages| {
+                storages
+                    .read()
+                    .unwrap()
+                    .values()
+                    .map(|s| s.count_and_status.read().unwrap().0)
+                    .sum()
+            })
+            .unwrap_or(0)
     }
 
     #[cfg(test)]
@@ -2154,6 +2114,7 @@ impl AccountsDB {
         mut reclaimed_offsets: Option<&mut AppendVecOffsets>,
     ) -> HashSet<Slot> {
         let mut dead_slots = HashSet::new();
+        let mut new_shrink_candidates: ShrinkCandidates = HashMap::new();
         for (slot, account_info) in reclaims {
             if let Some(ref mut reclaimed_offsets) = reclaimed_offsets {
                 reclaimed_offsets
@@ -2174,8 +2135,28 @@ impl AccountsDB {
                     store.slot, *slot
                 );
                 let count = store.remove_account();
+                if (count as f64 / store.approx_store_count.load(Ordering::Relaxed) as f64)
+                    < SHRINK_RATIO
+                {
+                    new_shrink_candidates
+                        .entry(*slot)
+                        .or_default()
+                        .insert(store.id, store);
+                }
                 if count == 0 {
                     dead_slots.insert(*slot);
+                }
+            }
+        }
+
+        {
+            let mut shrink_candidate_slots = self.shrink_candidate_slots.lock().unwrap();
+            for (slot, slot_shrink_candidates) in new_shrink_candidates {
+                for (store_id, store) in slot_shrink_candidates {
+                    shrink_candidate_slots
+                        .entry(slot)
+                        .or_default()
+                        .insert(store_id, store);
                 }
             }
         }
@@ -3273,20 +3254,6 @@ pub mod tests {
     }
 
     impl AccountsDB {
-        fn alive_account_count_in_store(&self, slot: Slot) -> usize {
-            let slot_storage = self.storage.get_slot_stores(slot);
-            if let Some(slot_storage) = slot_storage {
-                slot_storage
-                    .read()
-                    .unwrap()
-                    .values()
-                    .map(|store| store.count())
-                    .sum()
-            } else {
-                0
-            }
-        }
-
         fn all_account_count_in_append_vec(&self, slot: Slot) -> usize {
             let slot_storage = self.storage.get_slot_stores(slot);
             if let Some(slot_storage) = slot_storage {
@@ -3364,7 +3331,7 @@ pub mod tests {
         // Slot 1 should be cleaned because all it's accounts are
         // zero lamports, and are not present in any other slot's
         // storage entries
-        assert_eq!(accounts.alive_account_count_in_store(1), 0);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 0);
     }
 
     #[test]
@@ -3394,12 +3361,12 @@ pub mod tests {
 
         // Slot 0 should be cleaned because all it's accounts have been
         // updated in the rooted slot 1
-        assert_eq!(accounts.alive_account_count_in_store(0), 0);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 0);
 
         // Slot 1 should be cleaned because all it's accounts are
         // zero lamports, and are not present in any other slot's
         // storage entries
-        assert_eq!(accounts.alive_account_count_in_store(1), 0);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 0);
 
         // zero lamport account, should no longer exist in accounts index
         // because it has been removed
@@ -3422,14 +3389,14 @@ pub mod tests {
         accounts.add_root(1);
 
         //even if rooted, old state isn't cleaned up
-        assert_eq!(accounts.alive_account_count_in_store(0), 1);
-        assert_eq!(accounts.alive_account_count_in_store(1), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 1);
 
         accounts.clean_accounts(None);
 
         //now old state is cleaned up
-        assert_eq!(accounts.alive_account_count_in_store(0), 0);
-        assert_eq!(accounts.alive_account_count_in_store(1), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 0);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 1);
     }
 
     #[test]
@@ -3452,14 +3419,14 @@ pub mod tests {
         accounts.add_root(1);
 
         //even if rooted, old state isn't cleaned up
-        assert_eq!(accounts.alive_account_count_in_store(0), 2);
-        assert_eq!(accounts.alive_account_count_in_store(1), 2);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 2);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 2);
 
         accounts.clean_accounts(None);
 
         //Old state behind zero-lamport account is cleaned up
-        assert_eq!(accounts.alive_account_count_in_store(0), 0);
-        assert_eq!(accounts.alive_account_count_in_store(1), 2);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 0);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 2);
     }
 
     #[test]
@@ -3485,19 +3452,19 @@ pub mod tests {
         accounts.add_root(2);
 
         //even if rooted, old state isn't cleaned up
-        assert_eq!(accounts.alive_account_count_in_store(0), 2);
-        assert_eq!(accounts.alive_account_count_in_store(1), 1);
-        assert_eq!(accounts.alive_account_count_in_store(2), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 2);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(2), 1);
 
         accounts.clean_accounts(None);
 
         //both zero lamport and normal accounts are cleaned up
-        assert_eq!(accounts.alive_account_count_in_store(0), 0);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 0);
         // The only store to slot 1 was a zero lamport account, should
         // be purged by zero-lamport cleaning logic because slot 1 is
         // rooted
-        assert_eq!(accounts.alive_account_count_in_store(1), 0);
-        assert_eq!(accounts.alive_account_count_in_store(2), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 0);
+        assert_eq!(accounts.alive_account_count_in_slot(2), 1);
 
         // Pubkey 1, a zero lamport account, should no longer exist in accounts index
         // because it has been removed
@@ -3524,17 +3491,17 @@ pub mod tests {
 
         // Only clean up to account 0, should not purge slot 0 based on
         // updates in later slots in slot 1
-        assert_eq!(accounts.alive_account_count_in_store(0), 1);
-        assert_eq!(accounts.alive_account_count_in_store(1), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 1);
         accounts.clean_accounts(Some(0));
-        assert_eq!(accounts.alive_account_count_in_store(0), 1);
-        assert_eq!(accounts.alive_account_count_in_store(1), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 1);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 1);
         assert!(accounts.accounts_index.get(&pubkey, None, None).is_some());
 
         // Now the account can be cleaned up
         accounts.clean_accounts(Some(1));
-        assert_eq!(accounts.alive_account_count_in_store(0), 0);
-        assert_eq!(accounts.alive_account_count_in_store(1), 0);
+        assert_eq!(accounts.alive_account_count_in_slot(0), 0);
+        assert_eq!(accounts.alive_account_count_in_slot(1), 0);
 
         // The zero lamport account, should no longer exist in accounts index
         // because it has been removed
@@ -4731,11 +4698,11 @@ pub mod tests {
 
         // B: Test multiple updates to pubkey1 in a single slot/storage
         current_slot += 1;
-        assert_eq!(0, accounts.alive_account_count_in_store(current_slot));
+        assert_eq!(0, accounts.alive_account_count_in_slot(current_slot));
         assert_eq!(1, accounts.ref_count_for_pubkey(&pubkey1));
         accounts.store(current_slot, &[(&pubkey1, &account2)]);
         accounts.store(current_slot, &[(&pubkey1, &account2)]);
-        assert_eq!(1, accounts.alive_account_count_in_store(current_slot));
+        assert_eq!(1, accounts.alive_account_count_in_slot(current_slot));
         // Stores to same pubkey, same slot only count once towards the
         // ref count
         assert_eq!(2, accounts.ref_count_for_pubkey(&pubkey1));
@@ -4810,77 +4777,10 @@ pub mod tests {
         let accounts = AccountsDB::new_single();
 
         for _ in 0..10 {
-            assert_eq!(0, accounts.process_stale_slot());
+            accounts.shrink_candidate_slots();
         }
 
         accounts.shrink_all_slots();
-    }
-
-    #[test]
-    fn test_shrink_next_slots() {
-        let accounts = AccountsDB::new_single();
-
-        let mut current_slot = 7;
-
-        assert_eq!(
-            vec![None, None, None],
-            (0..3)
-                .map(|_| accounts.next_shrink_slot())
-                .collect::<Vec<_>>()
-        );
-
-        accounts.add_root(current_slot);
-
-        assert_eq!(
-            vec![Some(7), Some(7), Some(7)],
-            (0..3)
-                .map(|_| accounts.next_shrink_slot())
-                .collect::<Vec<_>>()
-        );
-
-        current_slot += 1;
-        accounts.add_root(current_slot);
-
-        let slots = (0..6)
-            .map(|_| accounts.next_shrink_slot())
-            .collect::<Vec<_>>();
-
-        // Because the origin of this data is HashMap (not BTreeMap), key order is arbitrary per cycle.
-        assert!(
-            vec![Some(7), Some(8), Some(7), Some(8), Some(7), Some(8)] == slots
-                || vec![Some(8), Some(7), Some(8), Some(7), Some(8), Some(7)] == slots
-        );
-    }
-
-    #[test]
-    fn test_shrink_reset_uncleaned_roots() {
-        let accounts = AccountsDB::new_single();
-
-        accounts.reset_uncleaned_roots();
-        assert_eq!(
-            *accounts.shrink_candidate_slots.lock().unwrap(),
-            vec![] as Vec<Slot>
-        );
-
-        accounts.add_root(0);
-        accounts.add_root(1);
-        accounts.add_root(2);
-
-        accounts.reset_uncleaned_roots();
-        let actual_slots = accounts.shrink_candidate_slots.lock().unwrap().clone();
-        assert_eq!(actual_slots, vec![] as Vec<Slot>);
-
-        accounts.reset_uncleaned_roots();
-        let mut actual_slots = accounts.shrink_candidate_slots.lock().unwrap().clone();
-        actual_slots.sort();
-        assert_eq!(actual_slots, vec![0, 1, 2]);
-
-        accounts.accounts_index.clear_roots();
-        let mut actual_slots = (0..5)
-            .map(|_| accounts.next_shrink_slot())
-            .collect::<Vec<_>>();
-        actual_slots.sort();
-        assert_eq!(actual_slots, vec![None, None, Some(0), Some(1), Some(2)],);
     }
 
     #[test]
@@ -4992,7 +4892,7 @@ pub mod tests {
         );
 
         // Only, try to shrink stale slots.
-        accounts.shrink_all_stale_slots();
+        accounts.shrink_candidate_slots();
         assert_eq!(
             pubkey_count,
             accounts.all_account_count_in_append_vec(shrink_slot)
@@ -5087,16 +4987,6 @@ pub mod tests {
             let accounts = Arc::new(AccountsDB::new_single());
             let accounts_for_shrink = accounts.clone();
 
-            // spawn the slot shrinking background thread
-            let exit = Arc::new(AtomicBool::default());
-            let exit_for_shrink = exit.clone();
-            let shrink_thread = std::thread::spawn(move || loop {
-                if exit_for_shrink.load(Ordering::Relaxed) {
-                    break;
-                }
-                accounts_for_shrink.process_stale_slot();
-            });
-
             let mut alive_accounts = vec![];
             let owner = Pubkey::default();
 
@@ -5122,12 +5012,9 @@ pub mod tests {
             // let's dance.
             for _ in 0..10 {
                 accounts.clean_accounts(None);
+                accounts_for_shrink.shrink_candidate_slots();
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-
-            // cleanup
-            exit.store(true, Ordering::Relaxed);
-            shrink_thread.join().unwrap();
         }
     }
 
