@@ -8,16 +8,18 @@ use crate::{
     snapshot_package::AccountsPackageSender,
     snapshot_utils,
 };
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, SendError, Sender};
 use log::*;
 use rand::{thread_rng, Rng};
 use solana_measure::measure::Measure;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, RwLock,
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
+    thread::{self, sleep, Builder, JoinHandle},
+    time::Duration,
 };
-use std::thread::{self, sleep, Builder, JoinHandle};
-use std::time::Duration;
 
 const INTERVAL_MS: u64 = 100;
 const SHRUNKEN_ACCOUNT_PER_SEC: usize = 250;
@@ -27,6 +29,8 @@ const CLEAN_INTERVAL_BLOCKS: u64 = 100;
 
 pub type SnapshotRequestSender = Sender<SnapshotRequest>;
 pub type SnapshotRequestReceiver = Receiver<SnapshotRequest>;
+pub type PrunedBanksSender = Sender<Vec<Arc<Bank>>>;
+pub type PrunedBanksReceiver = Receiver<Vec<Arc<Bank>>>;
 
 pub struct SnapshotRequest {
     pub snapshot_root_bank: Arc<Bank>,
@@ -109,6 +113,72 @@ impl SnapshotRequestHandler {
     }
 }
 
+#[derive(Default)]
+pub struct ABSRequestSender {
+    snapshot_request_sender: Option<SnapshotRequestSender>,
+    pruned_banks_sender: Option<PrunedBanksSender>,
+}
+
+impl ABSRequestSender {
+    pub fn new(
+        snapshot_request_sender: Option<SnapshotRequestSender>,
+        pruned_banks_sender: Option<PrunedBanksSender>,
+    ) -> Self {
+        ABSRequestSender {
+            snapshot_request_sender,
+            pruned_banks_sender,
+        }
+    }
+
+    pub fn is_snapshot_creation_enabled(&self) -> bool {
+        self.snapshot_request_sender.is_some()
+    }
+
+    pub fn send_snapshot_request(
+        &self,
+        snapshot_request: SnapshotRequest,
+    ) -> Result<(), SendError<SnapshotRequest>> {
+        if let Some(ref snapshot_request_sender) = self.snapshot_request_sender {
+            snapshot_request_sender.send(snapshot_request)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn send_pruned_banks(
+        &self,
+        pruned_banks: Vec<Arc<Bank>>,
+    ) -> Result<(), SendError<Vec<Arc<Bank>>>> {
+        if let Some(ref pruned_banks_sender) = self.pruned_banks_sender {
+            pruned_banks_sender.send(pruned_banks)
+        } else {
+            // If there is no sender, the banks are dropped immediately, which
+            // is not recommended for anything other than tests.
+            Ok(())
+        }
+    }
+}
+
+pub struct ABSRequestHandler {
+    pub snapshot_request_handler: Option<SnapshotRequestHandler>,
+    pub pruned_banks_receiver: PrunedBanksReceiver,
+}
+
+impl ABSRequestHandler {
+    // Returns the latest requested snapshot block height, if one exists
+    pub fn handle_snapshot_requests(&self) -> Option<u64> {
+        self.snapshot_request_handler
+            .as_ref()
+            .and_then(|snapshot_request_handler| {
+                snapshot_request_handler.handle_snapshot_requests()
+            })
+    }
+
+    pub fn handle_pruned_banks<'a>(&'a self) -> impl Iterator<Item = Arc<Bank>> + 'a {
+        self.pruned_banks_receiver.try_iter().flatten()
+    }
+}
+
 pub struct AccountsBackgroundService {
     t_background: JoinHandle<()>,
 }
@@ -117,12 +187,16 @@ impl AccountsBackgroundService {
     pub fn new(
         bank_forks: Arc<RwLock<BankForks>>,
         exit: &Arc<AtomicBool>,
-        snapshot_request_handler: Option<SnapshotRequestHandler>,
+        request_handler: ABSRequestHandler,
     ) -> Self {
         info!("AccountsBackgroundService active");
         let exit = exit.clone();
         let mut consumed_budget = 0;
         let mut last_cleaned_block_height = 0;
+        let mut pending_drop_banks = vec![];
+        let mut dropped_count = 0;
+        let mut scan_time = 0;
+        let mut drop_time = 0;
         let t_background = Builder::new()
             .name("solana-accounts-background".to_string())
             .spawn(move || loop {
@@ -148,14 +222,9 @@ impl AccountsBackgroundService {
                 //
                 // However, this is impossible because BankForks.set_root() will always flush the snapshot
                 // request for `N` to the snapshot request channel before setting a root `R > N`, and
-                // snapshot_request_handler.handle_snapshot_requests() will always look for the latest
+                // snapshot_request_handler.handle_requests() will always look for the latest
                 // available snapshot in the channel.
-                let snapshot_block_height =
-                    snapshot_request_handler
-                        .as_ref()
-                        .and_then(|snapshot_request_handler| {
-                            snapshot_request_handler.handle_snapshot_requests()
-                        });
+                let snapshot_block_height = request_handler.handle_snapshot_requests();
 
                 if let Some(snapshot_block_height) = snapshot_block_height {
                     // Safe, see proof above
@@ -173,6 +242,37 @@ impl AccountsBackgroundService {
                         bank.clean_accounts(true);
                         last_cleaned_block_height = bank.block_height();
                     }
+                }
+
+                pending_drop_banks.extend(request_handler.handle_pruned_banks());
+                let mut scan_start = Measure::start("scan_time");
+
+                // Should use `drain_filter()`, but not available in stable Rust yet.
+                let (to_drop, to_keep) = pending_drop_banks.into_iter().partition(|bank| {
+                    Arc::strong_count(bank) == 1
+                });
+                scan_start.stop();
+                scan_time += scan_start.as_us();
+
+                pending_drop_banks = to_keep;
+                dropped_count += to_drop.len();
+
+                // Drop the banks that are dead
+                let mut drop_start = Measure::start("drop_time");
+                drop(to_drop);
+                drop_start.stop();
+                drop_time += drop_start.as_us();
+
+                if dropped_count >= 100 {
+                    datapoint_info!(
+                        "drop-banks-timing",
+                        ("scan_time", scan_time, i64),
+                        ("drop_time", drop_time, i64),
+                        ("dropped_count", dropped_count, i64),
+                    );
+                    scan_time = 0;
+                    drop_time = 0;
+                    dropped_count = 0;
                 }
 
                 sleep(Duration::from_millis(INTERVAL_MS));

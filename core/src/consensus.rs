@@ -1279,6 +1279,7 @@ pub mod test {
     };
     use solana_ledger::{blockstore::make_slot_entries, get_tmp_ledger_path};
     use solana_runtime::{
+        accounts_background_service::ABSRequestSender,
         bank::Bank,
         bank_forks::BankForks,
         genesis_utils::{
@@ -1451,7 +1452,7 @@ pub mod test {
                 new_root,
                 &self.bank_forks,
                 &mut self.progress,
-                &None,
+                &ABSRequestSender::default(),
                 &mut PubkeyReferences::default(),
                 None,
                 &mut self.heaviest_subtree_fork_choice,
