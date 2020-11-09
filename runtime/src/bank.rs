@@ -1077,6 +1077,11 @@ impl Bank {
 
     fn update_clock(&self, parent_epoch: Option<Epoch>) {
         let mut unix_timestamp = self.unix_timestamp_from_genesis();
+        info!(
+            "unix timestamp for slot: {} {}",
+            self.slot(),
+            unix_timestamp
+        );
         if self
             .feature_set
             .is_active(&feature_set::timestamp_correction::id())
@@ -1147,6 +1152,7 @@ impl Bank {
             leader_schedule_epoch: self.epoch_schedule.get_leader_schedule_epoch(self.slot),
             unix_timestamp,
         };
+        info!("Updated clock for slot: {} {:?}", self.slot(), clock);
         self.update_sysvar_account(&sysvar::clock::id(), |account| {
             create_account(&clock, self.inherit_sysvar_account_balance(account))
         });
@@ -1482,7 +1488,18 @@ impl Bank {
         estimate_type: EstimateType,
         epoch_start_timestamp: Option<(Slot, UnixTimestamp)>,
     ) -> Option<UnixTimestamp> {
+        info!(
+            "get_timestamp_estimate() {} {:?} {:?}",
+            self.slot(),
+            estimate_type,
+            epoch_start_timestamp
+        );
         let mut get_timestamp_estimate_time = Measure::start("get_timestamp_estimate");
+        info!(
+            "get_timestamp_estimate() vote account len: {}, self ancestors len: {}",
+            self.vote_accounts().len(),
+            self.ancestors.len()
+        );
         let recent_timestamps: HashMap<Pubkey, (Slot, UnixTimestamp)> = self
             .vote_accounts()
             .into_iter()

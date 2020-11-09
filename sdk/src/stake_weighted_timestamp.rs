@@ -1,3 +1,4 @@
+use log::*;
 /// A helper for calculating a stake-weighted timestamp estimate from a set of timestamps and epoch
 /// stake.
 use solana_sdk::{
@@ -14,6 +15,7 @@ pub const TIMESTAMP_SLOT_RANGE: usize = 32;
 pub const DEPRECATED_TIMESTAMP_SLOT_RANGE: usize = 16; // Deprecated.  Remove in the Solana v1.6.0 timeframe
 const MAX_ALLOWABLE_DRIFT_PERCENTAGE: u32 = 25;
 
+#[derive(Debug)]
 pub enum EstimateType {
     Bounded,
     Unbounded, // Deprecated.  Remove in the Solana v1.6.0 timeframe
@@ -27,6 +29,15 @@ pub fn calculate_stake_weighted_timestamp(
     estimate_type: EstimateType,
     epoch_start_timestamp: Option<(Slot, UnixTimestamp)>,
 ) -> Option<UnixTimestamp> {
+    info!(
+        "calculate_stake_weighted_timestamp() {} {} {} {:?} {:?} {:?}",
+        unique_timestamps.len(),
+        stakes.len(),
+        slot,
+        slot_duration,
+        estimate_type,
+        epoch_start_timestamp
+    );
     match estimate_type {
         EstimateType::Bounded => calculate_bounded_stake_weighted_timestamp(
             unique_timestamps,
