@@ -197,6 +197,13 @@ impl Tower {
             Tower::find_heaviest_bank(&bank_forks, &my_pubkey).unwrap_or_else(|| root_bank.clone())
         };
 
+        info!(
+            "{} new_from_bankforks, root: {}, heaviest_bank: {}",
+            my_pubkey,
+            root,
+            heaviest_bank.slot()
+        );
+
         Self::new(
             &my_pubkey,
             &vote_account,
@@ -646,9 +653,10 @@ impl Tower {
                     // By the time we reach here, any ancestors of the `last_vote`,
                     // should have been filtered out, as they all have a descendant,
                     // namely the `last_vote` itself.
-                    if !self.is_stray_last_vote() {
+                    //if !self.is_stray_last_vote() {
+                        info!("last_vote_ancestors: {:?}, candidate slot: {}", last_vote_ancestors, candidate_slot);
                         assert!(!last_vote_ancestors.contains(candidate_slot));
-                    }
+                    //}
 
                     // Evaluate which vote accounts in the bank are locked out
                     // in the interval candidate_slot..last_vote, which means
@@ -1048,6 +1056,7 @@ impl Tower {
                 self.last_vote.last_voted_slot().unwrap(),
                 *self.voted_slots().last().unwrap()
             );
+            info!("stray restored slot: {:?}", self.last_vote.last_voted_slot());
             self.stray_restored_slot = Some(self.last_vote.last_voted_slot().unwrap());
         }
 
@@ -1066,6 +1075,10 @@ impl Tower {
             self.lockouts = vote_state;
             self.initialize_root(root);
             self.initialize_lockouts(|v| v.slot > root);
+            info!(
+                "remaining lockouts: {}, {:?}",
+                vote_account_pubkey, self.lockouts.votes
+            );
             trace!(
                 "Lockouts in tower for {} is initialized using bank {}",
                 self.node_pubkey,
