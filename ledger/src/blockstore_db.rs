@@ -392,7 +392,7 @@ impl Rocks {
     }
 
     fn write(&self, batch: RWriteBatch) -> Result<()> {
-        self.0.write(batch)?;
+        self.0.write_without_wal(batch)?;
         Ok(())
     }
 
