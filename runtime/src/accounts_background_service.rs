@@ -248,9 +248,9 @@ impl AccountsBackgroundService {
                 let mut scan_start = Measure::start("scan_time");
 
                 // Should use `drain_filter()`, but not available in stable Rust yet.
-                let (to_drop, to_keep) = pending_drop_banks.into_iter().partition(|bank| {
-                    Arc::strong_count(bank) == 1
-                });
+                let (to_drop, to_keep) = pending_drop_banks
+                    .into_iter()
+                    .partition(|bank| Arc::strong_count(bank) == 1);
                 scan_start.stop();
                 scan_time += scan_start.as_us();
 

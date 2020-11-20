@@ -20,7 +20,10 @@ use rayon::{
     iter::{IntoParallelRefIterator, ParallelIterator},
     ThreadPool,
 };
-use rocksdb::DBRawIterator;
+use rocksdb::{
+    perf::{set_perf_stats, PerfContext, PerfStatsLevel},
+    DBRawIterator,
+};
 use solana_measure::measure::Measure;
 use solana_metrics::{datapoint_debug, datapoint_error};
 use solana_rayon_threadlimit::get_thread_count;
@@ -917,9 +920,16 @@ impl Blockstore {
         let commit_working_sets_elapsed = start.as_us();
 
         let mut start = Measure::start("Write Batch");
+        let mut context = PerfContext::default();
+        context.reset();
+        set_perf_stats(PerfStatsLevel::EnableTimeExceptForMutex);
         self.db.write(write_batch)?;
+        set_perf_stats(PerfStatsLevel::Disable);
         start.stop();
         let write_batch_elapsed = start.as_us();
+        if start.as_ms() >= 500 {
+            info!("Write batch report: {}", context.report(false));
+        }
 
         send_signals(
             &self.new_shreds_signals,
