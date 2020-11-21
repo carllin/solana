@@ -1026,6 +1026,9 @@ fn get_cf_options(access_type: &AccessType) -> Options {
     options.set_level_zero_file_num_compaction_trigger(file_num_compaction_trigger as i32);
     options.set_max_bytes_for_level_base(total_size_base);
     options.set_target_file_size_base(file_size_base);
+    options.set_bytes_per_sync(2 * 1024 * 1024);
+    options.set_wal_bytes_per_sync(2 * 1024 * 1024);
+    options.set_enable_pipelined_write(true);
     if matches!(access_type, AccessType::PrimaryOnlyForMaintenance) {
         options.set_disable_auto_compactions(true);
     }
@@ -1039,9 +1042,11 @@ fn get_db_options(access_type: &AccessType) -> Options {
     options.create_missing_column_families(true);
     // A good value for this is the number of cores on the machine
     options.increase_parallelism(num_cpus::get() as i32);
-
+    options.set_bytes_per_sync(2 * 1024 * 1024);
+    options.set_wal_bytes_per_sync(2 * 1024 * 1024);
     // Set max total wal size to 4G.
-    options.set_max_total_wal_size(4 * 1024 * 1024 * 1024);
+    //options.set_max_total_wal_size(4 * 1024 * 1024 * 1024);
+    options.set_enable_pipelined_write(true);
     if matches!(access_type, AccessType::PrimaryOnlyForMaintenance) {
         options.set_disable_auto_compactions(true);
     }
