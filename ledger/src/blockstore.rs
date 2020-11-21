@@ -927,7 +927,7 @@ impl Blockstore {
         set_perf_stats(PerfStatsLevel::Disable);
         start.stop();
         let write_batch_elapsed = start.as_us();
-        if start.as_ms() >= 500 {
+        if start.as_ms() >= 200 {
             info!("Write batch report: {}", context.report(false));
         }
 
