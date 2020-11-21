@@ -6,7 +6,7 @@ use prost::Message;
 pub use rocksdb::Direction as IteratorDirection;
 use rocksdb::{
     self, ColumnFamily, ColumnFamilyDescriptor, DBIterator, DBRawIterator, DBRecoveryMode,
-    IteratorMode as RocksIteratorMode, Options, WriteBatch as RWriteBatch, DB,
+    IteratorMode as RocksIteratorMode, Options, WriteBatch as RWriteBatch, WriteOptions, DB,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -356,7 +356,9 @@ impl Rocks {
     }
 
     fn put_cf(&self, cf: &ColumnFamily, key: &[u8], value: &[u8]) -> Result<()> {
-        self.0.put_cf(cf, key, value)?;
+        let mut write_options = WriteOptions::default();
+        write_options.disable_wal(true);
+        self.0.put_cf_opt(cf, key, value, &write_options)?;
         Ok(())
     }
 
@@ -912,7 +914,8 @@ where
     }
 
     pub fn put_bytes(&self, key: C::Index, value: &[u8]) -> Result<()> {
-        self.backend.put_cf(self.handle(), &C::key(key), value)
+        self.backend
+            .put_cf(self.handle(), &C::key(key), value)
     }
 }
 
@@ -933,8 +936,11 @@ where
     pub fn put(&self, key: C::Index, value: &C::Type) -> Result<()> {
         let serialized_value = serialize(value)?;
 
-        self.backend
-            .put_cf(self.handle(), &C::key(key), &serialized_value)
+        self.backend.put_cf(
+            self.handle(),
+            &C::key(key),
+            &serialized_value,
+        )
     }
 }
 
@@ -968,7 +974,8 @@ where
     pub fn put_protobuf(&self, key: C::Index, value: &C::Type) -> Result<()> {
         let mut buf = Vec::with_capacity(value.encoded_len());
         value.encode(&mut buf)?;
-        self.backend.put_cf(self.handle(), &C::key(key), &buf)
+        self.backend
+            .put_cf(self.handle(), &C::key(key), &buf)
     }
 }
 
@@ -1051,5 +1058,6 @@ fn get_db_options(access_type: &AccessType) -> Options {
         options.set_disable_auto_compactions(true);
     }
 
+    options.set_atomic_flush(true);
     options
 }
