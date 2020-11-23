@@ -3150,6 +3150,7 @@ version = "0.15.0"
 dependencies = [
  "libc",
  "librocksdb-sys",
+ "log 0.4.8",
 ]
 
 [[package]]

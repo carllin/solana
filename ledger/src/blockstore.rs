@@ -21,7 +21,7 @@ use rayon::{
     ThreadPool,
 };
 use rocksdb::{
-    perf::{set_perf_stats, PerfContext, PerfStatsLevel},
+    perf::{set_perf_stats, IoStatsContext, PerfContext, PerfStatsLevel},
     DBRawIterator,
 };
 use solana_measure::measure::Measure;
@@ -919,16 +919,20 @@ impl Blockstore {
         start.stop();
         let commit_working_sets_elapsed = start.as_us();
 
-        let mut start = Measure::start("Write Batch");
         let mut context = PerfContext::default();
+        let mut iocontext = IoStatsContext::default();
         context.reset();
+        iocontext.reset();
         set_perf_stats(PerfStatsLevel::EnableTimeExceptForMutex);
+        let mut start = Measure::start("Write Batch");
         self.db.write(write_batch)?;
-        set_perf_stats(PerfStatsLevel::Disable);
         start.stop();
+        set_perf_stats(PerfStatsLevel::Disable);
         let write_batch_elapsed = start.as_us();
-        if start.as_ms() >= 200 {
-            info!("Write batch report: {}", context.report(false));
+        if start.as_ms() >= 50 {
+            info!("Total write elapsed: {}", start.as_ms());
+            info!("Write perf batch report: {}", context.report(false));
+            info!("Write iostats batch report: {}", iocontext.report(false));
         }
 
         send_signals(
@@ -7334,5 +7338,15 @@ pub mod tests {
         assert!(!stored_shred.data_complete());
         assert!(stored_shred.last_in_slot());
         assert_eq!(entries, ledger.get_any_valid_slot_entries(0, 0));
+    }
+
+    #[test]
+    fn test_io_stats_context() {
+        let blockstore_path = get_tmp_ledger_path!();
+        let blockstore = Blockstore::open(&blockstore_path).unwrap();
+        let mut context = PerfContext::default();
+        context.reset();
+        let mut iocontext = IoStatsContext::default();
+        iocontext.reset();
     }
 }

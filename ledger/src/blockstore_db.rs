@@ -1029,6 +1029,7 @@ fn get_cf_options(access_type: &AccessType) -> Options {
     options.set_bytes_per_sync(2 * 1024 * 1024);
     options.set_wal_bytes_per_sync(2 * 1024 * 1024);
     options.set_enable_pipelined_write(true);
+    options.set_allow_concurrent_memtable_write(true);
     if matches!(access_type, AccessType::PrimaryOnlyForMaintenance) {
         options.set_disable_auto_compactions(true);
     }
@@ -1042,11 +1043,12 @@ fn get_db_options(access_type: &AccessType) -> Options {
     options.create_missing_column_families(true);
     // A good value for this is the number of cores on the machine
     options.increase_parallelism(num_cpus::get() as i32);
-    options.set_bytes_per_sync(2 * 1024 * 1024);
-    options.set_wal_bytes_per_sync(2 * 1024 * 1024);
+    /*options.set_bytes_per_sync(2 * 1024 * 1024);
+    options.set_wal_bytes_per_sync(2 * 1024 * 1024);*/
     // Set max total wal size to 4G.
     //options.set_max_total_wal_size(4 * 1024 * 1024 * 1024);
     options.set_enable_pipelined_write(true);
+    options.set_allow_concurrent_memtable_write(true);
     if matches!(access_type, AccessType::PrimaryOnlyForMaintenance) {
         options.set_disable_auto_compactions(true);
     }
