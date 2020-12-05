@@ -4,7 +4,7 @@ use crate::{
     progress_map::{ForkStats, ProgressMap},
 };
 use solana_runtime::{bank::Bank, bank_forks::BankForks};
-use solana_sdk::timing;
+use solana_sdk::{clock::Slot, timing};
 use std::time::Instant;
 use std::{
     collections::{HashMap, HashSet},
@@ -148,4 +148,7 @@ impl ForkChoice for BankWeightForkChoice {
 
         (rv.0.clone(), heaviest_bank_on_same_fork)
     }
+
+    fn mark_slot_invalid_candidate(&mut self, _invalid_slot: Slot) {}
+    fn mark_slots_valid_candidate(&mut self, _valid_slots: &[Slot]) {}
 }

@@ -1278,7 +1278,7 @@ pub mod test {
         cluster_slots::ClusterSlots,
         fork_choice::SelectVoteAndResetForkResult,
         heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
-        progress_map::ForkProgress,
+        progress_map::{DuplicateStats, ForkProgress},
         replay_stage::{HeaviestForkFailures, ReplayStage},
     };
     use solana_ledger::{blockstore::make_slot_entries, get_tmp_ledger_path};
@@ -1347,9 +1347,9 @@ pub mod test {
 
             while let Some(visit) = walk.get() {
                 let slot = visit.node().data;
-                self.progress
-                    .entry(slot)
-                    .or_insert_with(|| ForkProgress::new(Hash::default(), None, None, 0, 0));
+                self.progress.entry(slot).or_insert_with(|| {
+                    ForkProgress::new(Hash::default(), None, DuplicateStats::default(), None, 0, 0)
+                });
                 if self.bank_forks.read().unwrap().get(slot).is_some() {
                     walk.forward();
                     continue;
@@ -1431,7 +1431,7 @@ pub mod test {
                 ..
             } = ReplayStage::select_vote_and_reset_forks(
                 &vote_bank,
-                &None,
+                None,
                 &ancestors,
                 &descendants,
                 &self.progress,
@@ -1494,7 +1494,9 @@ pub mod test {
         ) {
             self.progress
                 .entry(slot)
-                .or_insert_with(|| ForkProgress::new(Hash::default(), None, None, 0, 0))
+                .or_insert_with(|| {
+                    ForkProgress::new(Hash::default(), None, DuplicateStats::default(), None, 0, 0)
+                })
                 .fork_stats
                 .lockout_intervals
                 .entry(lockout_interval.1)
@@ -1601,7 +1603,14 @@ pub mod test {
         let mut progress = ProgressMap::default();
         progress.insert(
             0,
-            ForkProgress::new(bank0.last_blockhash(), None, None, 0, 0),
+            ForkProgress::new(
+                bank0.last_blockhash(),
+                None,
+                DuplicateStats::default(),
+                None,
+                0,
+                0,
+            ),
         );
         let bank_forks = BankForks::new(bank0);
         let heaviest_subtree_fork_choice =

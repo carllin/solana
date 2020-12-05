@@ -120,6 +120,10 @@ impl Blockstore {
                 .is_ok()
             & self
                 .db
+                .delete_range_cf::<cf::SlotConfirmationStatus>(&mut write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
+                .db
                 .delete_range_cf::<cf::DuplicateSlots>(&mut write_batch, from_slot, to_slot)
                 .is_ok()
             & self
@@ -367,6 +371,13 @@ pub mod tests {
             & blockstore
                 .db
                 .iter::<cf::DeadSlots>(IteratorMode::Start)
+                .unwrap()
+                .next()
+                .map(|(slot, _)| slot >= min_slot)
+                .unwrap_or(true)
+            & blockstore
+                .db
+                .iter::<cf::SlotConfirmationStatus>(IteratorMode::Start)
                 .unwrap()
                 .next()
                 .map(|(slot, _)| slot >= min_slot)
