@@ -276,7 +276,7 @@ pub mod test {
             .map(|slot| {
                 let mut shred = Shred::new_from_serialized_shred(
                     blockstore
-                        .get_data_shred(*slot, last_shred - 1)
+                        .get_data_shred(*slot, last_shred - 1, Hash::default())
                         .unwrap()
                         .unwrap(),
                 )

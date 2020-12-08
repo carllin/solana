@@ -4271,6 +4271,7 @@ version = "1.5.0"
 dependencies = [
  "assert_matches",
  "bincode",
+ "blake3",
  "byteorder",
  "chrono",
  "crossbeam-channel",

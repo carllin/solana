@@ -355,14 +355,14 @@ pub mod tests {
                 .iter::<cf::ShredData>(IteratorMode::Start)
                 .unwrap()
                 .next()
-                .map(|((slot, _), _)| slot >= min_slot)
+                .map(|((slot, _, _), _)| slot >= min_slot)
                 .unwrap_or(true)
             & blockstore
                 .db
                 .iter::<cf::ShredCode>(IteratorMode::Start)
                 .unwrap()
                 .next()
-                .map(|((slot, _), _)| slot >= min_slot)
+                .map(|((slot, _, _), _)| slot >= min_slot)
                 .unwrap_or(true)
             & blockstore
                 .db
@@ -510,7 +510,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -545,7 +545,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -579,7 +579,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -591,7 +591,7 @@ pub mod tests {
             let mut address_transactions_iterator = blockstore
                 .db
                 .iter::<cf::AddressSignatures>(IteratorMode::From(
-                    cf::AddressSignatures::as_index(0),
+                    cf::AddressSignatures::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -613,7 +613,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -625,7 +625,7 @@ pub mod tests {
             let mut address_transactions_iterator = blockstore
                 .db
                 .iter::<cf::AddressSignatures>(IteratorMode::From(
-                    cf::AddressSignatures::as_index(0),
+                    cf::AddressSignatures::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -648,7 +648,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -659,7 +659,7 @@ pub mod tests {
             let mut address_transactions_iterator = blockstore
                 .db
                 .iter::<cf::AddressSignatures>(IteratorMode::From(
-                    cf::AddressSignatures::as_index(0),
+                    cf::AddressSignatures::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -809,7 +809,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -856,7 +856,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -907,7 +907,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -956,7 +956,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -1004,7 +1004,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -1054,7 +1054,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();
@@ -1101,7 +1101,7 @@ pub mod tests {
             let mut status_entry_iterator = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap();

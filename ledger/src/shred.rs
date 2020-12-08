@@ -4,6 +4,7 @@ use crate::{
     erasure::Session,
 };
 use bincode::config::Options;
+use blake3::traits::digest::Digest;
 use core::cell::RefCell;
 use rayon::{
     iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator},
@@ -16,12 +17,12 @@ use solana_perf::packet::Packet;
 use solana_rayon_threadlimit::get_thread_count;
 use solana_sdk::{
     clock::Slot,
-    hash::Hash,
+    hash::{Hash, HASH_BYTES},
     packet::PACKET_DATA_SIZE,
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
 };
-use std::{mem::size_of, sync::Arc};
+use std::{convert::TryFrom, mem::size_of, sync::Arc};
 
 use thiserror::Error;
 
@@ -408,6 +409,12 @@ impl Shred {
         let sig = self.common_header.signature.as_ref();
         seed[0..seed_len].copy_from_slice(&sig[(sig.len() - seed_len)..]);
         seed
+    }
+
+    pub fn hash(&self) -> Hash {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.payload[..]);
+        Hash(<[u8; HASH_BYTES]>::try_from(hasher.finalize().as_slice()).unwrap())
     }
 
     pub fn is_data(&self) -> bool {

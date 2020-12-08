@@ -12,7 +12,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use solana_runtime::hardened_unpack::UnpackError;
 use solana_sdk::{
-    clock::{Slot, UnixTimestamp},
+    clock::{Slot, UnixTimestamp, SLOT_BYTES},
+    hash::{Hash, HASH_BYTES},
     pubkey::Pubkey,
     signature::Signature,
 };
@@ -411,7 +412,7 @@ pub trait Column {
     fn key(index: Self::Index) -> Vec<u8>;
     fn index(key: &[u8]) -> Self::Index;
     fn primary_index(index: Self::Index) -> Slot;
-    fn as_index(slot: Slot) -> Self::Index;
+    fn default_index_from_slot(slot: Slot) -> Self::Index;
 }
 
 pub trait ColumnName {
@@ -457,7 +458,7 @@ impl<T: SlotColumn> Column for T {
         index
     }
 
-    fn as_index(slot: Slot) -> u64 {
+    fn default_index_from_slot(slot: Slot) -> u64 {
         slot
     }
 }
@@ -475,7 +476,7 @@ impl Column for columns::TransactionStatus {
 
     fn index(key: &[u8]) -> (u64, Signature, Slot) {
         if key.len() != 80 {
-            Self::as_index(0)
+            Self::default_index_from_slot(0)
         } else {
             let index = BigEndian::read_u64(&key[0..8]);
             let signature = Signature::new(&key[8..72]);
@@ -488,7 +489,7 @@ impl Column for columns::TransactionStatus {
         index.0
     }
 
-    fn as_index(index: u64) -> Self::Index {
+    fn default_index_from_slot(index: u64) -> Self::Index {
         (index, Signature::default(), 0)
     }
 }
@@ -521,7 +522,7 @@ impl Column for columns::AddressSignatures {
         index.0
     }
 
-    fn as_index(index: u64) -> Self::Index {
+    fn default_index_from_slot(index: u64) -> Self::Index {
         (index, Pubkey::default(), 0, Signature::default())
     }
 }
@@ -547,7 +548,7 @@ impl Column for columns::TransactionStatusIndex {
         index
     }
 
-    fn as_index(slot: u64) -> u64 {
+    fn default_index_from_slot(slot: u64) -> u64 {
         slot
     }
 }
@@ -581,13 +582,13 @@ impl TypedColumn for columns::PerfSamples {
 }
 
 impl Column for columns::ShredCode {
-    type Index = (u64, u64);
+    type Index = <columns::ShredData as Column>::Index;
 
-    fn key(index: (u64, u64)) -> Vec<u8> {
+    fn key(index: Self::Index) -> Vec<u8> {
         columns::ShredData::key(index)
     }
 
-    fn index(key: &[u8]) -> (u64, u64) {
+    fn index(key: &[u8]) -> Self::Index {
         columns::ShredData::index(key)
     }
 
@@ -595,8 +596,8 @@ impl Column for columns::ShredCode {
         index.0
     }
 
-    fn as_index(slot: Slot) -> Self::Index {
-        (slot, 0)
+    fn default_index_from_slot(slot: Slot) -> Self::Index {
+        (slot, 0, Hash::default())
     }
 }
 
@@ -605,27 +606,32 @@ impl ColumnName for columns::ShredCode {
 }
 
 impl Column for columns::ShredData {
-    type Index = (u64, u64);
+    type Index = (Slot, u64, Hash);
 
-    fn key((slot, index): (u64, u64)) -> Vec<u8> {
-        let mut key = vec![0; 16];
-        BigEndian::write_u64(&mut key[..8], slot);
-        BigEndian::write_u64(&mut key[8..16], index);
+    fn key((slot, index, hash): Self::Index) -> Vec<u8> {
+        let mut key = vec![0; SLOT_BYTES + 8 + HASH_BYTES];
+        BigEndian::write_u64(&mut key[..SLOT_BYTES], slot);
+        BigEndian::write_u64(&mut key[SLOT_BYTES..SLOT_BYTES + 8], index);
+        key[SLOT_BYTES + 8..].copy_from_slice(hash.as_ref());
         key
     }
 
-    fn index(key: &[u8]) -> (u64, u64) {
-        let slot = BigEndian::read_u64(&key[..8]);
-        let index = BigEndian::read_u64(&key[8..16]);
-        (slot, index)
+    fn index(key: &[u8]) -> Self::Index {
+        if key.len() != SLOT_BYTES + 8 + HASH_BYTES {
+            Self::default_index_from_slot(0);
+        }
+        let slot = BigEndian::read_u64(&key[..SLOT_BYTES]);
+        let index = BigEndian::read_u64(&key[SLOT_BYTES..SLOT_BYTES + 8]);
+        let hash = Hash::new(&key[SLOT_BYTES + 8..]);
+        (slot, index, hash)
     }
 
     fn primary_index(index: Self::Index) -> Slot {
         index.0
     }
 
-    fn as_index(slot: Slot) -> Self::Index {
-        (slot, 0)
+    fn default_index_from_slot(slot: Slot) -> Self::Index {
+        (slot, 0, Hash::default())
     }
 }
 
@@ -702,7 +708,7 @@ impl Column for columns::ErasureMeta {
         index.0
     }
 
-    fn as_index(slot: Slot) -> Self::Index {
+    fn default_index_from_slot(slot: Slot) -> Self::Index {
         (slot, 0)
     }
 }
@@ -827,8 +833,8 @@ impl Database {
         C: Column + ColumnName,
     {
         let cf = self.cf_handle::<C>();
-        let from_index = C::as_index(from);
-        let to_index = C::as_index(to);
+        let from_index = C::default_index_from_slot(from);
+        let to_index = C::default_index_from_slot(to);
         batch.delete_range_cf::<C>(cf, from_index, to_index)
     }
 
@@ -865,7 +871,9 @@ where
     {
         let mut end = true;
         let iter_config = match from {
-            Some(s) => IteratorMode::From(C::as_index(s), IteratorDirection::Forward),
+            Some(s) => {
+                IteratorMode::From(C::default_index_from_slot(s), IteratorDirection::Forward)
+            }
             None => IteratorMode::Start,
         };
         let iter = self.iter(iter_config)?;
@@ -893,8 +901,8 @@ where
         C::Index: PartialOrd + Copy,
     {
         let cf = self.handle();
-        let from = Some(C::key(C::as_index(from)));
-        let to = Some(C::key(C::as_index(to)));
+        let from = Some(C::key(C::default_index_from_slot(from)));
+        let to = Some(C::key(C::default_index_from_slot(to)));
         self.backend.0.compact_range_cf(cf, from, to);
         Ok(true)
     }

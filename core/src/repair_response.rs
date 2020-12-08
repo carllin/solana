@@ -3,7 +3,7 @@ use solana_ledger::{
     shred::{Nonce, SIZE_OF_NONCE},
 };
 use solana_perf::packet::limited_deserialize;
-use solana_sdk::{clock::Slot, packet::Packet};
+use solana_sdk::{clock::Slot, hash::Hash, packet::Packet};
 use std::{io, net::SocketAddr};
 
 pub fn repair_response_packet(
@@ -14,7 +14,7 @@ pub fn repair_response_packet(
     nonce: Nonce,
 ) -> Option<Packet> {
     let shred = blockstore
-        .get_data_shred(slot, shred_index)
+        .get_data_shred(slot, shred_index, Hash::default())
         .expect("Blockstore could not get data shred");
     shred
         .map(|shred| repair_response_packet_from_shred(shred, dest, nonce))

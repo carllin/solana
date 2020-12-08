@@ -51,6 +51,7 @@ pub const MAX_TRANSACTION_FORWARDING_DELAY: usize = 6;
 
 /// Slot is a unit of time given to a leader for encoding,
 ///  is some some number of Ticks long.
+pub const SLOT_BYTES: usize = 8;
 pub type Slot = u64;
 
 /// Epoch is a unit of time a given leader schedule is honored,

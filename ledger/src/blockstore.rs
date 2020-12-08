@@ -498,24 +498,24 @@ impl Blockstore {
         &'a self,
         slot: Slot,
         index: u64,
-    ) -> Result<impl Iterator<Item = ((u64, u64), Box<[u8]>)> + 'a> {
+    ) -> Result<impl Iterator<Item = ((Slot, u64, Hash), Box<[u8]>)> + 'a> {
         let slot_iterator = self.db.iter::<cf::ShredData>(IteratorMode::From(
-            (slot, index),
+            (slot, index, Hash::default()),
             IteratorDirection::Forward,
         ))?;
-        Ok(slot_iterator.take_while(move |((shred_slot, _), _)| *shred_slot == slot))
+        Ok(slot_iterator.take_while(move |((shred_slot, _, _), _)| *shred_slot == slot))
     }
 
     pub fn slot_coding_iterator<'a>(
         &'a self,
         slot: Slot,
         index: u64,
-    ) -> Result<impl Iterator<Item = ((u64, u64), Box<[u8]>)> + 'a> {
+    ) -> Result<impl Iterator<Item = ((Slot, u64, Hash), Box<[u8]>)> + 'a> {
         let slot_iterator = self.db.iter::<cf::ShredCode>(IteratorMode::From(
-            (slot, index),
+            (slot, index, Hash::default()),
             IteratorDirection::Forward,
         ))?;
-        Ok(slot_iterator.take_while(move |((shred_slot, _), _)| *shred_slot == slot))
+        Ok(slot_iterator.take_while(move |((shred_slot, _, _), _)| *shred_slot == slot))
     }
 
     pub fn rooted_slot_iterator<'a>(
@@ -541,7 +541,7 @@ impl Blockstore {
             if index.data().is_present(i) {
                 if let Some(shred) = prev_inserted_datas.remove(&(slot, i)).or_else(|| {
                     let some_data = data_cf
-                        .get_bytes((slot, i))
+                        .get_bytes((slot, i, Hash::default()))
                         .expect("Database failure, could not fetch data shred");
                     if let Some(data) = some_data {
                         Shred::new_from_serialized_shred(data).ok()
@@ -580,7 +580,7 @@ impl Blockstore {
                     .or_else(|| {
                         if index.coding().is_present(i) {
                             let some_code = code_cf
-                                .get_bytes((slot, i))
+                                .get_bytes((slot, i, Hash::default()))
                                 .expect("Database failure, could not fetch code shred");
                             if let Some(code) = some_code {
                                 Shred::new_from_serialized_shred(code).ok()
@@ -885,6 +885,8 @@ impl Blockstore {
             .for_each(|((_, _), shred)| {
                 self.check_insert_coding_shred(
                     shred,
+                    // TODO: Use real hash
+                    Hash::default(),
                     &mut index_working_set,
                     &mut write_batch,
                     &mut index_meta_time,
@@ -993,6 +995,7 @@ impl Blockstore {
     fn check_insert_coding_shred(
         &self,
         shred: Shred,
+        shred_hash: Hash,
         index_working_set: &mut HashMap<u64, IndexMetaWorkingSetEntry>,
         write_batch: &mut WriteBatch,
         index_meta_time: &mut u64,
@@ -1005,7 +1008,7 @@ impl Blockstore {
         let index_meta = &mut index_meta_working_set_entry.index;
         // This gives the index of first coding shred in this FEC block
         // So, all coding shreds in a given FEC block will have the same set index
-        self.insert_coding_shred(index_meta, &shred, write_batch)
+        self.insert_coding_shred(index_meta, &shred, shred_hash, write_batch)
             .map(|_| {
                 index_meta_working_set_entry.did_insert_occur = true;
             })
@@ -1097,6 +1100,8 @@ impl Blockstore {
         let slot = shred.slot();
         let shred_index = u64::from(shred.index());
 
+        // TODO: rework all the index metas to account for shred hashes, may be able to use
+        // Rocks key existence check whenver the wrapper releases that.
         let index_meta_working_set_entry =
             get_index_meta_entry(&self.db, slot, index_working_set, index_meta_time);
 
@@ -1122,8 +1127,14 @@ impl Blockstore {
         }
 
         let set_index = u64::from(shred.common_header.fec_set_index);
-        let newly_completed_data_sets =
-            self.insert_data_shred(slot_meta, index_meta.data_mut(), &shred, write_batch)?;
+        // TODO: Once repair/other components are updated to use shred hash, then switch over
+        let newly_completed_data_sets = self.insert_data_shred(
+            slot_meta,
+            index_meta.data_mut(),
+            &shred,
+            Hash::default(),
+            write_batch,
+        )?;
         just_inserted_data_shreds.insert((slot, shred_index), shred);
         index_meta_working_set_entry.did_insert_occur = true;
         slot_meta_entry.did_insert_occur = true;
@@ -1163,6 +1174,7 @@ impl Blockstore {
         &self,
         index_meta: &mut Index,
         shred: &Shred,
+        shred_hash: Hash,
         write_batch: &mut WriteBatch,
     ) -> Result<()> {
         let slot = shred.slot();
@@ -1174,7 +1186,7 @@ impl Blockstore {
 
         // Commit step: commit all changes to the mutable structures at once, or none at all.
         // We don't want only a subset of these changes going through.
-        write_batch.put_bytes::<cf::ShredCode>((slot, shred_index), &shred.payload)?;
+        write_batch.put_bytes::<cf::ShredCode>((slot, shred_index, shred_hash), &shred.payload)?;
         index_meta.coding_mut().set_present(shred_index, true);
 
         Ok(())
@@ -1251,6 +1263,7 @@ impl Blockstore {
         slot_meta: &mut SlotMeta,
         data_index: &mut ShredIndex,
         shred: &Shred,
+        shred_hash: Hash,
         write_batch: &mut WriteBatch,
     ) -> Result<Vec<(u32, u32)>> {
         let slot = shred.slot();
@@ -1286,7 +1299,7 @@ impl Blockstore {
 
         // Commit step: commit all changes to the mutable structures at once, or none at all.
         // We don't want only a subset of these changes going through.
-        write_batch.put_bytes::<cf::ShredData>((slot, index), &shred.payload)?;
+        write_batch.put_bytes::<cf::ShredData>((slot, index, shred_hash), &shred.payload)?;
         data_index.set_present(index, true);
         let newly_completed_data_sets = update_slot_meta(
             last_in_slot,
@@ -1313,8 +1326,8 @@ impl Blockstore {
         Ok(newly_completed_data_sets)
     }
 
-    pub fn get_data_shred(&self, slot: Slot, index: u64) -> Result<Option<Vec<u8>>> {
-        self.data_shred_cf.get_bytes((slot, index))
+    pub fn get_data_shred(&self, slot: Slot, index: u64, hash: Hash) -> Result<Option<Vec<u8>>> {
+        self.data_shred_cf.get_bytes((slot, index, hash))
     }
 
     pub fn get_data_shreds_for_slot(
@@ -1351,7 +1364,7 @@ impl Blockstore {
             }
             let to_index = cmp::min(to_index, meta.consumed);
             for index in from_index..to_index {
-                if let Some(shred_data) = self.get_data_shred(slot, index)? {
+                if let Some(shred_data) = self.get_data_shred(slot, index, Hash::default())? {
                     let shred_len = shred_data.len();
                     if buffer.len().saturating_sub(buffer_offset) >= shred_len {
                         buffer[buffer_offset..buffer_offset + shred_len]
@@ -1373,8 +1386,8 @@ impl Blockstore {
         Ok((last_index, buffer_offset))
     }
 
-    pub fn get_coding_shred(&self, slot: Slot, index: u64) -> Result<Option<Vec<u8>>> {
-        self.code_shred_cf.get_bytes((slot, index))
+    pub fn get_coding_shred(&self, slot: Slot, index: u64, hash: Hash) -> Result<Option<Vec<u8>>> {
+        self.code_shred_cf.get_bytes((slot, index, hash))
     }
 
     pub fn get_coding_shreds_for_slot(
@@ -1484,7 +1497,7 @@ impl Blockstore {
         max_missing: usize,
     ) -> Vec<u64>
     where
-        C: Column<Index = (u64, u64)>,
+        C: Column<Index = (Slot, u64, Hash)>,
     {
         if start_index >= end_index || max_missing == 0 {
             return vec![];
@@ -1495,7 +1508,7 @@ impl Blockstore {
             DEFAULT_TICKS_PER_SECOND * (timestamp() - first_timestamp) / 1000;
 
         // Seek to the first shred with index >= start_index
-        db_iterator.seek(&C::key((slot, start_index)));
+        db_iterator.seek(&C::key((slot, start_index, Hash::default())));
 
         // The index of the first missing shred in the slot
         let mut prev_index = start_index;
@@ -1509,7 +1522,8 @@ impl Blockstore {
                 }
                 break;
             }
-            let (current_slot, index) = C::index(&db_iterator.key().expect("Expect a valid key"));
+            let (current_slot, index, _hash) =
+                C::index(&db_iterator.key().expect("Expect a valid key"));
 
             let current_index = {
                 if current_slot > slot {
@@ -1764,11 +1778,11 @@ impl Blockstore {
             .put(1, &TransactionStatusIndexMeta::default())?;
         // This dummy status improves compaction performance
         self.transaction_status_cf.put(
-            cf::TransactionStatus::as_index(2),
+            cf::TransactionStatus::default_index_from_slot(2),
             &TransactionStatusMeta::default(),
         )?;
         self.address_signatures_cf.put(
-            cf::AddressSignatures::as_index(2),
+            cf::AddressSignatures::default_index_from_slot(2),
             &AddressSignatureMeta::default(),
         )
     }
@@ -2451,7 +2465,7 @@ impl Blockstore {
         let data_shreds: Result<Vec<Shred>> = (start_index..=end_index)
             .map(|i| {
                 data_shred_cf
-                    .get_bytes((slot, u64::from(i)))
+                    .get_bytes((slot, u64::from(i), Hash::default()))
                     .and_then(|serialized_shred| {
                         if serialized_shred.is_none() {
                             if let Some(slot_meta) = slot_meta {
@@ -2616,7 +2630,7 @@ impl Blockstore {
     // the same slot and index
     pub fn is_shred_duplicate(&self, slot: u64, index: u32, new_shred: &[u8]) -> Option<Vec<u8>> {
         let res = self
-            .get_data_shred(slot, index as u64)
+            .get_data_shred(slot, index as u64, Hash::default())
             .expect("fetch from DuplicateSlots column family failed");
 
         res.map(|existing_shred| {
@@ -3543,7 +3557,7 @@ pub mod tests {
 
         let serialized_shred = ledger
             .data_shred_cf
-            .get_bytes((0, last_shred.index() as u64))
+            .get_bytes((0, last_shred.index() as u64, Hash::default()))
             .unwrap()
             .unwrap();
         let deserialized_shred = Shred::new_from_serialized_shred(serialized_shred).unwrap();
@@ -3671,7 +3685,7 @@ pub mod tests {
 
         // Test erasure column family
         let erasure = vec![1u8; 16];
-        let erasure_key = (0, 0);
+        let erasure_key = (0, 0, Hash::default());
         ledger
             .code_shred_cf
             .put_bytes(erasure_key, &erasure)
@@ -3687,7 +3701,7 @@ pub mod tests {
 
         // Test data column family
         let data = vec![2u8; 16];
-        let data_key = (0, 0);
+        let data_key = (0, 0, Hash::default());
         ledger.data_shred_cf.put_bytes(data_key, &data).unwrap();
 
         let result = ledger
@@ -5548,13 +5562,19 @@ pub mod tests {
             blockstore
                 .insert_shreds(shreds1[..].to_vec(), None, false)
                 .unwrap();
-            assert!(blockstore.get_data_shred(1, 0).unwrap().is_none());
+            assert!(blockstore
+                .get_data_shred(1, 0, Hash::default())
+                .unwrap()
+                .is_none());
 
             // Insert through trusted path will succeed
             blockstore
                 .insert_shreds(shreds1[..].to_vec(), None, true)
                 .unwrap();
-            assert!(blockstore.get_data_shred(1, 0).unwrap().is_some());
+            assert!(blockstore
+                .get_data_shred(1, 0, Hash::default())
+                .unwrap()
+                .is_some());
         }
     }
 
@@ -6027,7 +6047,7 @@ pub mod tests {
             let first_status_entry = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap()
@@ -6039,7 +6059,7 @@ pub mod tests {
             let first_address_entry = blockstore
                 .db
                 .iter::<cf::AddressSignatures>(IteratorMode::From(
-                    cf::AddressSignatures::as_index(0),
+                    cf::AddressSignatures::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap()
@@ -6097,7 +6117,7 @@ pub mod tests {
             let first_status_entry = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap()
@@ -6109,7 +6129,7 @@ pub mod tests {
             let first_address_entry = blockstore
                 .db
                 .iter::<cf::AddressSignatures>(IteratorMode::From(
-                    cf::AddressSignatures::as_index(0),
+                    cf::AddressSignatures::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap()
@@ -6122,7 +6142,7 @@ pub mod tests {
             let index1_first_status_entry = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(1),
+                    cf::TransactionStatus::default_index_from_slot(1),
                     IteratorDirection::Forward,
                 ))
                 .unwrap()
@@ -6134,7 +6154,7 @@ pub mod tests {
             let index1_first_address_entry = blockstore
                 .db
                 .iter::<cf::AddressSignatures>(IteratorMode::From(
-                    cf::AddressSignatures::as_index(1),
+                    cf::AddressSignatures::default_index_from_slot(1),
                     IteratorDirection::Forward,
                 ))
                 .unwrap()
@@ -6167,7 +6187,7 @@ pub mod tests {
             let first_status_entry = blockstore
                 .db
                 .iter::<cf::TransactionStatus>(IteratorMode::From(
-                    cf::TransactionStatus::as_index(0),
+                    cf::TransactionStatus::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap()
@@ -6179,7 +6199,7 @@ pub mod tests {
             let first_address_entry = blockstore
                 .db
                 .iter::<cf::AddressSignatures>(IteratorMode::From(
-                    cf::AddressSignatures::as_index(0),
+                    cf::AddressSignatures::default_index_from_slot(0),
                     IteratorDirection::Forward,
                 ))
                 .unwrap()
@@ -6901,7 +6921,7 @@ pub mod tests {
             for (s, buf) in data_shreds.iter().zip(shred_bufs) {
                 assert_eq!(
                     blockstore
-                        .get_data_shred(s.slot(), s.index() as u64)
+                        .get_data_shred(s.slot(), s.index() as u64, Hash::default())
                         .unwrap()
                         .unwrap(),
                     buf
@@ -7090,9 +7110,12 @@ pub mod tests {
         // family are the same
         let data_iter = blockstore.slot_data_iterator(slot, 0).unwrap();
         let mut num_data = 0;
-        for ((slot, index), _) in data_iter {
+        for ((slot, index, _), _) in data_iter {
             num_data += 1;
-            assert!(blockstore.get_data_shred(slot, index).unwrap().is_some());
+            assert!(blockstore
+                .get_data_shred(slot, index, Hash::default())
+                .unwrap()
+                .is_some());
         }
 
         // Test the data index doesn't have anything extra
@@ -7103,9 +7126,12 @@ pub mod tests {
         // family are the same
         let coding_iter = blockstore.slot_coding_iterator(slot, 0).unwrap();
         let mut num_coding = 0;
-        for ((slot, index), _) in coding_iter {
+        for ((slot, index, _), _) in coding_iter {
             num_coding += 1;
-            assert!(blockstore.get_coding_shred(slot, index).unwrap().is_some());
+            assert!(blockstore
+                .get_coding_shred(slot, index, Hash::default())
+                .unwrap()
+                .is_some());
         }
 
         // Test the data index doesn't have anything extra
@@ -7180,11 +7206,11 @@ pub mod tests {
             blockstore.insert_shreds(shreds, None, false).unwrap();
             // Should only be one shred in slot 9
             assert!(blockstore
-                .get_data_shred(unconfirmed_slot, 0)
+                .get_data_shred(unconfirmed_slot, 0, Hash::default())
                 .unwrap()
                 .is_some());
             assert!(blockstore
-                .get_data_shred(unconfirmed_slot, 1)
+                .get_data_shred(unconfirmed_slot, 1, Hash::default())
                 .unwrap()
                 .is_none());
             blockstore.set_dead_slot(unconfirmed_slot).unwrap();
@@ -7201,7 +7227,7 @@ pub mod tests {
                 vec![unconfirmed_child_slot]
             );
             assert!(blockstore
-                .get_data_shred(unconfirmed_slot, 0)
+                .get_data_shred(unconfirmed_slot, 0, Hash::default())
                 .unwrap()
                 .is_none());
         }
