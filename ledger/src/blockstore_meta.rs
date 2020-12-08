@@ -1,7 +1,44 @@
-use crate::erasure::ErasureConfig;
+use crate::{
+    erasure::ErasureConfig,
+    shred::{OFFSET_OF_SHRED_INDEX, OFFSET_OF_SHRED_SLOT, SIZE_OF_SHRED_INDEX, SIZE_OF_SHRED_SLOT},
+};
 use serde::{Deserialize, Serialize};
-use solana_sdk::clock::Slot;
-use std::{collections::BTreeSet, ops::RangeBounds};
+use solana_sdk::{clock::Slot, hash::Hash};
+use std::{borrow::Cow, collections::BTreeSet, ops::RangeBounds};
+
+pub type ShredKey = (Slot, u64, Hash);
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+// The ShredMeta column family
+pub struct ShredMeta<'a> {
+    pub next_shred: Option<ShredKey>,
+    pub next_completed_data_index: Option<ShredKey>,
+    pub payload: Cow<'a, [u8]>,
+}
+
+impl<'a> ShredMeta<'a> {
+    pub fn new(payload: &'a [u8]) -> Self {
+        Self {
+            next_shred: None,
+            next_completed_data_index: None,
+            payload: Cow::from(payload),
+        }
+    }
+
+    pub fn previous_shred_key(&self) -> Option<ShredKey> {
+        let slot: Slot = bincode::deserialize(
+            &self.payload[OFFSET_OF_SHRED_SLOT..OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT],
+        )
+        .ok()?;
+        let index: u32 = bincode::deserialize(
+            &self.payload[OFFSET_OF_SHRED_INDEX..OFFSET_OF_SHRED_INDEX + SIZE_OF_SHRED_INDEX],
+        )
+        .ok()?;
+        // VersionedLedgerTODO: use real hash
+        let hash = Hash::default();
+        Some((slot, index as u64, hash))
+    }
+}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 // The Meta column family

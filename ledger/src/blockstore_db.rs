@@ -419,19 +419,24 @@ pub trait ColumnName {
     const NAME: &'static str;
 }
 
-pub trait TypedColumn: Column {
-    type Type: Serialize + DeserializeOwned;
+pub trait TypedColumn: for<'a> TypedColumnBody<'a> {}
+
+pub trait TypedColumnBody<'a>: Column {
+    type Type: 'a + Serialize + DeserializeOwned;
 }
 
-impl TypedColumn for columns::TransactionStatus {
+impl TypedColumn for columns::TransactionStatus {}
+impl<'a> TypedColumnBody<'a> for columns::TransactionStatus {
     type Type = TransactionStatusMeta;
 }
 
-impl TypedColumn for columns::AddressSignatures {
+impl TypedColumn for columns::AddressSignatures {}
+impl<'a> TypedColumnBody<'a> for columns::AddressSignatures {
     type Type = blockstore_meta::AddressSignatureMeta;
 }
 
-impl TypedColumn for columns::TransactionStatusIndex {
+impl TypedColumn for columns::TransactionStatusIndex {}
+impl<'a> TypedColumnBody<'a> for columns::TransactionStatusIndex {
     type Type = blockstore_meta::TransactionStatusIndexMeta;
 }
 
@@ -569,7 +574,8 @@ impl SlotColumn for columns::Blocktime {}
 impl ColumnName for columns::Blocktime {
     const NAME: &'static str = BLOCKTIME_CF;
 }
-impl TypedColumn for columns::Blocktime {
+impl TypedColumn for columns::Blocktime {}
+impl<'a> TypedColumnBody<'a> for columns::Blocktime {
     type Type = UnixTimestamp;
 }
 
@@ -577,10 +583,15 @@ impl SlotColumn for columns::PerfSamples {}
 impl ColumnName for columns::PerfSamples {
     const NAME: &'static str = PERF_SAMPLES_CF;
 }
-impl TypedColumn for columns::PerfSamples {
+impl TypedColumn for columns::PerfSamples {}
+impl<'a> TypedColumnBody<'a> for columns::PerfSamples {
     type Type = blockstore_meta::PerfSample;
 }
 
+impl TypedColumn for columns::ShredCode {}
+impl<'a> TypedColumnBody<'a> for columns::ShredCode {
+    type Type = blockstore_meta::ShredMeta<'a>;
+}
 impl Column for columns::ShredCode {
     type Index = <columns::ShredData as Column>::Index;
 
@@ -605,8 +616,12 @@ impl ColumnName for columns::ShredCode {
     const NAME: &'static str = CODE_SHRED_CF;
 }
 
+impl TypedColumn for columns::ShredData {}
+impl<'a> TypedColumnBody<'a> for columns::ShredData {
+    type Type = blockstore_meta::ShredMeta<'a>;
+}
 impl Column for columns::ShredData {
-    type Index = (Slot, u64, Hash);
+    type Index = blockstore_meta::ShredKey;
 
     fn key((slot, index, hash): Self::Index) -> Vec<u8> {
         let mut key = vec![0; SLOT_BYTES + 8 + HASH_BYTES];
@@ -643,7 +658,8 @@ impl SlotColumn for columns::Index {}
 impl ColumnName for columns::Index {
     const NAME: &'static str = INDEX_CF;
 }
-impl TypedColumn for columns::Index {
+impl TypedColumn for columns::Index {}
+impl<'a> TypedColumnBody<'a> for columns::Index {
     type Type = blockstore_meta::Index;
 }
 
@@ -651,7 +667,8 @@ impl SlotColumn for columns::DeadSlots {}
 impl ColumnName for columns::DeadSlots {
     const NAME: &'static str = DEAD_SLOTS_CF;
 }
-impl TypedColumn for columns::DeadSlots {
+impl TypedColumn for columns::DeadSlots {}
+impl<'a> TypedColumnBody<'a> for columns::DeadSlots {
     type Type = bool;
 }
 
@@ -659,7 +676,8 @@ impl SlotColumn for columns::DuplicateSlots {}
 impl ColumnName for columns::DuplicateSlots {
     const NAME: &'static str = DUPLICATE_SLOTS_CF;
 }
-impl TypedColumn for columns::DuplicateSlots {
+impl TypedColumn for columns::DuplicateSlots {}
+impl<'a> TypedColumnBody<'a> for columns::DuplicateSlots {
     type Type = blockstore_meta::DuplicateSlotProof;
 }
 
@@ -667,7 +685,8 @@ impl SlotColumn for columns::Orphans {}
 impl ColumnName for columns::Orphans {
     const NAME: &'static str = ORPHANS_CF;
 }
-impl TypedColumn for columns::Orphans {
+impl TypedColumn for columns::Orphans {}
+impl<'a> TypedColumnBody<'a> for columns::Orphans {
     type Type = bool;
 }
 
@@ -675,7 +694,8 @@ impl SlotColumn for columns::Root {}
 impl ColumnName for columns::Root {
     const NAME: &'static str = ROOT_CF;
 }
-impl TypedColumn for columns::Root {
+impl TypedColumn for columns::Root {}
+impl<'a> TypedColumnBody<'a> for columns::Root {
     type Type = bool;
 }
 
@@ -683,7 +703,8 @@ impl SlotColumn for columns::SlotMeta {}
 impl ColumnName for columns::SlotMeta {
     const NAME: &'static str = META_CF;
 }
-impl TypedColumn for columns::SlotMeta {
+impl TypedColumn for columns::SlotMeta {}
+impl<'a> TypedColumnBody<'a> for columns::SlotMeta {
     type Type = blockstore_meta::SlotMeta;
 }
 
@@ -715,7 +736,8 @@ impl Column for columns::ErasureMeta {
 impl ColumnName for columns::ErasureMeta {
     const NAME: &'static str = ERASURE_META_CF;
 }
-impl TypedColumn for columns::ErasureMeta {
+impl TypedColumn for columns::ErasureMeta {}
+impl<'a> TypedColumnBody<'a> for columns::ErasureMeta {
     type Type = blockstore_meta::ErasureMeta;
 }
 
@@ -759,7 +781,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn get<C>(&self, key: C::Index) -> Result<Option<C::Type>>
+    pub fn get<C>(&self, key: C::Index) -> Result<Option<<C as TypedColumnBody<'_>>::Type>>
     where
         C: TypedColumn + ColumnName,
     {
@@ -928,7 +950,7 @@ impl<C> LedgerColumn<C>
 where
     C: TypedColumn + ColumnName,
 {
-    pub fn get(&self, key: C::Index) -> Result<Option<C::Type>> {
+    pub fn get(&self, key: C::Index) -> Result<Option<<C as TypedColumnBody<'_>>::Type>> {
         if let Some(serialized_value) = self.backend.get_cf(self.handle(), &C::key(key))? {
             let value = deserialize(&serialized_value)?;
 
@@ -938,7 +960,7 @@ where
         }
     }
 
-    pub fn put(&self, key: C::Index, value: &C::Type) -> Result<()> {
+    pub fn put(&self, key: C::Index, value: &<C as TypedColumnBody<'_>>::Type) -> Result<()> {
         let serialized_value = serialize(value)?;
 
         self.backend
@@ -995,7 +1017,7 @@ impl<'a> WriteBatch<'a> {
     pub fn put<C: TypedColumn + ColumnName>(
         &mut self,
         key: C::Index,
-        value: &C::Type,
+        value: &<C as TypedColumnBody<'_>>::Type,
     ) -> Result<()> {
         let serialized_value = serialize(&value)?;
         self.write_batch

@@ -16,7 +16,7 @@ use solana_measure::measure::Measure;
 use solana_perf::packet::Packet;
 use solana_rayon_threadlimit::get_thread_count;
 use solana_sdk::{
-    clock::Slot,
+    clock::{Slot, SLOT_BYTES},
     hash::{Hash, HASH_BYTES},
     packet::PACKET_DATA_SIZE,
     pubkey::Pubkey,
@@ -64,7 +64,7 @@ pub const SIZE_OF_DATA_SHRED_HEADER: usize = 5;
 pub const SIZE_OF_CODING_SHRED_HEADER: usize = 6;
 pub const SIZE_OF_SIGNATURE: usize = 64;
 pub const SIZE_OF_SHRED_TYPE: usize = 1;
-pub const SIZE_OF_SHRED_SLOT: usize = 8;
+pub const SIZE_OF_SHRED_SLOT: usize = SLOT_BYTES;
 pub const SIZE_OF_SHRED_INDEX: usize = 4;
 pub const SIZE_OF_NONCE: usize = 4;
 pub const SIZE_OF_DATA_SHRED_IGNORED_TAIL: usize =
