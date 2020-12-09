@@ -1072,6 +1072,47 @@ impl Blockstore {
         }
     }
 
+    fn check_insert_data_shred_hashed<F>(
+        &self,
+        shred: Shred,
+        erasure_metas: &mut HashMap<(u64, u64), ErasureMeta>,
+        // VersionedLedgerTODO: rework all the index metas and `working_sets` caches below
+        // to account for shred hashes, otherwise perf will suffer.
+        index_working_set: &mut HashMap<u64, IndexMetaWorkingSetEntry>,
+        slot_meta_working_set: &mut HashMap<u64, SlotMetaWorkingSetEntry>,
+        write_batch: &mut WriteBatch,
+        just_inserted_data_shreds: &mut HashMap<(u64, u64), Shred>,
+        index_meta_time: &mut u64,
+        is_trusted: bool,
+        handle_duplicate: &F,
+        leader_schedule: Option<&Arc<LeaderScheduleCache>>,
+        is_recovered: bool,
+    ) -> std::result::Result<Vec<(u32, u32)>, InsertDataShredError>
+    where
+        F: Fn(Shred) 
+    {
+        let slot = shred.slot();
+        let shred_index = u64::from(shred.index());
+        let shred_hash = shred.hash();
+
+        if !is_trusted {
+            if Self::is_data_shred_present(&shred, slot_meta, &index_meta.data()) {
+                handle_duplicate(shred);
+                // Don't error, have to support this now!
+            }
+        }
+
+        let set_index = u64::from(shred.common_header.fec_set_index);
+        let newly_completed_data_sets = self.insert_data_shred_hashed(
+            slot_meta,
+            index_meta.data_mut(),
+            &shred,
+            shred_hash,
+            write_batch,
+        )?;
+        Ok(newly_completed_data_sets)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn check_insert_data_shred<F>(
         &self,
@@ -1093,8 +1134,6 @@ impl Blockstore {
         let slot = shred.slot();
         let shred_index = u64::from(shred.index());
 
-        // VersionedLedgerTODO: rework all the index metas to account for shred hashes, may be able to use
-        // Rocks key existence check whenver the wrapper releases that.
         let index_meta_working_set_entry =
             get_index_meta_entry(&self.db, slot, index_working_set, index_meta_time);
 
@@ -1254,6 +1293,63 @@ impl Blockstore {
         verify_shred_slots(slot, slot_meta.parent_slot, last_root)
     }
 
+    fn insert_data_shred_hashed(&self,
+        slot_meta: &mut SlotMeta,
+        data_index: &mut ShredIndex,
+        shred: &Shred,
+        shred_hash: Hash,
+        write_batch: &mut WriteBatch,
+    ) -> Result<Vec<(u32, u32)>> {
+        let slot = shred.slot();
+        let index = u64::from(shred.index());
+
+        let last_in_slot = if shred.last_in_slot() {
+            debug!("got last in slot");
+            true
+        } else {
+            false
+        };
+
+        let last_in_data = if shred.data_complete() {
+            debug!("got last in data");
+            true
+        } else {
+            false
+        };
+
+        // Commit step: commit all changes to the mutable structures at once, or none at all.
+        // We don't want only a subset of these changes going through.
+        write_batch
+            .put::<cf::ShredData>((slot, index, shred_hash), &ShredMeta::new(&shred.payload))?;
+        
+        // VersionedLedgerTODO: Support full slot detection 
+        /*data_index.set_present(index, true);
+        
+        let newly_completed_data_sets = update_slot_meta(
+            last_in_slot,
+            last_in_data,
+            slot_meta,
+            index as u32,
+            new_consumed,
+            shred.reference_tick(),
+            &data_index,
+        );
+        if slot_meta.is_full() {
+            datapoint_info!(
+                "shred_insert_is_full",
+                (
+                    "total_time_ms",
+                    solana_sdk::timing::timestamp() - slot_meta.first_shred_timestamp,
+                    i64
+                ),
+                ("slot", slot_meta.slot, i64),
+                ("last_index", slot_meta.last_index, i64),
+            );
+        }
+        trace!("inserted shred into slot {:?} and index {:?}", slot, index);*/
+        Ok(newly_completed_data_sets)
+    }
+    
     fn insert_data_shred(
         &self,
         slot_meta: &mut SlotMeta,

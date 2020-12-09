@@ -12,7 +12,16 @@ pub type ShredKey = (Slot, u64, Hash);
 // The ShredMeta column family
 pub struct ShredMeta<'a> {
     pub next_shred: Option<ShredKey>,
-    pub next_completed_data_index: Option<ShredKey>,
+    // Points to the next data complete shred `D`, inclusive of this one.
+    // This will only be set if all shreds between this shred and `D`
+    // are present in the store.
+
+    // Example:
+    // 1 -> 2 -> _ -> 4 -> 5 (data complete)
+    // 
+    // In the above, shred 4 and 5 will both have `next_completed_data_key == Some(5)`,
+    // but 1 and 2 will not until the missing shred 3 arrives.
+    pub next_completed_data_key: Option<ShredKey>,
     pub payload: Cow<'a, [u8]>,
 }
 
@@ -20,7 +29,7 @@ impl<'a> ShredMeta<'a> {
     pub fn new(payload: &'a [u8]) -> Self {
         Self {
             next_shred: None,
-            next_completed_data_index: None,
+            next_completed_data_key: None,
             payload: Cow::from(payload),
         }
     }
