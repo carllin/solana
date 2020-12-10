@@ -1326,7 +1326,6 @@ fn test_fail_entry_verification_leader() {
 #[test]
 #[serial]
 #[allow(unused_attributes)]
-#[ignore]
 fn test_fake_shreds_broadcast_leader() {
     test_faulty_node(BroadcastStageType::BroadcastDuplicates(
         BroadcastDuplicatesConfig {
@@ -1339,7 +1338,6 @@ fn test_fake_shreds_broadcast_leader() {
 #[test]
 #[serial]
 #[allow(unused_attributes)]
-#[ignore]
 fn test_duplicate_node() {
     solana_logger::setup_with_default("solana_local_cluster=info");
     let num_nodes = 3;

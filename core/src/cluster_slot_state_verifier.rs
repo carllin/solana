@@ -2,11 +2,12 @@ use crate::{
     fork_choice::ForkChoice, heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
     progress_map::ProgressMap,
 };
-use solana_sdk::{clock::Slot, hash::Hash};
+use solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub type GossipDuplicateConfirmedSlots = BTreeMap<Slot, Hash>;
-type SlotStateHandler = fn(Slot, &Hash, Option<&Hash>, bool, bool) -> Vec<ResultingStateChange>;
+type SlotStateHandler =
+    fn(&Pubkey, Slot, &Hash, Option<&Hash>, bool, bool) -> Vec<ResultingStateChange>;
 
 #[derive(PartialEq, Debug)]
 pub enum SlotStateUpdate {
@@ -37,6 +38,7 @@ impl SlotStateUpdate {
 fn repair_correct_version(_slot: Slot, _hash: &Hash) {}
 
 fn on_dead_slot(
+    pubkey: &Pubkey,
     slot: Slot,
     bank_frozen_hash: &Hash,
     cluster_duplicate_confirmed_hash: Option<&Hash>,
@@ -50,8 +52,8 @@ fn on_dead_slot(
         // If the cluster duplicate_confirmed some version of this slot, then
         // there's another version
         warn!(
-            "Cluster duplicate_confirmed slot {} with hash {}, but we marked slot dead",
-            slot, cluster_duplicate_confirmed_hash
+            "{} Cluster confirmed slot {} with hash {}, but we marked slot dead",
+            pubkey, slot, cluster_duplicate_confirmed_hash
         );
         // No need to check `is_slot_duplicate` and modify fork choice as dead slots
         // are never frozen, and thus never added to fork choice. The state change for
@@ -69,6 +71,7 @@ fn on_dead_slot(
 }
 
 fn on_frozen_slot(
+    pubkey: &Pubkey,
     slot: Slot,
     bank_frozen_hash: &Hash,
     cluster_duplicate_confirmed_hash: Option<&Hash>,
@@ -88,8 +91,8 @@ fn on_frozen_slot(
             // to exclude our version from being voted on and also
             // repair correct version
             warn!(
-                "Cluster duplicate_confirmed slot {} with hash {}, but we froze slot with hash {}",
-                slot, cluster_duplicate_confirmed_hash, bank_frozen_hash
+                "{} Cluster confirmed slot {} with hash {}, but we froze slot with hash {}",
+                pubkey, slot, cluster_duplicate_confirmed_hash, bank_frozen_hash
             );
             return vec![
                 ResultingStateChange::MarkSlotDuplicate,
@@ -128,6 +131,7 @@ fn on_frozen_slot(
 // This signals external information about this slot, which affects
 // this validator's understanding of the validity of this slot
 fn on_cluster_update(
+    pubkey: &Pubkey,
     slot: Slot,
     bank_frozen_hash: &Hash,
     cluster_duplicate_confirmed_hash: Option<&Hash>,
@@ -136,6 +140,7 @@ fn on_cluster_update(
 ) -> Vec<ResultingStateChange> {
     if is_dead {
         on_dead_slot(
+            pubkey,
             slot,
             bank_frozen_hash,
             cluster_duplicate_confirmed_hash,
@@ -146,6 +151,7 @@ fn on_cluster_update(
         // This case is mutually exclusive with is_dead case above because if a slot is dead,
         // it cannot have  been frozen, and thus cannot have a non-default bank hash.
         on_frozen_slot(
+            pubkey,
             slot,
             bank_frozen_hash,
             cluster_duplicate_confirmed_hash,
@@ -229,6 +235,7 @@ fn apply_state_changes(
 }
 
 pub(crate) fn check_slot_agrees_with_cluster(
+    pubkey: &Pubkey,
     slot: Slot,
     root: Slot,
     frozen_hash: Option<Hash>,
@@ -275,6 +282,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
 
     let state_handler = slot_state_update.to_handler();
     let state_changes = state_handler(
+        pubkey,
         slot,
         &frozen_hash,
         cluster_duplicate_confirmed_hash,
@@ -291,7 +299,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
     );
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod test {
     use super::*;
     use crate::consensus::test::VoteSimulator;
@@ -343,6 +351,7 @@ mod test {
         // no actionable state changes yet
         let bank_frozen_hash = Hash::new_unique();
         assert!(on_frozen_slot(
+            &Pubkey::default(),
             slot,
             &bank_frozen_hash,
             cluster_duplicate_confirmed_hash,
@@ -356,6 +365,7 @@ mod test {
         is_slot_duplicate = true;
         assert_eq!(
             on_cluster_update(
+                &Pubkey::default(),
                 slot,
                 &bank_frozen_hash,
                 cluster_duplicate_confirmed_hash,
@@ -381,6 +391,7 @@ mod test {
         // no actionable state changes
         let bank_frozen_hash = Hash::new_unique();
         assert!(on_frozen_slot(
+            &Pubkey::default(),
             slot,
             &bank_frozen_hash,
             cluster_duplicate_confirmed_hash,
@@ -646,4 +657,4 @@ mod test {
             .is_candidate_slot(slot)
             .unwrap());
     }
-}
+}*/
