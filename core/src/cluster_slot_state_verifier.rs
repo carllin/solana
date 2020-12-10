@@ -4,7 +4,7 @@ use crate::{
     heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
 };
 use solana_ledger::blockstore::Blockstore;
-use solana_sdk::{clock::Slot, hash::Hash};
+use solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub(crate) type DuplicateSlotsTracker = BTreeSet<Slot>;
@@ -740,6 +740,7 @@ fn apply_state_changes(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn check_slot_agrees_with_cluster(
+    pubkey: &Pubkey,
     slot: Slot,
     root: Slot,
     blockstore: &Blockstore,
@@ -751,11 +752,11 @@ pub(crate) fn check_slot_agrees_with_cluster(
     slot_state_update: SlotStateUpdate,
 ) {
     info!(
-        "check_slot_agrees_with_cluster()
+        "{} check_slot_agrees_with_cluster()
         slot: {},
         root: {},
         slot_state_update: {:?}",
-        slot, root, slot_state_update
+        pubkey, slot, root, slot_state_update
     );
 
     if slot <= root {
@@ -803,7 +804,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
     );
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod test {
     use super::*;
     use crate::{progress_map::ProgressMap, replay_stage::tests::setup_forks_from_tree};
@@ -2155,4 +2156,4 @@ mod test {
             (3, slot3_hash)
         );
     }
-}
+}*/
