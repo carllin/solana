@@ -3,7 +3,7 @@ use crate::{
     progress_map::ProgressMap,
 };
 use solana_ledger::blockstore::Blockstore;
-use solana_sdk::{clock::Slot, hash::Hash};
+use solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub(crate) type DuplicateSlotsTracker = BTreeSet<Slot>;
@@ -14,6 +14,7 @@ type SlotStateHandler = fn(SlotStateHandlerArgs) -> Vec<ResultingStateChange>;
 
 #[derive(Clone)]
 struct SlotStateHandlerArgs<'a> {
+    pubkey: Pubkey,
     slot: Slot,
     bank_frozen_hash: Hash,
     cluster_duplicate_confirmed_hash: Option<&'a Hash>,
@@ -32,6 +33,7 @@ impl<'a> SlotStateHandlerArgs<'a> {
         epoch_slots_frozen_hash: Option<&'a Hash>,
     ) -> Self {
         Self {
+            pubkey: Pubkey::default(),
             slot,
             // Dead slot cannot have a non-default frozen hash because
             // it was never frozen
@@ -86,6 +88,7 @@ impl SlotStateUpdate {
 
 fn on_dead_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
     let SlotStateHandlerArgs {
+        pubkey,
         slot,
         bank_frozen_hash,
         cluster_duplicate_confirmed_hash,
@@ -112,8 +115,8 @@ fn on_dead_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
                 // If the cluster duplicate confirmed some version of this slot, then
                 // we know there's another version, and our version is incorrect.
                 warn!(
-                    "Cluster duplicate_confirmed slot {} with hash {}, but we marked slot dead",
-                    slot, cluster_duplicate_confirmed_hash
+                    "{} Cluster duplicate_confirmed slot {} with hash {}, but we marked slot dead",
+                    pubkey, slot, cluster_duplicate_confirmed_hash
                 );
                 // No need to check `is_slot_duplicate` and modify fork choice as dead slots
                 // are never frozen, and thus never added to fork choice. The state change for
@@ -149,6 +152,7 @@ fn on_dead_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
 
 fn on_frozen_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
     let SlotStateHandlerArgs {
+        pubkey,
         slot,
         bank_frozen_hash,
         cluster_duplicate_confirmed_hash,
@@ -186,8 +190,8 @@ fn on_frozen_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
                     // to exclude our version from being voted on and also
                     // repair correct version
                     warn!(
-                        "Cluster duplicate_confirmed slot {} with hash {}, but we froze slot with hash {}",
-                        slot, cluster_duplicate_confirmed_hash, bank_frozen_hash
+                        "{} Cluster duplicate_confirmed slot {} with hash {}, but we froze slot with hash {}",
+                        pubkey, slot, cluster_duplicate_confirmed_hash, bank_frozen_hash
                     );
                     state_changes.push(ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash));
                     state_changes.push(ResultingStateChange::RepairClusterVersion(
@@ -393,6 +397,7 @@ fn check_epoch_slots_hash_matches_duplicate_confirmed_hash(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn check_slot_agrees_with_cluster(
+    pubkey: &Pubkey,
     slot: Slot,
     root: Slot,
     blockstore: &Blockstore,
@@ -406,12 +411,12 @@ pub(crate) fn check_slot_agrees_with_cluster(
     slot_state_update: SlotStateUpdate,
 ) {
     info!(
-        "check_slot_agrees_with_cluster()
+        "{} check_slot_agrees_with_cluster()
         slot: {},
         root: {},
         bank_frozen_hash: {:?},
         update: {:?}",
-        slot, root, bank_frozen_hash, slot_state_update
+        pubkey, slot, root, bank_frozen_hash, slot_state_update
     );
 
     if slot <= root {
@@ -479,6 +484,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
 
     let state_handler = slot_state_update.to_handler();
     let args = SlotStateHandlerArgs {
+        pubkey: *pubkey,
         slot,
         bank_frozen_hash,
         cluster_duplicate_confirmed_hash,
@@ -498,7 +504,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
     );
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod test {
     use super::*;
     use crate::replay_stage::tests::{setup_forks_from_tree, GenerateVotes};
@@ -1824,4 +1830,4 @@ mod test {
             (3, slot3_hash)
         );
     }
-}
+}*/
