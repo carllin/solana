@@ -13,7 +13,6 @@ use crate::{
     result::{Error, Result},
     window_service::{should_retransmit_and_persist, WindowService},
 };
-use ahash::AHasher;
 use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
 use solana_ledger::shred::{get_shred_slot_index_type, ShredFetchStats};
