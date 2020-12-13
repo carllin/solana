@@ -44,7 +44,7 @@ mod tests {
         snapshot_packager_service::{PendingSnapshotPackage, SnapshotPackagerService},
     };
     use solana_runtime::{
-        accounts_background_service::SnapshotRequestHandler,
+        accounts_background_service::{ABSRequestSender, SnapshotRequestHandler},
         bank::{Bank, BankSlotDelta},
         bank_forks::{ArchiveFormat, BankForks, SnapshotConfig},
         genesis_utils::{create_genesis_config, GenesisConfigInfo},
@@ -200,7 +200,7 @@ mod tests {
 
         let (s, snapshot_request_receiver) = unbounded();
         let (accounts_package_sender, _r) = channel();
-        let snapshot_request_sender = Some(s);
+        let request_sender = ABSRequestSender::new(Some(s));
         let snapshot_request_handler = SnapshotRequestHandler {
             snapshot_config: snapshot_test_config.snapshot_config.clone(),
             snapshot_request_receiver,
@@ -215,7 +215,7 @@ mod tests {
             // kick in
             if slot % set_root_interval == 0 || slot == last_slot - 1 {
                 // set_root should send a snapshot request
-                bank_forks.set_root(bank.slot(), &snapshot_request_sender, None);
+                bank_forks.set_root(bank.slot(), &request_sender, None);
                 snapshot_request_handler.handle_snapshot_requests();
             }
         }
@@ -484,7 +484,7 @@ mod tests {
                 (*add_root_interval * num_set_roots * 2) as u64,
             );
             let mut current_bank = snapshot_test_config.bank_forks[0].clone();
-            let snapshot_sender = Some(snapshot_sender);
+            let request_sender = ABSRequestSender::new(Some(snapshot_sender));
             for _ in 0..num_set_roots {
                 for _ in 0..*add_root_interval {
                     let new_slot = current_bank.slot() + 1;
@@ -495,7 +495,7 @@ mod tests {
                 }
                 snapshot_test_config.bank_forks.set_root(
                     current_bank.slot(),
-                    &snapshot_sender,
+                    &request_sender,
                     None,
                 );
             }
