@@ -3102,7 +3102,7 @@ impl ClusterInfo {
                                 exit.store(true, Ordering::Relaxed);
                                 // TODO: Pass through ValidatorExit here so
                                 // that this will exit cleanly.
-                                std::process::exit(1);
+                                //std::process::exit(1);
                             }
                             _ => error!("gossip run_listen failed: {}", err),
                         }

@@ -878,6 +878,7 @@ impl ReplayStage {
         let root = bank_forks.read().unwrap().root();
         for new_confirmed_slots in gossip_duplicate_confirmed_slots_receiver.try_iter() {
             for (confirmed_slot, confirmed_hash) in new_confirmed_slots {
+                info!("{} cluster confirmed {}", pubkey, confirmed_slot);
                 if confirmed_slot <= root {
                     continue;
                 } else if let Some(prev_hash) =
@@ -1866,10 +1867,11 @@ impl ReplayStage {
                     // thus it's safe to use as the reset bank.
                     let reset_bank = Some(heaviest_bank);
                     info!(
-                        "Waiting to switch vote to {}, resetting to slot {:?} for now, latest duplicate ancestor: {:?}",
+                        "Waiting to switch vote to {}, resetting to slot {:?} for now, latest duplicate ancestor: {:?}, latest vote: {:?}",
                         heaviest_bank.slot(),
                         reset_bank.as_ref().map(|b| b.slot()),
                         latest_duplicate_ancestor,
+                        tower.last_voted_slot(),
                     );
                     failure_reasons.push(HeaviestForkFailures::FailedSwitchThreshold(
                         heaviest_bank.slot(),

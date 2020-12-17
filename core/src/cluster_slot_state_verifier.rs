@@ -45,6 +45,7 @@ fn on_dead_slot(
     _is_slot_duplicate: bool,
     is_dead: bool,
 ) -> Vec<ResultingStateChange> {
+    info!("{} marked slot: {} dead", pubkey, slot);
     assert!(is_dead);
     // Bank should not have been frozen if the slot was marked dead
     assert_eq!(*bank_frozen_hash, Hash::default());
@@ -138,6 +139,10 @@ fn on_cluster_update(
     is_slot_duplicate: bool,
     is_dead: bool,
 ) -> Vec<ResultingStateChange> {
+    info!(
+        "{} cluster update {} {:?}",
+        pubkey, is_slot_duplicate, cluster_confirmed_hash
+    );
     if is_dead {
         on_dead_slot(
             pubkey,
