@@ -413,7 +413,6 @@ impl ReplayStage {
                             fork_stats.total_stake,
                             &progress,
                             &bank_forks,
-                            &blockstore,
                         );
 
                         Self::mark_slots_confirmed(&confirmed_forks, &mut progress, &descendants, fork_choice);
@@ -1951,7 +1950,6 @@ impl ReplayStage {
         total_stake: Stake,
         progress: &ProgressMap,
         bank_forks: &RwLock<BankForks>,
-        blockstore: &Blockstore,
     ) -> Vec<Slot> {
         let mut confirmed_forks = vec![];
         for (slot, prog) in progress.iter() {
@@ -1966,7 +1964,6 @@ impl ReplayStage {
                 if bank.is_frozen() && tower.is_slot_confirmed(*slot, voted_stakes, total_stake) {
                     info!("validator fork confirmed {} {}ms", *slot, duration);
                     datapoint_info!("validator-confirmation", ("duration_ms", duration, i64));
-                    blockstore.set_confirmed_blockhash(*slot, bank.last_blockhash());
                     confirmed_forks.push(*slot);
                 } else {
                     debug!(
@@ -2957,7 +2954,6 @@ pub(crate) mod tests {
 
             let (bank_forks, mut progress, mut heaviest_subtree_fork_choice) =
                 initialize_state(&keypairs, 10_000);
-            let blockstore = Blockstore::open(&ledger_path).unwrap();
             let bank0 = bank_forks.get(0).unwrap().clone();
             let my_keypairs = keypairs.get(&node_pubkey).unwrap();
             let vote_tx = vote_transaction::new_vote_transaction(
@@ -3009,11 +3005,9 @@ pub(crate) mod tests {
                     fork_progress.fork_stats.total_stake,
                     &progress,
                     &bank_forks,
-                    &blockstore,
                 );
 
                 assert!(confirmed_forks.is_empty());
-                assert!(!blockstore.is_slot_confirmed(0));
             }
 
             // Insert the bank that contains a vote for slot 0, which confirms slot 0
@@ -3059,11 +3053,9 @@ pub(crate) mod tests {
                     fork_progress.fork_stats.total_stake,
                     &progress,
                     &bank_forks,
-                    &blockstore,
                 );
                 // No new stats should have been computed
                 assert_eq!(confirmed_forks, vec![0]);
-                assert!(blockstore.is_slot_confirmed(0));
             }
 
             let ancestors = bank_forks.read().unwrap().ancestors();
