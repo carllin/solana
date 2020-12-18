@@ -34,8 +34,6 @@ impl SlotStateUpdate {
     }
 }
 
-fn repair_correct_version(_slot: Slot, _hash: &Hash) {}
-
 fn on_dead_slot(
     slot: Slot,
     bank_frozen_hash: &Hash,
@@ -184,6 +182,7 @@ fn apply_state_changes(
     fork_choice: &mut HeaviestSubtreeForkChoice,
     descendants: &HashMap<Slot, HashSet<Slot>>,
     state_changes: Vec<ResultingStateChange>,
+    duplicate_slots_to_repair: &mut HashSet<(Slot, Hash)>,
 ) {
     for state_change in state_changes {
         match state_change {
@@ -195,9 +194,7 @@ fn apply_state_changes(
                 fork_choice.mark_fork_invalid_candidate(slot);
             }
             ResultingStateChange::RepairConfirmedVersion(cluster_confirmed_hash) => {
-                // TODO: Should consider moving the updating of the duplicate slots in the
-                // progress map from ReplayStage::confirm_forks to here.
-                repair_correct_version(slot, &cluster_confirmed_hash);
+                duplicate_slots_to_repair.insert((slot, cluster_confirmed_hash));
             }
             ResultingStateChange::ConfirmedSlotMatchesCluster => {
                 progress.set_confirmed_duplicate_slot(
@@ -210,6 +207,7 @@ fn apply_state_changes(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_slot_agrees_with_cluster(
     slot: Slot,
     root: Slot,
@@ -218,6 +216,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
     descendants: &HashMap<Slot, HashSet<Slot>>,
     progress: &mut ProgressMap,
     fork_choice: &mut HeaviestSubtreeForkChoice,
+    duplicate_slots_to_repair: &mut HashSet<(Slot, Hash)>,
     slot_state_update: SlotStateUpdate,
 ) {
     if slot <= root {
@@ -261,7 +260,14 @@ pub(crate) fn check_slot_agrees_with_cluster(
         is_slot_duplicate,
         is_dead,
     );
-    apply_state_changes(slot, progress, fork_choice, descendants, state_changes);
+    apply_state_changes(
+        slot,
+        progress,
+        fork_choice,
+        descendants,
+        state_changes,
+        duplicate_slots_to_repair,
+    );
 }
 
 #[cfg(test)]
@@ -572,6 +578,7 @@ mod test {
             &mut heaviest_subtree_fork_choice,
             &descendants,
             vec![ResultingStateChange::MarkSlotDuplicate],
+            &mut HashSet::new(),
         );
         assert!(!heaviest_subtree_fork_choice
             .is_candidate_slot(slot)
@@ -597,6 +604,7 @@ mod test {
             &mut heaviest_subtree_fork_choice,
             &descendants,
             vec![ResultingStateChange::ConfirmedSlotMatchesCluster],
+            &mut HashSet::new(),
         );
         for child_slot in descendants
             .get(&slot)
