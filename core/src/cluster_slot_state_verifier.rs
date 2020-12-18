@@ -35,8 +35,6 @@ impl SlotStateUpdate {
     }
 }
 
-fn repair_correct_version(_slot: Slot, _hash: &Hash) {}
-
 fn on_dead_slot(
     pubkey: &Pubkey,
     slot: Slot,
@@ -141,7 +139,7 @@ fn on_cluster_update(
 ) -> Vec<ResultingStateChange> {
     info!(
         "{} cluster update {} {:?}",
-        pubkey, is_slot_duplicate, cluster_confirmed_hash
+        pubkey, is_slot_duplicate, cluster_duplicate_confirmed_hash
     );
     if is_dead {
         on_dead_slot(
@@ -210,6 +208,7 @@ fn apply_state_changes(
     ancestors: &HashMap<Slot, HashSet<Slot>>,
     descendants: &HashMap<Slot, HashSet<Slot>>,
     state_changes: Vec<ResultingStateChange>,
+    duplicate_slots_to_repair: &mut HashSet<(Slot, Hash)>,
 ) {
     for state_change in state_changes {
         match state_change {
@@ -223,9 +222,7 @@ fn apply_state_changes(
             ResultingStateChange::RepairDuplicateConfirmedVersion(
                 cluster_duplicate_confirmed_hash,
             ) => {
-                // TODO: Should consider moving the updating of the duplicate slots in the
-                // progress map from ReplayStage::confirm_forks to here.
-                repair_correct_version(slot, &cluster_duplicate_confirmed_hash);
+                duplicate_slots_to_repair.insert((slot, cluster_duplicate_confirmed_hash));
             }
             ResultingStateChange::DuplicateConfirmedSlotMatchesCluster => {
                 progress.set_confirmed_duplicate_slot(
@@ -239,6 +236,7 @@ fn apply_state_changes(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_slot_agrees_with_cluster(
     pubkey: &Pubkey,
     slot: Slot,
@@ -249,6 +247,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
     descendants: &HashMap<Slot, HashSet<Slot>>,
     progress: &mut ProgressMap,
     fork_choice: &mut HeaviestSubtreeForkChoice,
+    duplicate_slots_to_repair: &mut HashSet<(Slot, Hash)>,
     slot_state_update: SlotStateUpdate,
 ) {
     if slot <= root {
@@ -301,6 +300,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
         ancestors,
         descendants,
         state_changes,
+        duplicate_slots_to_repair,
     );
 }
 
