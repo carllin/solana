@@ -19,7 +19,7 @@
 //! commit for each slot entry would be indexed.
 
 use crate::{
-    accounts_index::{AccountsIndex, Ancestors, SlotList, SlotSlice},
+    accounts_index::{AccountsIndex, Ancestors, IndexKey, SlotList, SlotSlice},
     append_vec::{AppendVec, StoredAccount, StoredMeta},
 };
 use blake3::traits::digest::Digest;
@@ -1337,6 +1337,30 @@ impl AccountsDB {
         self.accounts_index.range_scan_accounts(
             ancestors,
             range,
+            |pubkey, (account_info, slot)| {
+                let account_slot = self
+                    .get_account_from_storage(slot, account_info)
+                    .map(|account| (pubkey, account, slot));
+                scan_func(&mut collector, account_slot)
+            },
+        );
+        collector
+    }
+
+    pub fn index_scan_accounts<F, A>(
+        &self,
+        ancestors: &Ancestors,
+        index_key: IndexKey,
+        scan_func: F,
+    ) -> A
+    where
+        F: Fn(&mut A, Option<(&Pubkey, Account, Slot)>),
+        A: Default,
+    {
+        let mut collector = A::default();
+        self.accounts_index.index_scan_accounts(
+            ancestors,
+            index_key,
             |pubkey, (account_info, slot)| {
                 let account_slot = self
                     .get_account_from_storage(slot, account_info)

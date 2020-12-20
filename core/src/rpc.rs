@@ -39,6 +39,7 @@ use solana_metrics::inc_new_counter_info;
 use solana_perf::packet::PACKET_DATA_SIZE;
 use solana_runtime::{
     accounts::AccountAddressFilter,
+    accounts_index::IndexKey,
     bank::Bank,
     bank_forks::BankForks,
     commitment::{BlockCommitmentArray, BlockCommitmentCache, CommitmentSlots},
@@ -1221,7 +1222,8 @@ impl JsonRpcRequestProcessor {
                 encoding: None,
             }));
         }
-        let keyed_accounts = get_filtered_program_accounts(&bank, &token_program_id, filters);
+
+        let keyed_accounts = get_filtered_spl_token_accounts_by_owner(&bank, owner, filters);
         let accounts = if encoding == UiAccountEncoding::JsonParsed {
             get_parsed_token_accounts(bank.clone(), keyed_accounts).collect()
         } else {
@@ -1409,7 +1411,34 @@ fn get_filtered_program_accounts(
             RpcFilterType::Memcmp(compare) => compare.bytes_match(&account.data),
         })
     })
-    .into_iter()
+}
+
+/// Get an iterator of spl-token accounts by owner address
+fn get_filtered_spl_token_accounts_by_owner(
+    bank: &Arc<Bank>,
+    owner_key: &Pubkey,
+    filters: Vec<RpcFilterType>,
+) -> Vec<(Pubkey, Account)> {
+    bank.get_filtered_indexed_accounts(&IndexKey::TokenOwner(*owner_key), |account| {
+        filters.iter().all(|filter_type| match filter_type {
+            RpcFilterType::DataSize(size) => account.data.len() as u64 == *size,
+            RpcFilterType::Memcmp(compare) => compare.bytes_match(&account.data),
+        })
+    })
+}
+
+/// Get an iterator of spl-token accounts by mint address
+fn get_filtered_spl_token_accounts_by_mint(
+    bank: &Arc<Bank>,
+    mint_key: &Pubkey,
+    filters: Vec<RpcFilterType>,
+) -> Vec<(Pubkey, Account)> {
+    bank.get_filtered_indexed_accounts(&IndexKey::Mint(*mint_key), |account| {
+        filters.iter().all(|filter_type| match filter_type {
+            RpcFilterType::DataSize(size) => account.data.len() as u64 == *size,
+            RpcFilterType::Memcmp(compare) => compare.bytes_match(&account.data),
+        })
+    })
 }
 
 pub(crate) fn get_parsed_token_account(
