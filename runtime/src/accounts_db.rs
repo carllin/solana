@@ -1373,7 +1373,7 @@ impl AccountsDB {
                     let accounts = storage.accounts.accounts(0);
                     let mut retval = B::default();
                     accounts.into_iter().for_each(|stored_account| {
-                        scan_func(stored_account, storage.id, &mut retval)
+                        scan_func(&stored_account, storage.id, &mut retval)
                     });
                     retval
                 })
