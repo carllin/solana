@@ -2271,6 +2271,7 @@ impl AccountsDB {
                 .upsert(slot, pubkey, info, &mut reclaims);
             self.accounts_index.update_secondary_indexes(
                 pubkey,
+                slot,
                 &pubkey_account.1.owner,
                 &pubkey_account.1.data,
             );
@@ -2680,6 +2681,7 @@ impl AccountsDB {
                             .or_insert_with(Vec::new);
                         self.accounts_index.update_secondary_indexes(
                             &stored_account.meta.pubkey,
+                            *slot,
                             &stored_account.account_meta.owner,
                             &stored_account.data,
                         );
