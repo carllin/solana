@@ -44,6 +44,13 @@ pub enum IndexKey {
     Mint(Pubkey),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum IndexType {
+    ProgramId,
+    TokenOwner,
+    Mint,
+}
+
 #[derive(Debug)]
 pub struct AccountMapEntryInner<T> {
     ref_count: AtomicU64,
@@ -852,16 +859,24 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         slot: Slot,
         account_owner: &Pubkey,
         account_data: &[u8],
+        supported_indexes: &[IndexType],
     ) {
-        self.program_id_index.insert(account_owner, pubkey, slot);
+        if supported_indexes.contains(&IndexType::ProgramId) {
+            self.program_id_index.insert(account_owner, pubkey, slot);
+        }
         if *account_owner == inline_spl_token_v2_0::id()
             && account_data.len() == inline_spl_token_v2_0::state::Account::get_packed_len()
         {
-            let mint_key = Pubkey::new(&account_data[..PUBKEY_BYTES]);
-            self.mint_index.insert(&mint_key, pubkey, slot);
+            if supported_indexes.contains(&IndexType::Mint) {
+                let mint_key = Pubkey::new(&account_data[..PUBKEY_BYTES]);
+                self.mint_index.insert(&mint_key, pubkey, slot);
+            }
 
-            let owner_key = Pubkey::new(&account_data[PUBKEY_BYTES..PUBKEY_BYTES + PUBKEY_BYTES]);
-            self.token_owner_index.insert(&owner_key, pubkey, slot);
+            if supported_indexes.contains(&IndexType::TokenOwner) {
+                let owner_key =
+                    Pubkey::new(&account_data[PUBKEY_BYTES..PUBKEY_BYTES + PUBKEY_BYTES]);
+                self.token_owner_index.insert(&owner_key, pubkey, slot);
+            }
         }
     }
 
@@ -1608,6 +1623,7 @@ mod tests {
             slot,
             &Pubkey::default(),
             &correct_account_data,
+            &[IndexType::Mint],
         );
         assert!(index.mint_index.index.is_empty());
         assert!(index.mint_index.reverse_index.is_empty());
@@ -1618,6 +1634,7 @@ mod tests {
             slot,
             &inline_spl_token_v2_0::id(),
             &correct_account_data[1..],
+            &[IndexType::Mint],
         );
         assert!(index.mint_index.index.is_empty());
         assert!(index.mint_index.reverse_index.is_empty());
@@ -1628,6 +1645,7 @@ mod tests {
             slot,
             &inline_spl_token_v2_0::id(),
             &correct_account_data,
+            &[IndexType::Mint],
         );
         check_secondary_index_unique(&index.mint_index, slot, &mint_key, &account_key);
 
@@ -1663,6 +1681,7 @@ mod tests {
             slot,
             &inline_spl_token_v2_0::id(),
             &account_data1,
+            &[IndexType::Mint],
         );
 
         // Now write a different mint index
@@ -1672,6 +1691,7 @@ mod tests {
             slot,
             &inline_spl_token_v2_0::id(),
             &account_data2,
+            &[IndexType::Mint],
         );
 
         // Check correctness
@@ -1688,6 +1708,7 @@ mod tests {
             fork,
             &inline_spl_token_v2_0::id(),
             &account_data1,
+            &[IndexType::Mint],
         );
         assert_eq!(index.mint_index.get(&mint_key1), vec![account_key]);
 
