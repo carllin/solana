@@ -1538,8 +1538,7 @@ pub fn main() {
         bind_address
     };
 
-    let mut account_indexes: Vec<AccountIndex> = vec![];
-    for index in matches
+    let account_indexes: HashSet<AccountIndex> = matches
         .values_of("account_indexes")
         .unwrap_or_default()
         .map(|value| match value {
@@ -1548,11 +1547,7 @@ pub fn main() {
             "spl-token-owner" => AccountIndex::SplTokenOwner,
             _ => unreachable!(),
         })
-    {
-        if !account_indexes.contains(&index) {
-            account_indexes.push(index);
-        }
-    }
+        .collect();
 
     let restricted_repair_only_mode = matches.is_present("restricted_repair_only_mode");
     let mut validator_config = ValidatorConfig {

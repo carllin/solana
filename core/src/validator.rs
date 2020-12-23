@@ -108,7 +108,7 @@ pub struct ValidatorConfig {
     pub debug_keys: Option<Arc<HashSet<Pubkey>>>,
     pub send_transaction_retry_ms: u64,
     pub send_transaction_leader_forward_count: u64,
-    pub account_indexes: Vec<AccountIndex>,
+    pub account_indexes: HashSet<AccountIndex>,
 }
 
 impl Default for ValidatorConfig {
@@ -147,7 +147,7 @@ impl Default for ValidatorConfig {
             debug_keys: None,
             send_transaction_retry_ms: 2000,
             send_transaction_leader_forward_count: 2,
-            account_indexes: Vec::new(),
+            account_indexes: HashSet::new(),
         }
     }
 }
