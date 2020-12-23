@@ -27,7 +27,7 @@ use solana_download_utils::{download_genesis_if_missing, download_snapshot};
 use solana_ledger::blockstore_db::BlockstoreRecoveryMode;
 use solana_perf::recycler::enable_recycler_warming;
 use solana_runtime::{
-    accounts_index::IndexType,
+    accounts_index::AccountIndex,
     bank_forks::{CompressionType, SnapshotConfig, SnapshotVersion},
     hardened_unpack::{unpack_genesis_archive, MAX_GENESIS_ARCHIVE_UNPACKED_SIZE},
     snapshot_utils::get_highest_snapshot_archive_path,
@@ -1444,11 +1444,11 @@ pub fn main() {
                 .hidden(true) // Don't document this argument. It's a stub for v1.5 forward compatibility
         )
         .arg(
-            Arg::with_name("indexes")
-                .long("index")
+            Arg::with_name("account_indexes")
+                .long("account-index")
                 .takes_value(true)
                 .multiple(true)
-                .possible_values(&["program-id", "token-owner", "token-mint"])
+                .possible_values(&["program-id", "spl-token-owner", "spl-token-mint"])
                 .value_name("INDEX")
                 .help("Enable an accounts index, indexed by the selected account field"),
         )
@@ -1527,19 +1527,19 @@ pub fn main() {
         bind_address
     };
 
-    let mut supported_indexes: Vec<IndexType> = vec![];
+    let mut account_indexes: Vec<AccountIndex> = vec![];
     for index in matches
-        .values_of("indexes")
+        .values_of("account_indexes")
         .unwrap_or_default()
         .map(|value| match value {
-            "program-id" => IndexType::ProgramId,
-            "token-owner" => IndexType::TokenOwner,
-            "token-mint" => IndexType::Mint,
+            "program-id" => AccountIndex::ProgramId,
+            "spl-token-mint" => AccountIndex::SplTokenMint,
+            "spl-token-owner" => AccountIndex::SplTokenOwner,
             _ => unreachable!(),
         })
     {
-        if !supported_indexes.contains(&index) {
-            supported_indexes.push(index);
+        if !account_indexes.contains(&index) {
+            account_indexes.push(index);
         }
     }
 
@@ -1577,7 +1577,7 @@ pub fn main() {
                 "health_check_slot_distance",
                 u64
             ),
-            supported_indexes: supported_indexes.clone(),
+            account_indexes: account_indexes.clone(),
         },
         rpc_addrs: value_t!(matches, "rpc_port", u16).ok().map(|rpc_port| {
             (
@@ -1619,7 +1619,7 @@ pub fn main() {
             "rpc_send_transaction_leader_forward_count",
             u64
         ),
-        supported_indexes,
+        account_indexes,
         ..ValidatorConfig::default()
     };
 

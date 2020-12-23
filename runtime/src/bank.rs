@@ -8,7 +8,7 @@ use crate::{
         TransactionLoaders,
     },
     accounts_db::{ErrorCounters, SnapshotStorages},
-    accounts_index::{Ancestors, IndexKey, IndexType},
+    accounts_index::{AccountIndex, Ancestors, IndexKey},
     blockhash_queue::BlockhashQueue,
     builtins::{self, ActivationType},
     epoch_stakes::{EpochStakes, NodeVoteAccounts},
@@ -846,7 +846,7 @@ impl Bank {
     #[cfg(test)]
     pub(crate) fn new_with_indexes(
         genesis_config: &GenesisConfig,
-        supported_indexes: &[IndexType],
+        account_indexes: &[AccountIndex],
     ) -> Self {
         Self::new_with_paths(
             &genesis_config,
@@ -854,7 +854,7 @@ impl Bank {
             &[],
             None,
             None,
-            supported_indexes,
+            account_indexes,
         )
     }
 
@@ -864,7 +864,7 @@ impl Bank {
         frozen_account_pubkeys: &[Pubkey],
         debug_keys: Option<Arc<HashSet<Pubkey>>>,
         additional_builtins: Option<&Builtins>,
-        supported_indexes: &[IndexType],
+        account_indexes: &[AccountIndex],
     ) -> Self {
         let mut bank = Self::default();
         bank.transaction_debug_keys = debug_keys;
@@ -874,7 +874,7 @@ impl Bank {
         bank.rc.accounts = Arc::new(Accounts::new_with_indexes(
             paths,
             &genesis_config.cluster_type,
-            supported_indexes,
+            account_indexes,
         ));
         bank.process_genesis_config(genesis_config);
         bank.finish_init(genesis_config, additional_builtins);
@@ -8611,7 +8611,7 @@ pub(crate) mod tests {
         let (genesis_config, _mint_keypair) = create_genesis_config(500);
         let bank = Arc::new(Bank::new_with_indexes(
             &genesis_config,
-            &[IndexType::ProgramId],
+            &[AccountIndex::ProgramId],
         ));
 
         let address = Pubkey::new_unique();

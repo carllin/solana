@@ -41,7 +41,7 @@ use solana_ledger::{
 use solana_measure::measure::Measure;
 use solana_metrics::datapoint_info;
 use solana_runtime::{
-    accounts_index::IndexType,
+    accounts_index::AccountIndex,
     bank::Bank,
     bank_forks::{BankForks, SnapshotConfig},
     commitment::BlockCommitmentCache,
@@ -108,7 +108,7 @@ pub struct ValidatorConfig {
     pub debug_keys: Option<Arc<HashSet<Pubkey>>>,
     pub send_transaction_retry_ms: u64,
     pub send_transaction_leader_forward_count: u64,
-    pub supported_indexes: Vec<IndexType>,
+    pub account_indexes: Vec<AccountIndex>,
 }
 
 impl Default for ValidatorConfig {
@@ -147,7 +147,7 @@ impl Default for ValidatorConfig {
             debug_keys: None,
             send_transaction_retry_ms: 2000,
             send_transaction_leader_forward_count: 2,
-            supported_indexes: Vec::new(),
+            account_indexes: Vec::new(),
         }
     }
 }
@@ -866,7 +866,7 @@ fn new_banks_from_ledger(
         new_hard_forks: config.new_hard_forks.clone(),
         frozen_accounts: config.frozen_accounts.clone(),
         debug_keys: config.debug_keys.clone(),
-        supported_indexes: config.supported_indexes.clone(),
+        account_indexes: config.account_indexes.clone(),
         ..blockstore_processor::ProcessOptions::default()
     };
 
