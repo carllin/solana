@@ -644,7 +644,9 @@ impl<T: 'static + Clone> AccountsIndex<T> {
     ) where
         F: FnMut(&Pubkey, (&T, Slot)),
     {
+        info!("scanning by secondary index {:?}", index_key);
         for pubkey in index.get(index_key) {
+            info!("scanning by secondary index {:?}, trying: {}", index_key, pubkey);
             // Maybe these reads from the AccountsIndex can be batched everytime it
             // grabs the read lock as well...
             if let Some((list_r, index)) = self.get(&pubkey, Some(ancestors), max_root) {
@@ -652,6 +654,8 @@ impl<T: 'static + Clone> AccountsIndex<T> {
                     &pubkey,
                     (&list_r.slot_list()[index].1, list_r.slot_list()[index].0),
                 );
+            } else {
+                info!("scanning by secondary index {:?}, didn't find in main index: {}", index_key, pubkey);
             }
         }
     }
@@ -897,6 +901,7 @@ impl<T: 'static + Clone> AccountsIndex<T> {
                 let owner_key =
                     Pubkey::new(&account_data[PUBKEY_BYTES..PUBKEY_BYTES + PUBKEY_BYTES]);
                 self.spl_token_owner_index.insert(&owner_key, pubkey, slot);
+                info!("updating owner key: {} {} {}", owner_key, pubkey, slot);
             }
 
             if account_indexes.contains(&AccountIndex::SplTokenMint) {
