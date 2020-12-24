@@ -550,7 +550,7 @@ impl AccountsDB {
                 paths,
                 temp_paths: None,
                 cluster_type: Some(*cluster_type),
-                account_indexes: account_indexes,
+                account_indexes,
                 ..Self::default()
             }
         } else {
@@ -561,7 +561,7 @@ impl AccountsDB {
                 paths,
                 temp_paths: Some(temp_dirs),
                 cluster_type: Some(*cluster_type),
-                account_indexes: account_indexes,
+                account_indexes,
                 ..Self::default()
             }
         };

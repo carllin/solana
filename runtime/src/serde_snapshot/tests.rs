@@ -70,6 +70,7 @@ where
         account_paths,
         stream_append_vecs_path,
         &ClusterType::Development,
+        HashSet::new(),
     )
 }
 
