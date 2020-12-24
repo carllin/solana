@@ -327,9 +327,10 @@ impl JsonRpcRequestProcessor {
         };
         let result =
             if program_id == &spl_token_id_v2_0() && encoding == UiAccountEncoding::JsonParsed {
-                get_parsed_token_accounts(bank, keyed_accounts).collect()
+                get_parsed_token_accounts(bank, keyed_accounts.into_iter()).collect()
             } else {
                 keyed_accounts
+                    .into_iter()
                     .map(|(pubkey, account)| RpcKeyedAccount {
                         pubkey: pubkey.to_string(),
                         account: UiAccount::encode(
@@ -1215,9 +1216,10 @@ impl JsonRpcRequestProcessor {
 
         let keyed_accounts = self.get_filtered_spl_token_accounts_by_owner(&bank, owner, filters);
         let accounts = if encoding == UiAccountEncoding::JsonParsed {
-            get_parsed_token_accounts(bank.clone(), keyed_accounts).collect()
+            get_parsed_token_accounts(bank.clone(), keyed_accounts.into_iter()).collect()
         } else {
             keyed_accounts
+                .into_iter()
                 .map(|(pubkey, account)| RpcKeyedAccount {
                     pubkey: pubkey.to_string(),
                     account: UiAccount::encode(
@@ -1273,9 +1275,10 @@ impl JsonRpcRequestProcessor {
             self.get_filtered_program_accounts(&bank, &token_program_id, filters)
         };
         let accounts = if encoding == UiAccountEncoding::JsonParsed {
-            get_parsed_token_accounts(bank.clone(), keyed_accounts).collect()
+            get_parsed_token_accounts(bank.clone(), keyed_accounts.into_iter()).collect()
         } else {
             keyed_accounts
+                .into_iter()
                 .map(|(pubkey, account)| RpcKeyedAccount {
                     pubkey: pubkey.to_string(),
                     account: UiAccount::encode(
@@ -2843,7 +2846,9 @@ pub mod tests {
         blockstore_processor::fill_blockstore_slot_with_ticks,
         genesis_utils::{create_genesis_config, GenesisConfigInfo},
     };
-    use solana_runtime::commitment::BlockCommitment;
+    use solana_runtime::{
+        accounts_background_service::ABSRequestSender, commitment::BlockCommitment,
+    };
     use solana_sdk::{
         clock::MAX_RECENT_BLOCKHASHES,
         fee_calculator::DEFAULT_BURN_PERCENT,
@@ -2944,7 +2949,10 @@ pub mod tests {
             bank_forks.write().unwrap().insert(new_bank);
 
             for root in roots.iter() {
-                bank_forks.write().unwrap().set_root(*root, &None, Some(0));
+                bank_forks
+                    .write()
+                    .unwrap()
+                    .set_root(*root, &ABSRequestSender::default(), Some(0));
                 let mut stakes = HashMap::new();
                 stakes.insert(leader_vote_keypair.pubkey(), (1, Account::default()));
                 let block_time = bank_forks
@@ -4617,8 +4625,10 @@ pub mod tests {
         let ledger_path = get_tmp_ledger_path!();
         let blockstore = Arc::new(Blockstore::open(&ledger_path).unwrap());
         let block_commitment_cache = Arc::new(RwLock::new(BlockCommitmentCache::default()));
-        let mut config = JsonRpcConfig::default();
-        config.enable_validator_exit = true;
+        let config = JsonRpcConfig {
+            enable_validator_exit: true,
+            ..JsonRpcConfig::default()
+        };
         let bank_forks = new_bank_forks().0;
         let cluster_info = Arc::new(ClusterInfo::default());
         let tpu_address = cluster_info.my_contact_info().tpu;
@@ -4707,8 +4717,10 @@ pub mod tests {
             CommitmentSlots::new_from_slot(bank_forks.read().unwrap().highest_slot()),
         )));
 
-        let mut config = JsonRpcConfig::default();
-        config.enable_validator_exit = true;
+        let config = JsonRpcConfig {
+            enable_validator_exit: true,
+            ..JsonRpcConfig::default()
+        };
         let cluster_info = Arc::new(ClusterInfo::default());
         let tpu_address = cluster_info.my_contact_info().tpu;
         let (request_processor, receiver) = JsonRpcRequestProcessor::new(
