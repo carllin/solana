@@ -1,4 +1,6 @@
-use crate::inline_spl_token_v2_0;
+use crate::inline_spl_token_v2_0::{
+    self, SPL_TOKEN_ACCOUNT_MINT_OFFSET, SPL_TOKEN_ACCOUNT_OWNER_OFFSET,
+};
 use dashmap::DashMap;
 use log::*;
 use ouroboros::self_referencing;
@@ -646,7 +648,10 @@ impl<T: 'static + Clone> AccountsIndex<T> {
     {
         info!("scanning by secondary index {:?}", index_key);
         for pubkey in index.get(index_key) {
-            info!("scanning by secondary index {:?}, trying: {}", index_key, pubkey);
+            info!(
+                "scanning by secondary index {:?}, trying: {}",
+                index_key, pubkey
+            );
             // Maybe these reads from the AccountsIndex can be batched everytime it
             // grabs the read lock as well...
             if let Some((list_r, index)) = self.get(&pubkey, Some(ancestors), max_root) {
@@ -655,7 +660,10 @@ impl<T: 'static + Clone> AccountsIndex<T> {
                     (&list_r.slot_list()[index].1, list_r.slot_list()[index].0),
                 );
             } else {
-                info!("scanning by secondary index {:?}, didn't find in main index: {}", index_key, pubkey);
+                info!(
+                    "scanning by secondary index {:?}, didn't find in main index: {}",
+                    index_key, pubkey
+                );
             }
         }
     }
@@ -898,14 +906,19 @@ impl<T: 'static + Clone> AccountsIndex<T> {
             && account_data.len() == inline_spl_token_v2_0::state::Account::get_packed_len()
         {
             if account_indexes.contains(&AccountIndex::SplTokenOwner) {
-                let owner_key =
-                    Pubkey::new(&account_data[PUBKEY_BYTES..PUBKEY_BYTES + PUBKEY_BYTES]);
+                let owner_key = Pubkey::new(
+                    &account_data[SPL_TOKEN_ACCOUNT_OWNER_OFFSET
+                        ..SPL_TOKEN_ACCOUNT_OWNER_OFFSET + PUBKEY_BYTES],
+                );
                 self.spl_token_owner_index.insert(&owner_key, pubkey, slot);
                 info!("updating owner key: {} {} {}", owner_key, pubkey, slot);
             }
 
             if account_indexes.contains(&AccountIndex::SplTokenMint) {
-                let mint_key = Pubkey::new(&account_data[..PUBKEY_BYTES]);
+                let mint_key = Pubkey::new(
+                    &account_data[SPL_TOKEN_ACCOUNT_MINT_OFFSET
+                        ..SPL_TOKEN_ACCOUNT_MINT_OFFSET + PUBKEY_BYTES],
+                );
                 self.spl_token_mint_index.insert(&mint_key, pubkey, slot);
             }
         }

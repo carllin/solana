@@ -39,6 +39,7 @@ use solana_sdk::{
     pubkey::Pubkey,
 };
 use std::convert::TryFrom;
+use std::str::FromStr;
 use std::{
     boxed::Box,
     collections::{HashMap, HashSet},
@@ -2672,6 +2673,10 @@ impl AccountsDB {
         slots.sort();
 
         let mut last_log_update = Instant::now();
+        let buggy_keys = vec![
+            Pubkey::from_str("F9a1iwXCGZfbzkt6RhzBUSYvMjYXWLS9B5dif7yQRPgK").unwrap(),
+            Pubkey::from_str("3gEbMaJLmoAxwqFp9D3YyuQrruwMqL6kK36ExC2Pk3dF").unwrap(),
+        ];
         for (index, slot) in slots.iter().enumerate() {
             let now = Instant::now();
             if now.duration_since(last_log_update).as_secs() >= 10 {
@@ -2693,6 +2698,17 @@ impl AccountsDB {
                         let entry = accum
                             .entry(stored_account.meta.pubkey)
                             .or_insert_with(Vec::new);
+                        if buggy_keys.contains(&stored_account.meta.pubkey) {
+                            let token_owner = Pubkey::new(&stored_account.data[32..64]);
+                            info!(
+                                "Found buggy key: {}, token_owner {}, owner {}, len {} {:?}",
+                                stored_account.meta.pubkey,
+                                token_owner,
+                                stored_account.account_meta.owner,
+                                stored_account.data.len(),
+                                self.account_indexes
+                            );
+                        }
                         self.accounts_index.update_secondary_indexes(
                             &stored_account.meta.pubkey,
                             *slot,
