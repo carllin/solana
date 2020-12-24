@@ -646,7 +646,6 @@ impl<T: 'static + Clone> AccountsIndex<T> {
     ) where
         F: FnMut(&Pubkey, (&T, Slot)),
     {
-        info!("scanning by secondary index {:?}", index_key);
         for pubkey in index.get(index_key) {
             info!(
                 "scanning by secondary index {:?}, trying: {}",
@@ -911,7 +910,6 @@ impl<T: 'static + Clone> AccountsIndex<T> {
                         ..SPL_TOKEN_ACCOUNT_OWNER_OFFSET + PUBKEY_BYTES],
                 );
                 self.spl_token_owner_index.insert(&owner_key, pubkey, slot);
-                info!("updating owner key: {} {} {}", owner_key, pubkey, slot);
             }
 
             if account_indexes.contains(&AccountIndex::SplTokenMint) {
