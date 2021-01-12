@@ -104,6 +104,7 @@ args=(
   --enable-rpc-transaction-history
   --init-complete-file "$dataDir"/init-completed
   --require-tower
+  --accounts-db-caching-enabled
 )
 # shellcheck disable=SC2086
 solana-validator "${args[@]}" $SOLANA_RUN_SH_VALIDATOR_ARGS &

@@ -341,6 +341,7 @@ pub struct ProcessOptions {
     pub frozen_accounts: Vec<Pubkey>,
     pub debug_keys: Option<Arc<HashSet<Pubkey>>>,
     pub account_indexes: HashSet<AccountIndex>,
+    pub accounts_db_caching_enabled: bool,
 }
 
 pub fn process_blockstore(
@@ -366,6 +367,7 @@ pub fn process_blockstore(
         opts.debug_keys.clone(),
         Some(&crate::builtins::get()),
         opts.account_indexes.clone(),
+        opts.accounts_db_caching_enabled,
     );
     let bank0 = Arc::new(bank0);
     info!("processing ledger for slot 0...");
@@ -926,12 +928,12 @@ fn load_frozen_forks(
         if let Some(new_root_bank) = new_root_bank {
             *root = new_root_bank.slot();
             last_root = new_root_bank.slot();
-
             leader_schedule_cache.set_root(&new_root_bank);
             new_root_bank.squash();
 
             if last_free.elapsed() > Duration::from_secs(10) {
-                // This could take few secs; so update last_free later
+                // Must be called after `squash()`, so that AccountsDb knows what
+                // the roots are for the cache flushing in exhaustively_free_unused_resource().
                 new_root_bank.exhaustively_free_unused_resource();
                 last_free = Instant::now();
             }
@@ -2876,6 +2878,7 @@ pub mod tests {
             None,
             None,
             HashSet::new(),
+            false,
         );
         *bank.epoch_schedule()
     }

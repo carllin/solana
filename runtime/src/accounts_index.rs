@@ -34,6 +34,22 @@ pub type AccountMap<K, V> = BTreeMap<K, V>;
 
 type AccountMapEntry<T> = Arc<AccountMapEntryInner<T>>;
 
+pub trait IsCached {
+    fn is_cached(&self) -> bool;
+}
+
+impl IsCached for bool {
+    fn is_cached(&self) -> bool {
+        false
+    }
+}
+
+impl IsCached for u64 {
+    fn is_cached(&self) -> bool {
+        false
+    }
+}
+
 enum ScanTypes<R: RangeBounds<Pubkey>> {
     Unindexed(Option<R>),
     Indexed(IndexKey),
@@ -220,7 +236,7 @@ pub struct AccountsIndex<T> {
     ongoing_scan_roots: RwLock<BTreeMap<Slot, u64>>,
 }
 
-impl<T: 'static + Clone> AccountsIndex<T> {
+impl<T: 'static + Clone + IsCached> AccountsIndex<T> {
     fn iter<R>(&self, range: Option<R>) -> AccountsIndexIterator<T>
     where
         R: RangeBounds<Pubkey>,
@@ -596,22 +612,24 @@ impl<T: 'static + Clone> AccountsIndex<T> {
     pub fn purge_exact(
         &self,
         pubkey: &Pubkey,
-        slots: HashSet<Slot>,
+        slots_to_purge: &HashSet<Slot>,
+        reclaims: &mut SlotList<T>,
         account_indexes: &HashSet<AccountIndex>,
-    ) -> (SlotList<T>, bool) {
+    ) -> bool {
         let res = {
             let mut write_account_map_entry = self.get_account_write_entry(pubkey).unwrap();
             write_account_map_entry.slot_list_mut(|slot_list| {
-                let reclaims = slot_list
-                    .iter()
-                    .filter(|(slot, _)| slots.contains(&slot))
-                    .cloned()
-                    .collect();
-                slot_list.retain(|(slot, _)| !slots.contains(slot));
-                (reclaims, slot_list.is_empty())
+                slot_list.retain(|(slot, item)| {
+                    let should_purge = slots_to_purge.contains(&slot);
+                    if should_purge {
+                        reclaims.push((*slot, item.clone()));
+                    }
+                    !should_purge
+                });
+                slot_list.is_empty()
             })
         };
-        self.purge_secondary_indexes_by_inner_key(pubkey, Some(&slots), account_indexes);
+        self.purge_secondary_indexes_by_inner_key(pubkey, Some(&slots_to_purge), account_indexes);
         res
     }
 
@@ -824,7 +842,7 @@ impl<T: 'static + Clone> AccountsIndex<T> {
 
         let mut purged_slots: HashSet<Slot> = HashSet::new();
         list.retain(|(slot, value)| {
-            let should_purge = Self::can_purge(max_root, *slot);
+            let should_purge = Self::can_purge(max_root, *slot) && !value.is_cached();
             if should_purge {
                 reclaims.push((*slot, value.clone()));
                 purged_slots.insert(*slot);
@@ -835,6 +853,7 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         self.purge_secondary_indexes_by_inner_key(pubkey, Some(&purged_slots), account_indexes);
     }
 
+    // `is_cached` closure is needed to work around the generic (`T`) indexed type.
     pub fn clean_rooted_entries(
         &self,
         pubkey: &Pubkey,
@@ -855,28 +874,6 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         }
     }
 
-    pub fn clean_unrooted_entries_by_slot(
-        &self,
-        purge_slot: Slot,
-        pubkey: &Pubkey,
-        reclaims: &mut SlotList<T>,
-        account_indexes: &HashSet<AccountIndex>,
-    ) {
-        if let Some(mut locked_entry) = self.get_account_write_entry(pubkey) {
-            locked_entry.slot_list_mut(|slot_list| {
-                slot_list.retain(|(slot, entry)| {
-                    if *slot == purge_slot {
-                        reclaims.push((*slot, entry.clone()));
-                    }
-                    *slot != purge_slot
-                });
-            });
-        }
-
-        let purge_slot: HashSet<Slot> = vec![purge_slot].into_iter().collect();
-        self.purge_secondary_indexes_by_inner_key(pubkey, Some(&purge_slot), account_indexes);
-    }
-
     pub fn can_purge(max_root: Slot, slot: Slot) -> bool {
         slot < max_root
     }
@@ -885,11 +882,24 @@ impl<T: 'static + Clone> AccountsIndex<T> {
         self.roots_tracker.read().unwrap().roots.contains(&slot)
     }
 
-    pub fn add_root(&self, slot: Slot) {
+    pub fn add_root(&self, slot: Slot, caching_enabled: bool) {
         let mut w_roots_tracker = self.roots_tracker.write().unwrap();
         w_roots_tracker.roots.insert(slot);
-        w_roots_tracker.uncleaned_roots.insert(slot);
-        w_roots_tracker.max_root = std::cmp::max(slot, w_roots_tracker.max_root);
+        // we delay cleaning until flushing!
+        if !caching_enabled {
+            w_roots_tracker.uncleaned_roots.insert(slot);
+        }
+        // `AccountsDb::flush_accounts_cache()` relies on roots being added in order
+        assert!(slot >= w_roots_tracker.max_root);
+        w_roots_tracker.max_root = slot;
+    }
+
+    pub fn add_uncleaned_roots<I>(&self, roots: I)
+    where
+        I: IntoIterator<Item = Slot>,
+    {
+        let mut w_roots_tracker = self.roots_tracker.write().unwrap();
+        w_roots_tracker.uncleaned_roots.extend(roots);
     }
 
     fn max_root(&self) -> Slot {
@@ -899,10 +909,29 @@ impl<T: 'static + Clone> AccountsIndex<T> {
     /// Remove the slot when the storage for the slot is freed
     /// Accounts no longer reference this slot.
     pub fn clean_dead_slot(&self, slot: Slot) {
-        let mut w_roots_tracker = self.roots_tracker.write().unwrap();
-        w_roots_tracker.roots.remove(&slot);
-        w_roots_tracker.uncleaned_roots.remove(&slot);
-        w_roots_tracker.previous_uncleaned_roots.remove(&slot);
+        if self.is_root(slot) {
+            let (roots_len, uncleaned_roots_len, previous_uncleaned_roots_len) = {
+                let mut w_roots_tracker = self.roots_tracker.write().unwrap();
+                w_roots_tracker.roots.remove(&slot);
+                w_roots_tracker.uncleaned_roots.remove(&slot);
+                w_roots_tracker.previous_uncleaned_roots.remove(&slot);
+                (
+                    w_roots_tracker.roots.len(),
+                    w_roots_tracker.uncleaned_roots.len(),
+                    w_roots_tracker.previous_uncleaned_roots.len(),
+                )
+            };
+            datapoint_info!(
+                "accounts_index_roots_len",
+                ("roots_len", roots_len as i64, i64),
+                ("uncleaned_roots_len", uncleaned_roots_len as i64, i64),
+                (
+                    "previous_uncleaned_roots_len",
+                    previous_uncleaned_roots_len as i64,
+                    i64
+                ),
+            );
+        }
     }
 
     pub fn reset_uncleaned_roots(&self, max_clean_root: Option<Slot>) -> HashSet<Slot> {
@@ -1140,7 +1169,7 @@ pub mod tests {
             );
         }
 
-        index.add_root(root_slot);
+        index.add_root(root_slot, false);
 
         (index, pubkeys)
     }
@@ -1276,7 +1305,7 @@ pub mod tests {
     fn test_is_root() {
         let index = AccountsIndex::<bool>::default();
         assert!(!index.is_root(0));
-        index.add_root(0);
+        index.add_root(0, false);
         assert!(index.is_root(0));
     }
 
@@ -1296,7 +1325,7 @@ pub mod tests {
         );
         assert!(gc.is_empty());
 
-        index.add_root(0);
+        index.add_root(0, false);
         let (list, idx) = index.get(&key.pubkey(), None, None).unwrap();
         assert_eq!(list.slot_list()[idx], (0, true));
     }
@@ -1304,8 +1333,8 @@ pub mod tests {
     #[test]
     fn test_clean_first() {
         let index = AccountsIndex::<bool>::default();
-        index.add_root(0);
-        index.add_root(1);
+        index.add_root(0, false);
+        index.add_root(1, false);
         index.clean_dead_slot(0);
         assert!(index.is_root(1));
         assert!(!index.is_root(0));
@@ -1315,8 +1344,8 @@ pub mod tests {
     fn test_clean_last() {
         //this behavior might be undefined, clean up should only occur on older slots
         let index = AccountsIndex::<bool>::default();
-        index.add_root(0);
-        index.add_root(1);
+        index.add_root(0, false);
+        index.add_root(1, false);
         index.clean_dead_slot(1);
         assert!(!index.is_root(1));
         assert!(index.is_root(0));
@@ -1326,8 +1355,8 @@ pub mod tests {
     fn test_clean_and_unclean_slot() {
         let index = AccountsIndex::<bool>::default();
         assert_eq!(0, index.roots_tracker.read().unwrap().uncleaned_roots.len());
-        index.add_root(0);
-        index.add_root(1);
+        index.add_root(0, false);
+        index.add_root(1, false);
         assert_eq!(2, index.roots_tracker.read().unwrap().uncleaned_roots.len());
 
         assert_eq!(
@@ -1352,8 +1381,8 @@ pub mod tests {
                 .len()
         );
 
-        index.add_root(2);
-        index.add_root(3);
+        index.add_root(2, false);
+        index.add_root(3, false);
         assert_eq!(4, index.roots_tracker.read().unwrap().roots.len());
         assert_eq!(2, index.roots_tracker.read().unwrap().uncleaned_roots.len());
         assert_eq!(
@@ -1504,9 +1533,9 @@ pub mod tests {
             true,
             &mut gc,
         );
-        index.add_root(0);
-        index.add_root(1);
-        index.add_root(3);
+        index.add_root(0, false);
+        index.add_root(1, false);
+        index.add_root(3, false);
         index.upsert(
             4,
             &key.pubkey(),
@@ -1563,7 +1592,7 @@ pub mod tests {
 
         let purges = index.purge_roots(&key.pubkey());
         assert_eq!(purges, (vec![], false));
-        index.add_root(1);
+        index.add_root(1, false);
 
         let purges = index.purge_roots(&key.pubkey());
         assert_eq!(purges, (vec![(1, 10)], true));
@@ -1588,7 +1617,7 @@ pub mod tests {
         assert!(index.latest_slot(None, &slot_slice, None).is_none());
 
         // Given a root, should return the root
-        index.add_root(5);
+        index.add_root(5, false);
         assert_eq!(index.latest_slot(None, &slot_slice, None).unwrap(), 1);
 
         // Given a max_root == root, should still return the root
@@ -1670,7 +1699,12 @@ pub mod tests {
             slots.len()
         );
 
-        index.purge_exact(&account_key, slots.into_iter().collect(), account_index);
+        index.purge_exact(
+            &account_key,
+            &slots.into_iter().collect(),
+            &mut vec![],
+            account_index,
+        );
 
         assert!(secondary_index.index.is_empty());
         assert!(secondary_index.reverse_index.is_empty());
@@ -1720,9 +1754,9 @@ pub mod tests {
 
         // Add a later root, earlier slots should be reclaimed
         slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
-        index.add_root(1);
+        index.add_root(1, false);
         // Note 2 is not a root
-        index.add_root(5);
+        index.add_root(5, false);
         reclaims = vec![];
         index.purge_older_root_entries(
             &Pubkey::default(),
@@ -1736,7 +1770,7 @@ pub mod tests {
 
         // Add a later root that is not in the list, should not affect the outcome
         slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
-        index.add_root(6);
+        index.add_root(6, false);
         reclaims = vec![];
         index.purge_older_root_entries(
             &Pubkey::default(),
@@ -1981,7 +2015,7 @@ pub mod tests {
         assert!(secondary_index.get(&secondary_key1).is_empty());
         assert_eq!(secondary_index.get(&secondary_key2), vec![account_key]);
 
-        // If another fork reintroduces secondary_key1, then it should be readded to the
+        // If another fork reintroduces secondary_key1, then it should be re-added to the
         // index
         let fork = slot + 1;
         index.upsert(
@@ -1997,7 +2031,7 @@ pub mod tests {
 
         // If we set a root at fork, and clean, then the secondary_key1 should no longer
         // be findable
-        index.add_root(fork);
+        index.add_root(fork, false);
         index
             .get_account_write_entry(&account_key)
             .unwrap()
