@@ -1349,6 +1349,7 @@ impl ClusterInfo {
             || !ContactInfo::is_valid_address(&contact_info.tvu)
     }
 
+    // sort stake lowest to highest, returns "1" for unstaked nodes
     fn sorted_stakes_with_index<S: std::hash::BuildHasher>(
         peers: &[ContactInfo],
         stakes: Option<Arc<HashMap<Pubkey, u64, S>>>,

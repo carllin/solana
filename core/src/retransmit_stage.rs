@@ -269,6 +269,7 @@ fn retransmit(
     drop(r_lock);
 
     let mut epoch_fetch = Measure::start("retransmit_epoch_fetch");
+    // Why is this based on the working bank can be dramatically different
     let r_bank = bank_forks.read().unwrap().working_bank();
     let bank_epoch = r_bank.get_leader_schedule_epoch(r_bank.slot());
     epoch_fetch.stop();
@@ -295,9 +296,12 @@ fn retransmit(
     {
         drop(r_epoch_stakes_cache);
         let mut w_epoch_stakes_cache = epoch_stakes_cache.write().unwrap();
+        // Get the retransmit peers by observing gossip, add yourself. Your own entry
+        // is removed after shuffle
         let (peers, stakes_and_index) =
             cluster_info.sorted_retransmit_peers_and_stakes(w_epoch_stakes_cache.stakes.clone());
         w_epoch_stakes_cache.peers = peers;
+        // Cache can have really old entries/outdated peers
         w_epoch_stakes_cache.stakes_and_index = stakes_and_index;
         drop(w_epoch_stakes_cache);
         r_epoch_stakes_cache = epoch_stakes_cache.read().unwrap();
@@ -342,6 +346,24 @@ fn retransmit(
                 &r_epoch_stakes_cache.stakes_and_index,
                 packet.meta.seed,
             );
+
+            let shuffled_peers: Vec<_> = shuffled_stakes_and_index
+                .iter()
+                .map(|(stake, index)| (*stake, r_epoch_stakes_cache.peers[*index].id))
+                .collect();
+            if packet.meta.seed[0] == 0 {
+                info!(
+                    "Debug retransmit, 
+                    seed: {:?},
+                    epoch: {},
+                    stakes_and_index: {:#?},
+                    shuffled_peers: {:#?}",
+                    packet.meta.seed,
+                    bank_epoch,
+                    r_epoch_stakes_cache.stakes_and_index,
+                    shuffled_peers
+                );
+            }
             peers_len = cmp::max(peers_len, shuffled_stakes_and_index.len());
             shuffled_stakes_and_index.remove(my_index);
             // split off the indexes, we don't need the stakes anymore
@@ -349,9 +371,17 @@ fn retransmit(
                 .into_iter()
                 .map(|(_, index)| index)
                 .collect();
-
             let (neighbors, children) =
                 compute_retransmit_peers(DATA_PLANE_FANOUT, my_index, indexes);
+            if packet.meta.seed[0] == 0 {
+                info!(
+                    "Debug retransmit compute, 
+                    seed: {:?},
+                    neighbors: {:#?},
+                    children: {:#?}",
+                    packet.meta.seed, neighbors, children,
+                );
+            }
             let neighbors: Vec<_> = neighbors
                 .into_iter()
                 .map(|index| &r_epoch_stakes_cache.peers[index])
