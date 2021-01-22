@@ -22,7 +22,7 @@ use crate::{
     accounts_cache::{AccountsCache, CachedAccount, SlotCache},
     accounts_index::{
         AccountIndex, AccountsIndex, AccountsIndexRootsStats, Ancestors, IndexKey, IsCached,
-        SlotList, SlotSlice, ZeroLamport
+        SlotList, SlotSlice, ZeroLamport,
     },
     append_vec::{AppendVec, StoredAccountMeta, StoredMeta},
     contains::Contains,
@@ -643,8 +643,8 @@ pub struct AccountsDB {
     clean_accounts_stats: CleanAccountsStats,
 
     // Stats for purges called outside of clean_accounts()
-    purge_slots_stats: PurgeStats,
-    
+    external_purge_slots_stats: PurgeStats,
+
     shrink_stats: ShrinkStats,
 
     pub cluster_type: Option<ClusterType>,
@@ -699,16 +699,18 @@ struct PurgeStats {
 }
 
 impl PurgeStats {
-    fn report(&self, metric_name: &'static str, report_interval_ms: Option<usize>) {
-        let should_report = report_interval_ms.map(|report_interval| {
-            let last = self.last_report.load(Ordering::Relaxed);
-            let now = solana_sdk::timing::timestamp();
-            now.saturating_sub(last) > report_interval_ms
-                && self
-                    .last_store_report
-                    .compare_and_swap(last, now, Ordering::Relaxed)
-                    == last
-        }).unwrap_or(true);
+    fn report(&self, metric_name: &'static str, report_interval_ms: Option<u64>) {
+        let should_report = report_interval_ms
+            .map(|report_interval_ms| {
+                let last = self.last_report.load(Ordering::Relaxed);
+                let now = solana_sdk::timing::timestamp();
+                now.saturating_sub(last) > report_interval_ms
+                    && self
+                        .last_report
+                        .compare_and_swap(last, now, Ordering::Relaxed)
+                        == last
+            })
+            .unwrap_or(true);
 
         if should_report {
             datapoint_info!(
@@ -899,6 +901,7 @@ impl Default for AccountsDB {
             min_num_stores: num_threads,
             bank_hashes: RwLock::new(bank_hashes),
             frozen_accounts: HashMap::new(),
+            external_purge_slots_stats: PurgeStats::default(),
             clean_accounts_stats: CleanAccountsStats::default(),
             shrink_stats: ShrinkStats::default(),
             stats: AccountsStats::default(),
@@ -1501,7 +1504,7 @@ impl AccountsDB {
         clean_dead_slots.stop();
 
         let mut purge_removed_slots = Measure::start("reclaims::purge_removed_slots");
-        self.purge_removed_slots_from_store(&dead_slots);
+        self.purge_storage_slots(&dead_slots);
         purge_removed_slots.stop();
 
         // If the slot is dead, remove the need to shrink the storages as
@@ -1665,9 +1668,9 @@ impl AccountsDB {
         }
         rewrite_elapsed.stop();
 
-        let mut recycle_stores_write_time = Measure::start("recycle_stores_write_time");
+        let mut recycle_stores_write_elapsed = Measure::start("recycle_stores_write_time");
         let mut recycle_stores = self.recycle_stores.write().unwrap();
-        recycle_stores_write_time.stop();
+        recycle_stores_write_elapsed.stop();
 
         let mut drop_storage_entries_elapsed = Measure::start("drop_storage_entries_elapsed");
         if recycle_stores.len() < MAX_RECYCLE_STORES {
@@ -1714,8 +1717,8 @@ impl AccountsDB {
                 i64
             ),
             (
-                "recycle_stores_write_time",
-                recycle_stores_write_time.as_us(),
+                "recycle_stores_write_elapsed",
+                recycle_stores_write_elapsed.as_us(),
                 i64
             ),
             ("total_starting_accounts", total_starting_accounts, i64),
@@ -1932,9 +1935,9 @@ impl AccountsDB {
         }
         rewrite_elapsed.stop();
 
-        let mut recycle_stores_write_time = Measure::start("recycle_stores_write_time");
+        let mut recycle_stores_write_elapsed = Measure::start("recycle_stores_write_elapsed");
         let mut recycle_stores = self.recycle_stores.write().unwrap();
-        recycle_stores_write_time.stop();
+        recycle_stores_write_elapsed.stop();
 
         let mut drop_storage_entries_elapsed = Measure::start("drop_storage_entries_elapsed");
         if recycle_stores.len() < MAX_RECYCLE_STORES {
@@ -1982,8 +1985,8 @@ impl AccountsDB {
                 i64
             ),
             (
-                "recycle_stores_write_time",
-                recycle_stores_write_time.as_us(),
+                "recycle_stores_write_elapsed",
+                recycle_stores_write_elapsed.as_us(),
                 i64
             ),
         );
@@ -2634,9 +2637,9 @@ impl AccountsDB {
     ) -> u64 {
         let mut recycled_count = 0;
 
-        let mut recycle_stores_write_time = Measure::start("recycle_stores_write_time");
+        let mut recycle_stores_write_elapsed = Measure::start("recycle_stores_write_elapsed");
         let mut recycle_stores = self.recycle_stores.write().unwrap();
-        recycle_stores_write_time.stop();
+        recycle_stores_write_elapsed.stop();
 
         for slot_entries in slot_stores {
             let entry = slot_entries.read().unwrap();
@@ -2646,121 +2649,32 @@ impl AccountsDB {
                     self.stats
                         .dropped_stores
                         .fetch_add(dropped_count as u64, Ordering::Relaxed);
-                    return recycle_stores_write_time.as_us();
+                    return recycle_stores_write_elapsed.as_us();
                 }
                 recycle_stores.push(stores.clone());
                 recycled_count += 1;
             }
         }
-        recycle_stores_write_time.as_us()
+        recycle_stores_write_elapsed.as_us()
     }
 
-    /// # Arguments
-    /// * `removed_slots` - Slots that were previously rooted but just removed
-    fn purge_removed_slots_from_store(&self, removed_slots: &HashSet<Slot>) {
-        // Check all slots `removed_slots` are no longer rooted
-        let mut safety_checks_elapsed = Measure::start("safety_checks_elapsed");
-        for slot in removed_slots.iter() {
-            assert!(!self.accounts_index.is_root(*slot))
-        }
-        safety_checks_elapsed.stop();
-
-        // Purge the storage entries of the removed slots
+    fn do_purge_slots_from_cache_and_store<'a>(
+        &'a self,
+        can_exist_in_cache: bool,
+        removed_slots: impl Iterator<Item = &'a Slot>,
+        purge_stats: &PurgeStats,
+    ) {
         let mut remove_storages_elapsed = Measure::start("remove_storages_elapsed");
         let mut all_removed_slot_storages = vec![];
         let mut total_removed_storage_entries = 0;
         let mut total_removed_bytes = 0;
-        for slot in removed_slots {
-            // The removed slot must alrady have been flushed from the cache
-            assert!(self.accounts_cache.slot_cache(*slot).is_none());
-            if let Some((_, slot_removed_storages)) = self.storage.0.remove(&slot) {
-                {
-                    let r_slot_removed_storages = slot_removed_storages.read().unwrap();
-                    total_removed_storage_entries += r_slot_removed_storages.len();
-                    total_removed_bytes += r_slot_removed_storages
-                        .values()
-                        .map(|i| i.accounts.capacity())
-                        .sum::<u64>();
-                }
-                all_removed_slot_storages.push(slot_removed_storages.clone());
-            }
-        }
-        remove_storages_elapsed.stop();
-
-        let num_slots_removed = all_removed_slot_storages.len();
-
-        let recycle_stores_write_time =
-            self.recycle_slot_stores(total_removed_storage_entries, &all_removed_slot_storages);
-
-        let mut drop_storage_entries_elapsed = Measure::start("drop_storage_entries_elapsed");
-        // Backing mmaps for removed storages entries explicitly dropped here outside
-        // of any locks
-        drop(all_removed_slot_storages);
-        drop_storage_entries_elapsed.stop();
-
-        self.clean_accounts_stats
-            .purge_stats
-            .safety_checks_elapsed
-            .fetch_add(safety_checks_elapsed.as_us(), Ordering::Relaxed);
-        self.clean_accounts_stats
-            .purge_stats
-            .remove_storages_elapsed
-            .fetch_add(remove_storages_elapsed.as_us(), Ordering::Relaxed);
-        self.clean_accounts_stats
-            .purge_stats
-            .drop_storage_entries_elapsed
-            .fetch_add(drop_storage_entries_elapsed.as_us(), Ordering::Relaxed);
-        self.clean_accounts_stats
-            .purge_stats
-            .num_slots_removed
-            .fetch_add(num_slots_removed, Ordering::Relaxed);
-        self.clean_accounts_stats
-            .purge_stats
-            .total_removed_storage_entries
-            .fetch_add(total_removed_storage_entries, Ordering::Relaxed);
-        self.clean_accounts_stats
-            .purge_stats
-            .total_removed_bytes
-            .fetch_add(total_removed_bytes, Ordering::Relaxed);
-        self.clean_accounts_stats
-            .purge_stats
-            .recycle_stores_write_elapsed
-            .fetch_add(recycle_stores_write_time, Ordering::Relaxed);
-    }
-
-    fn purge_slot_cache_keys(&self, dead_slot: Slot, slot_cache: SlotCache) {
-        // Slot purged from cache should not exist in the backing store
-        assert!(self.storage.get_slot_stores(dead_slot).is_none());
-        let mut purged_slot_pubkeys: HashSet<(Slot, Pubkey)> = HashSet::new();
-        let pubkey_to_slot_set: Vec<(Pubkey, Slot)> = slot_cache
-            .iter()
-            .map(|account| {
-                purged_slot_pubkeys.insert((dead_slot, *account.key()));
-                (*account.key(), dead_slot)
-            })
-            .collect();
-        let num_purged_keys = pubkey_to_slot_set.len();
-        let reclaims = self.purge_keys_exact(&pubkey_to_slot_set);
-        assert_eq!(reclaims.len(), num_purged_keys);
-        self.finalize_dead_slot_removal(std::iter::once(&dead_slot), purged_slot_pubkeys, None);
-    }
-
-    fn purge_slots(&self, slots: &HashSet<Slot>) {
-        //add_root should be called first
-        let non_roots: Vec<_> = slots
-            .iter()
-            .filter(|slot| !self.accounts_index.is_root(**slot))
-            .collect();
-        let mut all_removed_slot_storages = vec![];
-        let mut total_removed_storage_entries = 0;
-        let mut total_removed_bytes = 0;
-
-        let mut remove_storages_elapsed = Measure::start("remove_storages_elapsed");
-
-        for remove_slot in non_roots {
+        for remove_slot in removed_slots {
             if let Some(slot_cache) = self.accounts_cache.remove_slot(*remove_slot) {
                 // If the slot is still in the cache, remove the backing storages for
                 // the slot and from the Accounts Index
+                if !can_exist_in_cache {
+                    panic!("The removed slot must alrady have been flushed from the cache");
+                }
                 self.purge_slot_cache_keys(*remove_slot, slot_cache);
             } else if let Some((_, slot_removed_storages)) = self.storage.0.remove(&remove_slot) {
                 // Because AccountsBackgroundService synchronously flushes from the accounts cache
@@ -2783,18 +2697,16 @@ impl AccountsDB {
                 }
                 all_removed_slot_storages.push(slot_removed_storages.clone());
             }
-            // It should not be possible that a slot is neither in the cache or storage. Even in
-            // a slot with all ticks, `Bank::new_from_parent()` immediately stores some sysvars
-            // on bank creation.
 
             // Remove any delta pubkey set if existing.
             self.uncleaned_pubkeys.remove(remove_slot);
         }
+
         remove_storages_elapsed.stop();
 
         let num_slots_removed = all_removed_slot_storages.len();
 
-        let recycle_stores_write_time =
+        let recycle_stores_write_elapsed =
             self.recycle_slot_stores(total_removed_storage_entries, &all_removed_slot_storages);
 
         let mut drop_storage_entries_elapsed = Measure::start("drop_storage_entries_elapsed");
@@ -2803,29 +2715,79 @@ impl AccountsDB {
         drop(all_removed_slot_storages);
         drop_storage_entries_elapsed.stop();
 
-        self
-        .external_purge_slots
-            .fetch_add(safety_checks_elapsed.as_us(), Ordering::Relaxed);
-        self
-        .external_purge_slots
+        purge_stats
+            .remove_storages_elapsed
             .fetch_add(remove_storages_elapsed.as_us(), Ordering::Relaxed);
-        self
-        .external_purge_slots
+        purge_stats
+            .drop_storage_entries_elapsed
             .fetch_add(drop_storage_entries_elapsed.as_us(), Ordering::Relaxed);
-        self
-        .external_purge_slots
+        purge_stats
+            .num_slots_removed
             .fetch_add(num_slots_removed, Ordering::Relaxed);
-        self
-        .external_purge_slots
+        purge_stats
+            .total_removed_storage_entries
             .fetch_add(total_removed_storage_entries, Ordering::Relaxed);
-        self
-        .external_purge_slots
+        purge_stats
+            .total_removed_bytes
             .fetch_add(total_removed_bytes, Ordering::Relaxed);
-        self
-            .external_purge_slots
-            .fetch_add(recycle_stores_write_time, Ordering::Relaxed);
+        purge_stats
+            .recycle_stores_write_elapsed
+            .fetch_add(recycle_stores_write_elapsed, Ordering::Relaxed);
+    }
 
-        self.external_purge_slots.report();
+    fn purge_storage_slots(&self, removed_slots: &HashSet<Slot>) {
+        // Check all slots `removed_slots` are no longer rooted
+        let mut safety_checks_elapsed = Measure::start("safety_checks_elapsed");
+        for slot in removed_slots.iter() {
+            assert!(!self.accounts_index.is_root(*slot))
+        }
+        safety_checks_elapsed.stop();
+        self.clean_accounts_stats
+            .purge_stats
+            .safety_checks_elapsed
+            .fetch_add(safety_checks_elapsed.as_us(), Ordering::Relaxed);
+        self.do_purge_slots_from_cache_and_store(
+            false,
+            removed_slots.iter(),
+            &self.clean_accounts_stats.purge_stats,
+        );
+    }
+
+    fn purge_slot_cache_keys(&self, dead_slot: Slot, slot_cache: SlotCache) {
+        // Slot purged from cache should not exist in the backing store
+        assert!(self.storage.get_slot_stores(dead_slot).is_none());
+        let mut purged_slot_pubkeys: HashSet<(Slot, Pubkey)> = HashSet::new();
+        let pubkey_to_slot_set: Vec<(Pubkey, Slot)> = slot_cache
+            .iter()
+            .map(|account| {
+                purged_slot_pubkeys.insert((dead_slot, *account.key()));
+                (*account.key(), dead_slot)
+            })
+            .collect();
+        let num_purged_keys = pubkey_to_slot_set.len();
+        let reclaims = self.purge_keys_exact(&pubkey_to_slot_set);
+        assert_eq!(reclaims.len(), num_purged_keys);
+        self.finalize_dead_slot_removal(std::iter::once(&dead_slot), purged_slot_pubkeys, None);
+    }
+
+    fn purge_slots(&self, slots: &HashSet<Slot>) {
+        // `add_root()` should be called first
+        let mut safety_checks_elapsed = Measure::start("safety_checks_elapsed");
+        let non_roots: Vec<&Slot> = slots
+            .iter()
+            .filter(|slot| !self.accounts_index.is_root(**slot))
+            .collect();
+        safety_checks_elapsed.stop();
+        self.external_purge_slots_stats
+            .safety_checks_elapsed
+            .fetch_add(safety_checks_elapsed.as_us(), Ordering::Relaxed);
+        self.do_purge_slots_from_cache_and_store(
+            true,
+            non_roots.into_iter(),
+            &self.clean_accounts_stats.purge_stats,
+        );
+        self.external_purge_slots_stats
+            .report("external_purge_slots_stats", Some(1000));
     }
 
     // TODO: This is currently:
