@@ -695,7 +695,8 @@ struct PurgeStats {
     num_cached_slots_removed: AtomicUsize,
     num_stored_slots_removed: AtomicUsize,
     total_removed_storage_entries: AtomicUsize,
-    total_removed_bytes: AtomicU64,
+    total_removed_cached_bytes: AtomicU64,
+    total_removed_stored_bytes: AtomicU64,
     recycle_stores_write_elapsed: AtomicU64,
 }
 
@@ -706,10 +707,12 @@ impl PurgeStats {
                 let last = self.last_report.load(Ordering::Relaxed);
                 let now = solana_sdk::timing::timestamp();
                 now.saturating_sub(last) > report_interval_ms
-                    && self
-                        .last_report
-                        .compare_and_swap(last, now, Ordering::Relaxed)
-                        == last
+                    && self.last_report.compare_exchange(
+                        last,
+                        now,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) == Ok(last)
             })
             .unwrap_or(true);
 
@@ -748,8 +751,13 @@ impl PurgeStats {
                     i64
                 ),
                 (
-                    "total_removed_bytes",
-                    self.total_removed_bytes.swap(0, Ordering::Relaxed) as i64,
+                    "total_removed_cached_bytes",
+                    self.total_removed_cached_bytes.swap(0, Ordering::Relaxed) as i64,
+                    i64
+                ),
+                (
+                    "total_removed_stored_bytes",
+                    self.total_removed_stored_bytes.swap(0, Ordering::Relaxed) as i64,
                     i64
                 ),
                 (
@@ -836,7 +844,7 @@ struct ShrinkStats {
     drop_storage_entries_elapsed: AtomicU64,
     recycle_stores_write_elapsed: AtomicU64,
     accounts_removed: AtomicUsize,
-    bytes_removed: AtomicUsize,
+    bytes_removed: AtomicU64,
 }
 
 impl ShrinkStats {
@@ -847,8 +855,8 @@ impl ShrinkStats {
         let should_report = now.saturating_sub(last) > 1000
             && self
                 .last_report
-                .compare_and_swap(last, now, Ordering::Relaxed)
-                == last;
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                == Ok(last);
 
         if should_report {
             datapoint_info!(
@@ -1603,7 +1611,7 @@ impl AccountsDB {
         let mut original_bytes = 0;
         for store in stores {
             let mut start = 0;
-            original_bytes += store.alive_bytes();
+            original_bytes += store.total_bytes();
             while let Some((account, next)) = store.accounts.get_account(start) {
                 stored_accounts.push((
                     account.meta.pubkey,
@@ -1800,7 +1808,7 @@ impl AccountsDB {
             Ordering::Relaxed,
         );
         self.shrink_stats.bytes_removed.fetch_add(
-            original_bytes.saturating_sub(aligned_total as usize),
+            original_bytes.saturating_sub(aligned_total),
             Ordering::Relaxed,
         );
         self.shrink_stats.report();
@@ -2749,8 +2757,9 @@ impl AccountsDB {
         let mut remove_storages_elapsed = Measure::start("remove_storages_elapsed");
         let mut all_removed_slot_storages = vec![];
         let mut num_cached_slots_removed = 0;
+        let mut total_removed_cached_bytes = 0;
         let mut total_removed_storage_entries = 0;
-        let mut total_removed_bytes = 0;
+        let mut total_removed_stored_bytes = 0;
         for remove_slot in removed_slots {
             if let Some(slot_cache) = self.accounts_cache.remove_slot(*remove_slot) {
                 // If the slot is still in the cache, remove the backing storages for
@@ -2759,6 +2768,7 @@ impl AccountsDB {
                     panic!("The removed slot must alrady have been flushed from the cache");
                 }
                 num_cached_slots_removed += 1;
+                total_removed_cached_bytes += slot_cache.total_bytes();
                 self.purge_slot_cache(*remove_slot, slot_cache);
             } else if let Some((_, slot_removed_storages)) = self.storage.0.remove(&remove_slot) {
                 // Because AccountsBackgroundService synchronously flushes from the accounts cache
@@ -2774,7 +2784,7 @@ impl AccountsDB {
                 {
                     let r_slot_removed_storages = slot_removed_storages.read().unwrap();
                     total_removed_storage_entries += r_slot_removed_storages.len();
-                    total_removed_bytes += r_slot_removed_storages
+                    total_removed_stored_bytes += r_slot_removed_storages
                         .values()
                         .map(|i| i.accounts.capacity())
                         .sum::<u64>();
@@ -2812,14 +2822,17 @@ impl AccountsDB {
             .num_cached_slots_removed
             .fetch_add(num_cached_slots_removed, Ordering::Relaxed);
         purge_stats
+            .total_removed_cached_bytes
+            .fetch_add(total_removed_cached_bytes, Ordering::Relaxed);
+        purge_stats
             .num_stored_slots_removed
             .fetch_add(num_stored_slots_removed, Ordering::Relaxed);
         purge_stats
             .total_removed_storage_entries
             .fetch_add(total_removed_storage_entries, Ordering::Relaxed);
         purge_stats
-            .total_removed_bytes
-            .fetch_add(total_removed_bytes, Ordering::Relaxed);
+            .total_removed_stored_bytes
+            .fetch_add(total_removed_stored_bytes, Ordering::Relaxed);
         purge_stats
             .recycle_stores_write_elapsed
             .fetch_add(recycle_stores_write_elapsed, Ordering::Relaxed);
@@ -4227,12 +4240,14 @@ impl AccountsDB {
     fn report_store_timings(&self) {
         let last = self.stats.last_store_report.load(Ordering::Relaxed);
         let now = solana_sdk::timing::timestamp();
-        if now - last > 1000
-            && self
-                .stats
-                .last_store_report
-                .compare_and_swap(last, now, Ordering::Relaxed)
-                == last
+
+        if now.saturating_sub(last) > 1000
+            && self.stats.last_store_report.compare_exchange(
+                last,
+                now,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) == Ok(last)
         {
             datapoint_info!(
                 "accounts_db_store_timings",
