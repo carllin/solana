@@ -692,7 +692,8 @@ struct PurgeStats {
     safety_checks_elapsed: AtomicU64,
     remove_storages_elapsed: AtomicU64,
     drop_storage_entries_elapsed: AtomicU64,
-    num_slots_removed: AtomicUsize,
+    num_cached_slots_removed: AtomicUsize,
+    num_stored_slots_removed: AtomicUsize,
     total_removed_storage_entries: AtomicUsize,
     total_removed_bytes: AtomicU64,
     recycle_stores_write_elapsed: AtomicU64,
@@ -731,8 +732,13 @@ impl PurgeStats {
                     i64
                 ),
                 (
-                    "num_slots_removed",
-                    self.num_slots_removed.swap(0, Ordering::Relaxed) as i64,
+                    "num_cached_slots_removed",
+                    self.num_cached_slots_removed.swap(0, Ordering::Relaxed) as i64,
+                    i64
+                ),
+                (
+                    "num_stored_slots_removed",
+                    self.num_stored_slots_removed.swap(0, Ordering::Relaxed) as i64,
                     i64
                 ),
                 (
@@ -830,6 +836,7 @@ struct ShrinkStats {
     drop_storage_entries_elapsed: AtomicU64,
     recycle_stores_write_elapsed: AtomicU64,
     accounts_removed: AtomicUsize,
+    bytes_removed: AtomicUsize,
 }
 
 impl ShrinkStats {
@@ -910,6 +917,11 @@ impl ShrinkStats {
                 (
                     "accounts_removed",
                     self.accounts_removed.swap(0, Ordering::Relaxed) as i64,
+                    i64
+                ),
+                (
+                    "bytes_removed",
+                    self.bytes_removed.swap(0, Ordering::Relaxed) as i64,
                     i64
                 ),
             );
@@ -1588,8 +1600,10 @@ impl AccountsDB {
     {
         debug!("do_shrink_slot_stores: slot: {}", slot);
         let mut stored_accounts = vec![];
+        let mut original_bytes = 0;
         for store in stores {
             let mut start = 0;
+            original_bytes += store.alive_bytes();
             while let Some((account, next)) = store.accounts.get_account(start) {
                 stored_accounts.push((
                     account.meta.pubkey,
@@ -1783,6 +1797,10 @@ impl AccountsDB {
             .fetch_add(recycle_stores_write_elapsed.as_us(), Ordering::Relaxed);
         self.shrink_stats.accounts_removed.fetch_add(
             total_starting_accounts - total_accounts_after_shrink,
+            Ordering::Relaxed,
+        );
+        self.shrink_stats.bytes_removed.fetch_add(
+            original_bytes.saturating_sub(aligned_total as usize),
             Ordering::Relaxed,
         );
         self.shrink_stats.report();
@@ -2730,6 +2748,7 @@ impl AccountsDB {
     ) {
         let mut remove_storages_elapsed = Measure::start("remove_storages_elapsed");
         let mut all_removed_slot_storages = vec![];
+        let mut num_cached_slots_removed = 0;
         let mut total_removed_storage_entries = 0;
         let mut total_removed_bytes = 0;
         for remove_slot in removed_slots {
@@ -2739,6 +2758,7 @@ impl AccountsDB {
                 if !can_exist_in_cache {
                     panic!("The removed slot must alrady have been flushed from the cache");
                 }
+                num_cached_slots_removed += 1;
                 self.purge_slot_cache(*remove_slot, slot_cache);
             } else if let Some((_, slot_removed_storages)) = self.storage.0.remove(&remove_slot) {
                 // Because AccountsBackgroundService synchronously flushes from the accounts cache
@@ -2771,7 +2791,7 @@ impl AccountsDB {
         }
         remove_storages_elapsed.stop();
 
-        let num_slots_removed = all_removed_slot_storages.len();
+        let num_stored_slots_removed = all_removed_slot_storages.len();
 
         let recycle_stores_write_elapsed =
             self.recycle_slot_stores(total_removed_storage_entries, &all_removed_slot_storages);
@@ -2789,8 +2809,11 @@ impl AccountsDB {
             .drop_storage_entries_elapsed
             .fetch_add(drop_storage_entries_elapsed.as_us(), Ordering::Relaxed);
         purge_stats
-            .num_slots_removed
-            .fetch_add(num_slots_removed, Ordering::Relaxed);
+            .num_cached_slots_removed
+            .fetch_add(num_cached_slots_removed, Ordering::Relaxed);
+        purge_stats
+            .num_stored_slots_removed
+            .fetch_add(num_stored_slots_removed, Ordering::Relaxed);
         purge_stats
             .total_removed_storage_entries
             .fetch_add(total_removed_storage_entries, Ordering::Relaxed);
