@@ -7640,16 +7640,20 @@ pub mod tests {
         println!("folder size before: {}", folder_size);
         {
             let mut db = Rocks::open(&blockstore_path, AccessType::PrimaryOnly, None).unwrap();
-            let root_handle = db.0.cf_handle("root").unwrap();
-            for key in &keys {
-                assert_eq!(
-                    db.get_cf(&root_handle, &key).unwrap().unwrap(),
-                    serialized_value
-                );
+            {
+                let root_handle = db.0.cf_handle("root").unwrap();
+                for key in &keys {
+                    assert_eq!(
+                        db.get_cf(&root_handle, &key).unwrap().unwrap(),
+                        serialized_value
+                    );
+                }
             }
+
             db.0.drop_cf("root").unwrap();
 
             // Print folder size after dropping the column family
+            assert!(db.0.cf_handle("root").is_none());
             let folder_size = get_size(&blockstore_path).unwrap();
             println!("folder size after: {}", folder_size);
         }
