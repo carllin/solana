@@ -202,10 +202,10 @@ impl From<BlockstoreRecoveryMode> for DBRecoveryMode {
 }
 
 #[derive(Debug)]
-struct Rocks(rocksdb::DB, ActualAccessType);
+pub struct Rocks(pub rocksdb::DB, ActualAccessType);
 
 impl Rocks {
-    fn open(
+    pub fn open(
         path: &Path,
         access_type: AccessType,
         recovery_mode: Option<BlockstoreRecoveryMode>,
@@ -351,12 +351,12 @@ impl Rocks {
             .expect("should never get an unknown column")
     }
 
-    fn get_cf(&self, cf: &ColumnFamily, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    pub fn get_cf(&self, cf: &ColumnFamily, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let opt = self.0.get_cf(cf, key)?.map(|db_vec| db_vec.to_vec());
         Ok(opt)
     }
 
-    fn put_cf(&self, cf: &ColumnFamily, key: &[u8], value: &[u8]) -> Result<()> {
+    pub fn put_cf(&self, cf: &ColumnFamily, key: &[u8], value: &[u8]) -> Result<()> {
         self.0.put_cf(cf, key, value)?;
         Ok(())
     }
@@ -710,7 +710,7 @@ impl TypedColumn for columns::ErasureMeta {
 
 #[derive(Debug, Clone)]
 pub struct Database {
-    backend: Arc<Rocks>,
+    pub backend: Arc<Rocks>,
     path: Arc<Path>,
 }
 
@@ -719,7 +719,7 @@ pub struct LedgerColumn<C>
 where
     C: Column,
 {
-    backend: Arc<Rocks>,
+    pub backend: Arc<Rocks>,
     column: PhantomData<C>,
 }
 

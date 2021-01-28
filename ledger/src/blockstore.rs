@@ -7610,26 +7610,62 @@ pub mod tests {
 
     #[test]
     fn test_large_num_coding() {
-        solana_logger::setup();
-        let slot = 1;
-        let (_data_shreds, mut coding_shreds, leader_schedule_cache) =
-            setup_erasure_shreds(slot, 0, 100, 1.0);
-        let blockstore_path = get_tmp_ledger_path!();
-        {
-            let blockstore = Blockstore::open(&blockstore_path).unwrap();
-            coding_shreds[1].coding_header.num_coding_shreds = u16::MAX;
-            blockstore
-                .insert_shreds(
-                    vec![coding_shreds[1].clone()],
-                    Some(&leader_schedule_cache),
-                    false,
-                )
-                .unwrap();
+        use crate::blockstore_db::Rocks;
+        use byteorder::{BigEndian, ByteOrder};
+        use fs_extra::dir::get_size;
 
-            // Check no coding shreds are inserted
-            let res = blockstore.get_coding_shreds_for_slot(slot, 0).unwrap();
-            assert!(res.is_empty());
+        solana_logger::setup();
+        let blockstore_path = get_tmp_ledger_path!();
+        println!("path: {:?}", blockstore_path);
+        let keys: Vec<_> = (0..100000)
+            .map(|i| {
+                let mut key = vec![0; 8];
+                BigEndian::write_u64(&mut key[..], i);
+                key
+            })
+            .collect();
+        let value = true;
+        let serialized_value = serialize(&value).unwrap();
+
+        {
+            let db = Rocks::open(&blockstore_path, AccessType::PrimaryOnly, None).unwrap();
+            let root_handle = db.0.cf_handle("root").unwrap();
+            for key in &keys {
+                db.put_cf(&root_handle, &key, &serialized_value).unwrap();
+            }
         }
+
+        // Print folder size after the stores
+        let folder_size = get_size(&blockstore_path).unwrap();
+        println!("folder size before: {}", folder_size);
+        {
+            let mut db = Rocks::open(&blockstore_path, AccessType::PrimaryOnly, None).unwrap();
+            let root_handle = db.0.cf_handle("root").unwrap();
+            for key in &keys {
+                assert_eq!(
+                    db.get_cf(&root_handle, &key).unwrap().unwrap(),
+                    serialized_value
+                );
+            }
+            db.0.drop_cf("root").unwrap();
+
+            // Print folder size after dropping the column family
+            let folder_size = get_size(&blockstore_path).unwrap();
+            println!("folder size after: {}", folder_size);
+        }
+
+        // Print folder size after dropping the column family
+        let folder_size = get_size(&blockstore_path).unwrap();
+        println!("folder size after close: {}", folder_size);
+
+        {
+            let db = Rocks::open(&blockstore_path, AccessType::PrimaryOnly, None).unwrap();
+            let root_handle = db.0.cf_handle("root").unwrap();
+            for key in &keys {
+                assert!(db.get_cf(&root_handle, &key).unwrap().is_none());
+            }
+        }
+
         Blockstore::destroy(&blockstore_path).expect("Expected successful database destruction");
     }
 }
