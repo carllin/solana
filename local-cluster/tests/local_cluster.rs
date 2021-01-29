@@ -1367,7 +1367,7 @@ fn test_duplicate_node() {
 }
 
 fn test_faulty_node(faulty_node_type: BroadcastStageType) {
-    solana_logger::setup_with_default("solana_local_cluster=info");
+    solana_logger::setup_with_default("info");
     let num_nodes = 3;
     let mut error_validator_config = ValidatorConfig::default();
     error_validator_config.broadcast_stage_type = faulty_node_type;
