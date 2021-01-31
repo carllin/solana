@@ -1763,6 +1763,7 @@ fn main() {
                         })
                         .clone();
 
+                    info!("finished processing bank");
                     if rent_burn_percentage.is_ok() || hashes_per_tick.is_some() {
                         let mut child_bank =
                             Bank::new_from_parent(&bank, bank.collector_id(), bank.slot() + 1);
@@ -1781,12 +1782,14 @@ fn main() {
                         bank = Arc::new(child_bank);
                     }
 
+                    info!("finished processing bank1");
                     if let Some(faucet_pubkey) = faucet_pubkey {
                         bank.store_account(
                             &faucet_pubkey,
                             &Account::new(faucet_lamports, 0, &system_program::id()),
                         );
                     }
+                    info!("finished processing bank2");
 
                     if remove_stake_accounts {
                         for (address, mut account) in bank
@@ -1798,6 +1801,7 @@ fn main() {
                         }
                     }
 
+                    info!("finished processing bank3");
                     for address in accounts_to_remove {
                         if let Some(mut account) = bank.get_account(&address) {
                             account.lamports = 0;
@@ -1805,6 +1809,7 @@ fn main() {
                         }
                     }
 
+                    info!("finished processing bank4");
                     if let Some(bootstrap_validator_pubkeys) = bootstrap_validator_pubkeys {
                         assert_eq!(bootstrap_validator_pubkeys.len() % 3, 0);
 
@@ -1895,7 +1900,9 @@ fn main() {
                         }
                     }
 
+                    info!("finished processing bank5");
                     bank.set_capitalization();
+                    info!("finished processing bank6");
 
                     let bank = if let Some(warp_slot) = warp_slot {
                         Arc::new(Bank::warp_from_parent(
@@ -1906,6 +1913,8 @@ fn main() {
                     } else {
                         bank
                     };
+
+                    info!("finished processing bank7");
 
                     println!(
                         "Creating a version {} snapshot of slot {}",

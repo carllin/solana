@@ -554,10 +554,16 @@ impl Accounts {
         ancestors: &Ancestors,
         simple_capitalization_enabled: bool,
     ) -> u64 {
+        let mut num_accounts_checked = 0;
         let balances =
             self.load_all_unchecked(ancestors)
                 .into_iter()
                 .map(|(_pubkey, account, _slot)| {
+                    num_accounts_checked += 1;
+                    if num_accounts_checked == 1000 {
+                        info!("checked 1000 accounts");
+                        num_accounts_checked = 0;
+                    }
                     AccountsDB::account_balance_for_capitalization(
                         account.lamports,
                         &account.owner,
@@ -566,6 +572,7 @@ impl Accounts {
                     )
                 });
 
+        info!("all balances checked");
         AccountsDB::checked_sum_for_capitalization(balances)
     }
 

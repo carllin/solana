@@ -107,7 +107,7 @@ pub fn load(
     }
 
     info!("Processing ledger from genesis");
-    to_loadresult(
+    let res = to_loadresult(
         blockstore_processor::process_blockstore(
             &genesis_config,
             &blockstore,
@@ -115,5 +115,7 @@ pub fn load(
             process_options,
         ),
         None,
-    )
+    );
+    info!("Finished processing ledger from genesis");
+    res
 }

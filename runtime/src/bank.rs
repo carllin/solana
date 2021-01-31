@@ -4280,7 +4280,9 @@ impl Bank {
 
     pub fn calculate_and_verify_capitalization(&self) -> bool {
         let calculated = self.calculate_capitalization();
+        info!("calculated capitalization");
         let expected = self.capitalization();
+        info!("calculated capitalization expected ");
         if calculated == expected {
             true
         } else {
