@@ -456,7 +456,7 @@ impl Accounts {
     pub fn scan_slot<F, B>(&self, slot: Slot, func: F) -> Vec<B>
     where
         F: Fn(LoadedAccount) -> Option<B> + Send + Sync,
-        B: Sync + Send + Default + std::cmp::Eq,
+        B: Sync + Send + std::cmp::Eq,
     {
         let scan_result = self.accounts_db.scan_account_storage(
             slot,

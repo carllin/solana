@@ -1763,6 +1763,15 @@ fn main() {
                         })
                         .clone();
 
+                    let mut pubkeys = bank.rc.accounts.scan_slot(snapshot_slot, |stored_account| {
+                        Some(*stored_account.pubkey())
+                    });
+
+                    pubkeys.sort();
+                    info!("sorted pubkeys for slot: {}", snapshot_slot);
+                    for pubkey in pubkeys {
+                        info!("{}", pubkey);
+                    }
                     info!("finished processing bank");
                     if rent_burn_percentage.is_ok() || hashes_per_tick.is_some() {
                         let mut child_bank =
