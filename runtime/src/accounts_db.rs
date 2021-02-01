@@ -2419,6 +2419,9 @@ impl AccountsDB {
         };
 
         //TODO: thread this as a ref
+        if slot == 174160 {
+            info!("loading latest version in slot {} of account {}, last modified in 174160", slot, pubkey);
+        }
         self.get_account_accessor_from_cache_or_storage(slot, pubkey, store_id, offset)
             .get_loaded_account()
             .map(|loaded_account| (loaded_account.account(), slot))

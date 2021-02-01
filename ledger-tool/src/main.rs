@@ -1763,12 +1763,13 @@ fn main() {
                         })
                         .clone();
 
-                    let mut pubkeys = bank.rc.accounts.scan_slot(snapshot_slot, |stored_account| {
+                    let target_slot = 174160;
+                    let mut pubkeys = bank.rc.accounts.scan_slot(target_slot, |stored_account| {
                         Some(*stored_account.pubkey())
                     });
 
                     pubkeys.sort();
-                    info!("sorted pubkeys for slot: {}", snapshot_slot);
+                    info!("sorted pubkeys for slot: {} after clean at slot {}", target_slot, snapshot_slot);
                     for pubkey in pubkeys {
                         info!("{}", pubkey);
                     }
