@@ -268,6 +268,13 @@ impl<'a> LoadedAccount<'a> {
         }
     }
 
+    pub fn lamports(&self) -> u64 {
+        match self {
+            LoadedAccount::Stored(stored_account_meta) => stored_account_meta.account_meta.lamports,
+            LoadedAccount::Cached((_, cached_account)) => cached_account.account.lamports,
+        }
+    }
+
     pub fn account(self) -> Account {
         match self {
             LoadedAccount::Stored(stored_account_meta) => stored_account_meta.clone_account(),
@@ -2233,13 +2240,13 @@ impl AccountsDB {
 
     pub fn unchecked_scan_accounts<F, A>(&self, ancestors: &Ancestors, scan_func: F) -> A
     where
-        F: Fn(&mut A, Option<(&Pubkey, Account, Slot)>),
+        F: Fn(&mut A, (&Pubkey, LoadedAccount, Slot)),
         A: Default,
     {
         let mut collector = A::default();
         self.accounts_index
             .unchecked_scan_accounts(ancestors, |pubkey, (account_info, slot)| {
-                let account_slot = self
+                if let Some(loaded_account) = self
                     .get_account_accessor_from_cache_or_storage(
                         slot,
                         pubkey,
@@ -2247,8 +2254,9 @@ impl AccountsDB {
                         account_info.offset,
                     )
                     .get_loaded_account()
-                    .map(|loaded_account| (pubkey, loaded_account.account(), slot));
-                scan_func(&mut collector, account_slot)
+                {
+                    scan_func(&mut collector, (pubkey, loaded_account, slot));
+                }
             });
         collector
     }
@@ -4707,9 +4715,7 @@ pub mod tests {
 
         let accounts: Vec<Account> =
             db.unchecked_scan_accounts(&ancestors, |accounts: &mut Vec<Account>, option| {
-                if let Some(data) = option {
-                    accounts.push(data.1);
-                }
+                accounts.push(option.1.account());
             });
         assert_eq!(accounts, vec![account1]);
     }
@@ -6060,18 +6066,14 @@ pub mod tests {
         let ancestors = vec![(0, 0)].into_iter().collect();
         let accounts: Vec<Account> =
             db.unchecked_scan_accounts(&ancestors, |accounts: &mut Vec<Account>, option| {
-                if let Some(data) = option {
-                    accounts.push(data.1);
-                }
+                accounts.push(option.1.account());
             });
         assert_eq!(accounts, vec![account0]);
 
         let ancestors = vec![(1, 1), (0, 0)].into_iter().collect();
         let accounts: Vec<Account> =
             db.unchecked_scan_accounts(&ancestors, |accounts: &mut Vec<Account>, option| {
-                if let Some(data) = option {
-                    accounts.push(data.1);
-                }
+                accounts.push(option.1.account());
             });
         assert_eq!(accounts.len(), 2);
     }
