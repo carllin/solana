@@ -6,6 +6,7 @@ use crate::{
 use dashmap::DashSet;
 use log::*;
 use ouroboros::self_referencing;
+use solana_measure::measure::Measure;
 use solana_sdk::{
     clock::Slot,
     pubkey::{Pubkey, PUBKEY_BYTES},
@@ -468,18 +469,40 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         // TODO: expand to use mint index to find the `pubkey_list` below more efficiently
         // instead of scanning the entire range
         let mut num_keys_iterated = 0;
+        let mut latest_slot_elapsed = 0;
+        let mut load_account_elapsed = 0;
+        let mut read_lock_elapsed = 0;
+        let mut iterator_elapsed = 0;
+        let mut iterator_timer = Measure::start("iterator_elapsed");
         for pubkey_list in self.iter(range) {
+            iterator_timer.stop();
+            iterator_elapsed += iterator_timer.as_us();
+
             num_keys_iterated += 1;
-            if num_keys_iterated == 1000 {
-                info!("iterated 1000 keys");
+            if num_keys_iterated == ITER_BATCH_SIZE {
+                info!("iterated {} keys, latest_slot_elapsed: {}, read_lock_elapsed: {}, load_account_elapsed: {}, iterator_elapsed: {}", ITER_BATCH_SIZE, latest_slot_elapsed, read_lock_elapsed, load_account_elapsed, iterator_elapsed);
                 num_keys_iterated = 0;
+                latest_slot_elapsed = 0;
+                read_lock_elapsed = 0;
+                load_account_elapsed = 0;
+                iterator_elapsed = 0;
             }
             for (pubkey, list) in pubkey_list {
+                let mut read_lock_timer = Measure::start("read_lock");
                 let list_r = &list.slot_list.read().unwrap();
+                read_lock_timer.stop();
+                read_lock_elapsed += read_lock_timer.as_us();
+                let mut latest_slot_timer = Measure::start("latest_slot");
                 if let Some(index) = self.latest_slot(Some(ancestors), &list_r, max_root) {
+                    latest_slot_timer.stop();
+                    latest_slot_elapsed += latest_slot_timer.as_us();
+                    let mut load_account_timer = Measure::start("load_account");
                     func(&pubkey, (&list_r[index].1, list_r[index].0));
+                    load_account_timer.stop();
+                    load_account_elapsed += load_account_timer.as_us();
                 }
             }
+            iterator_timer = Measure::start("iterator_elapsed");
         }
     }
 
