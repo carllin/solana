@@ -4,6 +4,7 @@ use crate::{
     secondary_index::*,
 };
 use dashmap::DashSet;
+use log::*;
 use ouroboros::self_referencing;
 use solana_sdk::{
     clock::Slot,
@@ -466,7 +467,13 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
     {
         // TODO: expand to use mint index to find the `pubkey_list` below more efficiently
         // instead of scanning the entire range
+        let mut num_keys_iterated = 0;
         for pubkey_list in self.iter(range) {
+            num_keys_iterated += 1;
+            if num_keys_iterated == 1000 {
+                info!("iterated 1000 keys");
+                num_keys_iterated = 0;
+            }
             for (pubkey, list) in pubkey_list {
                 let list_r = &list.slot_list.read().unwrap();
                 if let Some(index) = self.latest_slot(Some(ancestors), &list_r, max_root) {
