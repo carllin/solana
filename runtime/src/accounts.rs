@@ -554,26 +554,26 @@ impl Accounts {
         ancestors: &Ancestors,
         simple_capitalization_enabled: bool,
     ) -> u64 {
-        let mut num_accounts_checked = 0;
-        let balances =
-            self.load_all_unchecked(ancestors)
-                .into_iter()
-                .map(|(_pubkey, account, _slot)| {
-                    num_accounts_checked += 1;
-                    if num_accounts_checked == 1000 {
-                        info!("checked 1000 accounts");
-                        num_accounts_checked = 0;
-                    }
-                    AccountsDB::account_balance_for_capitalization(
+        self.accounts_db.unchecked_scan_accounts(
+            ancestors,
+            |total_capitalization: &mut u64, some_account_tuple| {
+                if let Some((_pubkey, account, _slot)) =
+                    some_account_tuple.filter(|(_, account, _)| Self::is_loadable(account))
+                {
+                    let account_cap = AccountsDB::account_balance_for_capitalization(
                         account.lamports,
                         &account.owner,
                         account.executable,
                         simple_capitalization_enabled,
-                    )
-                });
+                    );
 
-        info!("all balances checked");
-        AccountsDB::checked_sum_for_capitalization(balances)
+                    *total_capitalization = AccountsDB::checked_iterative_sum_for_capitalization(
+                        *total_capitalization,
+                        account_cap,
+                    );
+                }
+            },
+        )
     }
 
     #[must_use]
@@ -664,19 +664,6 @@ impl Accounts {
 
     pub fn load_all(&self, ancestors: &Ancestors) -> Vec<(Pubkey, Account, Slot)> {
         self.accounts_db.scan_accounts(
-            ancestors,
-            |collector: &mut Vec<(Pubkey, Account, Slot)>, some_account_tuple| {
-                if let Some((pubkey, account, slot)) =
-                    some_account_tuple.filter(|(_, account, _)| Self::is_loadable(account))
-                {
-                    collector.push((*pubkey, account, slot))
-                }
-            },
-        )
-    }
-
-    fn load_all_unchecked(&self, ancestors: &Ancestors) -> Vec<(Pubkey, Account, Slot)> {
-        self.accounts_db.unchecked_scan_accounts(
             ancestors,
             |collector: &mut Vec<(Pubkey, Account, Slot)>, some_account_tuple| {
                 if let Some((pubkey, account, slot)) =
