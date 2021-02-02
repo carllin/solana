@@ -4163,24 +4163,86 @@ impl AccountsDB {
                 .map(|storage| storage.approx_stored_count())
                 .sum();
             let mut accounts_map: AccountsMap = AccountsMap::with_capacity(num_accounts);
+            let mut slot_accounts: Vec<HashMap<Pubkey, Vec<StoredAccountMeta>>> = vec![];
             storage_maps.iter().for_each(|storage| {
+                info!(
+                    "scanning storage: {}, slot: {}",
+                    storage.append_vec_id(),
+                    slot
+                );
+                let mut slot_storage_accounts: HashMap<Pubkey, Vec<StoredAccountMeta>> =
+                    HashMap::new();
                 let accounts = storage.accounts.accounts(0);
                 accounts.into_iter().for_each(|stored_account| {
-                    let entry = accounts_map
-                        .entry(stored_account.meta.pubkey)
-                        .or_insert_with(BTreeMap::new);
+                    let pubkey = stored_account.meta.pubkey;
+                    let write_version = stored_account.meta.write_version;
+                    let entry = accounts_map.entry(pubkey).or_insert_with(BTreeMap::new);
+                    let is_assert = entry
+                        .insert(
+                            write_version,
+                            (storage.append_vec_id(), stored_account.clone()),
+                        )
+                        .is_none();
+                    if !is_assert {
+                        info!(
+                            "slot {}, write version: {}, pubkey: {} duplicated",
+                            slot, write_version, pubkey
+                        );
+                    }
+
+                    if *slot == 62313906 {
+                        slot_storage_accounts
+                            .entry(pubkey)
+                            .or_default()
+                            .push(stored_account);
+                    }
                     assert!(
                         // There should only be one update per write version for a specific slot
                         // and account
-                        entry
-                            .insert(
-                                stored_account.meta.write_version,
-                                (storage.append_vec_id(), stored_account)
-                            )
-                            .is_none()
+                        is_assert
                     );
                 })
             });
+
+            if *slot == 62313906 {
+                let first = slot_accounts.pop().unwrap();
+                let second = slot_accounts.pop().unwrap();
+
+                let (longer, shorter) = if first.len() > second.len() {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
+
+                let mut shorter_missing_accounts = vec![];
+                let mut extra_accounts_in_shorter: HashMap<Pubkey, Vec<_>> = HashMap::new();
+                let mut extra_accounts_in_longer: HashMap<Pubkey, Vec<_>> = HashMap::new();
+                for (pubkey, longer_slots) in longer {
+                    if !shorter.contains(&pubkey) {
+                        shorter_missing_accounts.push((pubkey, longer_slots));
+                    } else {
+                        let shorter_slots = shorter.get(&pubkey).unwrap();
+                        for account in shorter_slots {
+                            if !longer_slots.contains(account) {
+                                extra_accounts_in_shorter
+                                    .entry(pubkey)
+                                    .or_default()
+                                    .push(account.clone());
+                            }
+                        }
+
+                        for account in longer_slots {
+                            if !shorter_slots.contains(&account) {
+                                extra_accounts_in_longer
+                                    .entry(pubkey)
+                                    .or_default()
+                                    .push(account);
+                            }
+                        }
+                    }
+                }
+            }
+
             // Need to restore indexes even with older write versions which may
             // be shielding other accounts. When they are then purged, the
             // original non-shielded account value will be visible when the account
