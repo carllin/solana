@@ -2019,25 +2019,43 @@ impl AccountsDB {
         hasher.result()
     }
 
-    fn accumulate_account_hashes(hashes: Vec<(Pubkey, Hash, u64)>) -> Hash {
-        let (hash, ..) = Self::do_accumulate_account_hashes_and_capitalization(hashes, false);
+    fn accumulate_account_hashes(
+        slot: Slot,
+        hashes: Vec<(Pubkey, Hash, u64)>,
+        debug: bool,
+    ) -> Hash {
+        let (hash, ..) =
+            Self::do_accumulate_account_hashes_and_capitalization(slot, hashes, false, debug);
         hash
     }
 
     fn accumulate_account_hashes_and_capitalization(
+        slot: Slot,
         hashes: Vec<(Pubkey, Hash, u64)>,
     ) -> (Hash, u64) {
-        let (hash, cap) = Self::do_accumulate_account_hashes_and_capitalization(hashes, true);
+        let (hash, cap) =
+            Self::do_accumulate_account_hashes_and_capitalization(slot, hashes, true, false);
         (hash, cap.unwrap())
     }
 
     fn do_accumulate_account_hashes_and_capitalization(
+        slot: Slot,
         mut hashes: Vec<(Pubkey, Hash, u64)>,
         calculate_cap: bool,
+        debug: bool,
     ) -> (Hash, Option<u64>) {
         let mut sort_time = Measure::start("sort");
         hashes.par_sort_by(|a, b| a.0.cmp(&b.0));
         sort_time.stop();
+
+        if debug {
+            for (key, hash, lamports) in &hashes {
+                info!(
+                    "slot: {} key {} hash {}, lamports: {}",
+                    slot, key, hash, lamports
+                );
+            }
+        }
 
         let mut sum_time = Measure::start("cap");
         let cap = if calculate_cap {
@@ -2168,7 +2186,7 @@ impl AccountsDB {
 
         let mut accumulate = Measure::start("accumulate");
         let (accumulated_hash, total_lamports) =
-            Self::accumulate_account_hashes_and_capitalization(hashes);
+            Self::accumulate_account_hashes_and_capitalization(slot, hashes);
         accumulate.stop();
         datapoint_info!(
             "update_accounts_hash",
@@ -2261,7 +2279,7 @@ impl AccountsDB {
             .into_iter()
             .map(|(pubkey, (_, hash))| (pubkey, hash, 0))
             .collect();
-        let ret = Self::accumulate_account_hashes(hashes);
+        let ret = Self::accumulate_account_hashes(slot, hashes, true);
         accumulate.stop();
         self.stats
             .delta_hash_scan_time_total_us
