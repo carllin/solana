@@ -4196,12 +4196,16 @@ impl AccountsDB {
                             .or_default()
                             .push(stored_account);
                     }
-                    assert!(
+                    /*assert!(
                         // There should only be one update per write version for a specific slot
                         // and account
                         is_assert
-                    );
-                })
+                    );*/
+                });
+
+                if *slot == 62313906 {
+                    slot_accounts.push(slot_storage_accounts);
+                }
             });
 
             if *slot == 62313906 {
@@ -4215,15 +4219,22 @@ impl AccountsDB {
                 };
 
                 let mut shorter_missing_accounts = vec![];
-                let mut extra_accounts_in_shorter: HashMap<Pubkey, Vec<_>> = HashMap::new();
-                let mut extra_accounts_in_longer: HashMap<Pubkey, Vec<_>> = HashMap::new();
+                let mut longer_missing_accounts = vec![];
+                let mut extra_accounts_in_shorter: BTreeMap<Pubkey, Vec<_>> = BTreeMap::new();
+                let mut extra_accounts_in_longer: BTreeMap<Pubkey, Vec<_>> = BTreeMap::new();
+                for (pubkey, shorter_slots) in &shorter {
+                    if !longer.contains(&pubkey) {
+                        longer_missing_accounts.push((pubkey, shorter_slots));
+                    }
+                }
+
                 for (pubkey, longer_slots) in longer {
                     if !shorter.contains(&pubkey) {
                         shorter_missing_accounts.push((pubkey, longer_slots));
                     } else {
                         let shorter_slots = shorter.get(&pubkey).unwrap();
                         for account in shorter_slots {
-                            if !longer_slots.contains(account) {
+                            if !longer_slots.iter().any(|x| x.hash == account.hash) {
                                 extra_accounts_in_shorter
                                     .entry(pubkey)
                                     .or_default()
@@ -4232,7 +4243,7 @@ impl AccountsDB {
                         }
 
                         for account in longer_slots {
-                            if !shorter_slots.contains(&account) {
+                            if !shorter_slots.iter().any(|x| x.hash == account.hash) {
                                 extra_accounts_in_longer
                                     .entry(pubkey)
                                     .or_default()
@@ -4241,6 +4252,17 @@ impl AccountsDB {
                         }
                     }
                 }
+
+                info!(
+                    "shorter_missing_accounts: {:?},
+                    longer_missing_accounts: {:?},
+                    extra_accounts_in_shorter: {:?},
+                    extra_accounts_in_longer: {:?}",
+                    shorter_missing_accounts,
+                    longer_missing_accounts,
+                    extra_accounts_in_shorter,
+                    extra_accounts_in_longer
+                );
             }
 
             // Need to restore indexes even with older write versions which may
