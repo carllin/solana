@@ -1802,6 +1802,7 @@ impl AccountsDB {
             // here, we're writing back alive_accounts. That should be an atomic operation
             // without use of rather wide locks in this whole function, because we're
             // mutating rooted slots; There should be no writers to them.
+            let shrunken_store_id = shrunken_store.append_vec_id();
             store_accounts_timing = self.store_accounts_frozen(
                 slot,
                 &accounts,
@@ -1821,7 +1822,8 @@ impl AccountsDB {
             let mut start = Measure::start("write_storage_elapsed");
             if let Some(slot_stores) = self.storage.get_slot_stores(slot) {
                 slot_stores.write().unwrap().retain(|_key, store| {
-                    if store.count() == 0 {
+                    if store.append_vec_id() != shrunken_store_id {
+                        assert!(store.count() == 0);
                         dead_storages.push(store.clone());
                     }
                     store.count() > 0
