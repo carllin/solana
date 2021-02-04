@@ -4183,25 +4183,11 @@ impl AccountsDB {
                         );
                     }
                     let entry = accounts_map.entry(pubkey).or_insert_with(BTreeMap::new);
-                    let is_assert = entry
-                        .insert(
-                            write_version,
-                            (storage.append_vec_id(), stored_account.clone()),
-                        )
-                        .is_none();
-                    if !is_assert {
-                        info!(
-                            "slot {}, write version: {}, pubkey: {} duplicated hash {}",
-                            slot, write_version, pubkey, stored_account.hash
-                        );
-                    }
 
                     if *slot == 62313906 {
                         info!(
-                            "inserting into id {} pubkey {}, {}",
-                            storage.append_vec_id(),
-                            pubkey,
-                            stored_account.hash,
+                            "inserting into id {} slot {}, write version: {}, pubkey: {} duplicated hash {}",
+                            storage.append_vec_id(), slot, write_version, pubkey, stored_account.hash
                         );
                         slot_storage_accounts
                             .entry(pubkey)
@@ -4215,7 +4201,7 @@ impl AccountsDB {
                     );*/
                 });
 
-                if *slot == 62313906 {
+                if *slot == 62313906 && (storage.append_vec_id() == 1053435591 || storage.append_vec_id() == 1053437604) {
                     info!("push storage id: {}", storage.append_vec_id());
                     slot_accounts.push(slot_storage_accounts);
                 }
