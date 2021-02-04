@@ -4176,6 +4176,12 @@ impl AccountsDB {
                 accounts.into_iter().for_each(|stored_account| {
                     let pubkey = stored_account.meta.pubkey;
                     let write_version = stored_account.meta.write_version;
+                    if write_version == 30791892829 {
+                        info!(
+                            "slot {}, write version: {}, pubkey: {} duplicated hash {}",
+                            slot, write_version, pubkey, stored_account.hash
+                        );
+                    }
                     let entry = accounts_map.entry(pubkey).or_insert_with(BTreeMap::new);
                     let is_assert = entry
                         .insert(
@@ -4185,12 +4191,18 @@ impl AccountsDB {
                         .is_none();
                     if !is_assert {
                         info!(
-                            "slot {}, write version: {}, pubkey: {} duplicated",
-                            slot, write_version, pubkey
+                            "slot {}, write version: {}, pubkey: {} duplicated hash {}",
+                            slot, write_version, pubkey, stored_account.hash
                         );
                     }
 
                     if *slot == 62313906 {
+                        info!(
+                            "inserting into id {} pubkey {}, {}",
+                            storage.append_vec_id(),
+                            pubkey,
+                            stored_account.hash,
+                        );
                         slot_storage_accounts
                             .entry(pubkey)
                             .or_default()
@@ -4204,11 +4216,13 @@ impl AccountsDB {
                 });
 
                 if *slot == 62313906 {
+                    info!("push storage id: {}", storage.append_vec_id());
                     slot_accounts.push(slot_storage_accounts);
                 }
             });
 
             if *slot == 62313906 {
+                assert_eq!(slot_accounts.len(), 2);
                 let first = slot_accounts.pop().unwrap();
                 let second = slot_accounts.pop().unwrap();
 
