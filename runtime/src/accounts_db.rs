@@ -3648,13 +3648,13 @@ impl AccountsDB {
     }
 
     /// Scan through all the account storage in parallel
-    fn scan_account_storage_no_bank<F, B>(
+    fn scan_account_storage_no_bank<F, T>(
         snapshot_storages: &[SnapshotStorage],
         scan_func: F,
-    ) -> Vec<B>
+    ) -> Vec<T>
     where
-        F: Fn(LoadedAccount, &mut B, Slot) + Send + Sync,
-        B: Send + Default,
+        T: Send,
+        F: Fn(LoadedAccount, Slot) -> T + Send + Sync,
     {
         let items: Vec<_> = snapshot_storages.iter().flatten().collect();
 
@@ -3663,20 +3663,16 @@ impl AccountsDB {
         const MAX_ITEMS_PER_CHUNK: usize = 5_000;
         items
             .par_chunks(MAX_ITEMS_PER_CHUNK)
-            .map(|storages: &[&Arc<AccountStorageEntry>]| {
-                let mut retval = B::default();
-
-                for storage in storages {
+            .flat_map_iter(|storages: &[&Arc<AccountStorageEntry>]| {
+                storages.iter().flat_map(|storage| {
                     let accounts = storage.accounts.accounts(0);
-                    accounts.into_iter().for_each(|stored_account| {
-                        scan_func(
-                            LoadedAccount::Stored(stored_account),
-                            &mut retval,
-                            storage.slot(),
-                        )
-                    });
-                }
-                retval
+                    accounts
+                        .into_iter()
+                        .map(|stored_account| {
+                            scan_func(LoadedAccount::Stored(stored_account), storage.slot())
+                        })
+                        .collect::<Vec<T>>()
+                })
             })
             .collect()
     }
@@ -3822,14 +3818,11 @@ impl AccountsDB {
     //     vec: [..] - items which fin in the containing bin, unordered within this vec
     // so, assumption is middle vec is bins sorted by pubkey
     fn rest_of_hash_calculation(
-        accounts: (Vec<Vec<CalculateHashIntermediate>>, Measure),
+        accounts: (Vec<CalculateHashIntermediate>, Measure),
     ) -> (Hash, u64) {
-        let (data_sections_by_pubkey, time_scan) = accounts;
+        let (accounts, time_scan) = accounts;
 
-        let (outer, flatten_time, raw_len) =
-            Self::flatten_hash_intermediate(data_sections_by_pubkey);
-
-        let (sorted_data_by_pubkey, sort_time) = Self::sort_hash_intermediate(outer);
+        let (sorted_data_by_pubkey, sort_time) = Self::sort_hash_intermediate(accounts);
 
         let (hashes, zeros, total_lamports) =
             Self::de_dup_and_eliminate_zeros(sorted_data_by_pubkey);
@@ -3849,9 +3842,7 @@ impl AccountsDB {
             ("hash", hash_time.as_us(), i64),
             ("sort", sort_time.as_us(), i64),
             ("hash_total", hash_total, i64),
-            ("flatten", flatten_time.as_us(), i64),
             ("flatten_after_zeros", flat2_time.as_us(), i64),
-            ("unreduced_entries", raw_len as i64, i64),
         );
 
         (hash, total_lamports)
@@ -3912,13 +3903,11 @@ impl AccountsDB {
     fn scan_snapshot_stores(
         storage: &[SnapshotStorage],
         simple_capitalization_enabled: bool,
-    ) -> (Vec<Vec<CalculateHashIntermediate>>, Measure) {
+    ) -> (Vec<CalculateHashIntermediate>, Measure) {
         let mut time = Measure::start("scan all accounts");
-        let result: Vec<Vec<CalculateHashIntermediate>> = Self::scan_account_storage_no_bank(
+        let result: Vec<CalculateHashIntermediate> = Self::scan_account_storage_no_bank(
             &storage,
-            |loaded_account: LoadedAccount,
-             accum: &mut Vec<CalculateHashIntermediate>,
-             slot: Slot| {
+            |loaded_account: LoadedAccount, slot: Slot| {
                 let version = loaded_account.write_version();
                 let raw_lamports = loaded_account.lamports();
                 let zero_raw_lamports = raw_lamports == 0;
@@ -3934,14 +3923,13 @@ impl AccountsDB {
                 };
 
                 let pubkey = *loaded_account.pubkey();
-                let source_item = CalculateHashIntermediate::new(
+                CalculateHashIntermediate::new(
                     version,
                     *loaded_account.loaded_hash(),
                     balance,
                     slot,
                     pubkey,
-                );
-                accum.push(source_item);
+                )
             },
         );
         time.stop();
