@@ -3736,23 +3736,25 @@ impl AccountsDB {
         chunk_count: usize,
     ) -> (Vec<Vec<Hash>>, u64) {
         let len = pubkey_division.len();
-        let max = if len > chunk_count { chunk_count } else { 1 };
-        let chunk_size = len / max;
+        let smallest_chunk_size = len / chunk_count;
+        let largest_chunk_size = smallest_chunk_size + 1;
+        // The first `remainder` slices will have length `largest_chunk_size`
+        let remainder = len % chunk_count;
         let overall_sum = Mutex::new(0u64);
-        let hashes: Vec<Vec<Hash>> = (0..max)
+        let hashes: Vec<Vec<Hash>> = (0..chunk_count)
             .into_par_iter()
             .map(|chunk_index| {
-                let mut start_index = chunk_index * chunk_size;
-                let mut end_index = start_index + chunk_size;
-                if chunk_index == max - 1 {
-                    end_index = len;
-                }
+                let num_prev_smaller_chunks = chunk_index.saturating_sub(remainder);
+                let num_prev_larger_chunks = chunk_index - num_prev_smaller_chunks;
+                let start_index = num_prev_smaller_chunks * smallest_chunk_size
+                    + num_prev_larger_chunks * largest_chunk_size;
 
-                let first_slice = chunk_index == 0;
-                if !first_slice {
-                    start_index -= 1;
-                }
-
+                let chunk_size = if chunk_index >= remainder {
+                    smallest_chunk_size + 1
+                } else {
+                    smallest_chunk_size
+                };
+                let end_index = start_index + chunk_size;
                 let (result, sum) = Self::de_dup_accounts_from_stores(
                     chunk_index == 0,
                     &pubkey_division[start_index..end_index],
