@@ -996,7 +996,7 @@ impl Default for AccountsDB {
             stats: AccountsStats::default(),
             cluster_type: None,
             account_indexes: HashSet::new(),
-            caching_enabled: false,
+            caching_enabled: true,
         }
     }
 }
@@ -4238,6 +4238,7 @@ impl AccountsDB {
     }
 
     pub fn store_cached(&self, slot: Slot, accounts: &[(&Pubkey, &Account)]) {
+        info!("storing cached");
         self.store(slot, accounts, self.caching_enabled);
     }
 
