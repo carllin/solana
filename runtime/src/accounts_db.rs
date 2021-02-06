@@ -34,6 +34,7 @@ use dashmap::{
 };
 use lazy_static::lazy_static;
 use log::*;
+use permutator::Combination;
 use rand::{prelude::SliceRandom, thread_rng, Rng};
 use rayon::{prelude::*, ThreadPool};
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,7 @@ use solana_sdk::{
     pubkey::Pubkey,
 };
 use solana_vote_program::vote_state::MAX_LOCKOUT_HISTORY;
+use std::str::FromStr;
 use std::{
     borrow::Cow,
     boxed::Box,
@@ -3714,6 +3716,21 @@ impl AccountsDB {
         Self::sort_hashes_by_pubkey(&mut hashes);
         sort_time.stop();
 
+        if slot == 34795614 {
+            for test_hashes in hashes.combination(hashes.len() - 2) {
+                let target_hash =
+                    Hash::from_str("DrsL2ZPEs9FNUhbMtNWFDXCaU9h75dkrfsB7hBXu8wDC").unwrap();
+                let mut sorted_test_hashes = test_hashes.iter().map(|x| **x).collect();
+                Self::sort_hashes_by_pubkey(&mut sorted_test_hashes);
+                println!("testing combination: {:?}", test_hashes);
+                let result =
+                    Self::compute_merkle_root_and_capitalization(sorted_test_hashes, MERKLE_FANOUT);
+                println!("result hash: {:?}", result.0);
+                if result.0 == target_hash {
+                    println!("CORRECT HASH FOUND");
+                }
+            }
+        }
         if debug {
             for (key, hash, lamports) in &hashes {
                 info!(
