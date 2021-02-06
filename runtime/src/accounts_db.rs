@@ -3716,7 +3716,7 @@ impl AccountsDB {
         Self::sort_hashes_by_pubkey(&mut hashes);
         sort_time.stop();
 
-        if slot == 34795614 {
+        /*if slot == 34795614 {
             for test_hashes in hashes.combination(hashes.len() - 2) {
                 let target_hash =
                     Hash::from_str("DrsL2ZPEs9FNUhbMtNWFDXCaU9h75dkrfsB7hBXu8wDC").unwrap();
@@ -3730,7 +3730,7 @@ impl AccountsDB {
                     println!("CORRECT HASH FOUND");
                 }
             }
-        }
+        }*/
         if debug {
             for (key, hash, lamports) in &hashes {
                 info!(

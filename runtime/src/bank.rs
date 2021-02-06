@@ -47,6 +47,7 @@ use solana_sdk::{
     incinerator,
     inflation::Inflation,
     instruction::CompiledInstruction,
+    instruction::InstructionError,
     message::Message,
     native_loader,
     native_token::sol_to_lamports,
@@ -2921,12 +2922,18 @@ impl Bank {
             .bpf_compute_budget
             .unwrap_or_else(|| BpfComputeBudget::new(&self.feature_set));
 
-        let executed: Vec<TransactionExecutionResult> = loaded_accounts
+        let mut should_skip = false;
+        let mut executed: Vec<TransactionExecutionResult> = loaded_accounts
             .iter_mut()
             .zip(OrderedIterator::new(txs, batch.iteration_order()))
             .map(|(accs, (_, tx))| match accs {
                 (Err(e), _nonce_rollback) => (Err(e.clone()), None),
                 (Ok((accounts, account_deps, loaders, _rents)), nonce_rollback) => {
+                    if tx.message.recent_blockhash.to_string()
+                        == "76dYvw5XE7guX7JUzDEatLxFxMyCEtZTCU2RQyBmFfTd"
+                    {
+                        should_skip = true;
+                    }
                     signature_count += u64::from(tx.message().header.num_required_signatures);
 
                     let executors = self.get_executors(&tx.message, &loaders);
@@ -3003,6 +3010,18 @@ impl Bank {
             .collect();
 
         execution_time.stop();
+
+        if self.slot() == 34795614 && should_skip {
+            info!("Found transaction withs slot: 34795614");
+            assert_eq!(executed.len(), 1);
+            executed = vec![(
+                Err(TransactionError::InstructionError(
+                    0,
+                    InstructionError::InvalidInstructionData,
+                )),
+                None,
+            )];
+        }
 
         debug!(
             "load: {}us execute: {}us txs_len={}",
