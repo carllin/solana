@@ -24,7 +24,7 @@ fn bench_sigverify_stage(bencher: &mut Bencher) {
     let (packet_s, packet_r) = channel();
     let (verified_s, verified_r) = unbounded();
     let verifier = TransactionSigVerifier::default();
-    let stage = SigVerifyStage::new(packet_r, verified_s, verifier);
+    let stage = SigVerifyStage::new(packet_r, verified_s, verifier, None);
 
     let now = Instant::now();
     let len = 4096;

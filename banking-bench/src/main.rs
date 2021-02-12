@@ -29,7 +29,11 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use std::{
-    sync::{atomic::Ordering, mpsc::Receiver, Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc::Receiver,
+        Arc, Mutex,
+    },
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -220,6 +224,7 @@ fn main() {
             create_test_recorder(&bank, &blockstore, None);
         let cluster_info = ClusterInfo::new_with_invalid_keypair(Node::new_localhost().info);
         let cluster_info = Arc::new(cluster_info);
+        let channel_size_tracker = Arc::new(AtomicUsize::new(0));
         let banking_stage = BankingStage::new(
             &cluster_info,
             &poh_recorder,
@@ -227,6 +232,7 @@ fn main() {
             vote_receiver,
             None,
             replay_vote_sender,
+            &channel_size_tracker,
         );
         poh_recorder.lock().unwrap().set_bank(&bank);
 
@@ -274,6 +280,7 @@ fn main() {
                 );
                 for xv in v {
                     sent += xv.packets.len();
+                    channel_size_tracker.fetch_add(xv.packets.len(), Ordering::SeqCst);
                 }
                 verified_sender.send(v.to_vec()).unwrap();
             }

@@ -14,7 +14,10 @@ use solana_perf::perf_libs;
 use solana_sdk::timing;
 use solana_streamer::streamer::{self, PacketReceiver, StreamerError};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering::SeqCst},
+    Arc, Mutex,
+};
 use std::thread::{self, Builder, JoinHandle};
 use thiserror::Error;
 
@@ -57,8 +60,14 @@ impl SigVerifyStage {
         packet_receiver: Receiver<Packets>,
         verified_sender: CrossbeamSender<Vec<Packets>>,
         verifier: T,
+        channel_size_limit: Option<(usize, &Arc<AtomicUsize>)>,
     ) -> Self {
-        let thread_hdls = Self::verifier_services(packet_receiver, verified_sender, verifier);
+        let thread_hdls = Self::verifier_services(
+            packet_receiver,
+            verified_sender,
+            verifier,
+            channel_size_limit,
+        );
         Self { thread_hdls }
     }
 
@@ -67,6 +76,7 @@ impl SigVerifyStage {
         sendr: &CrossbeamSender<Vec<Packets>>,
         id: usize,
         verifier: &T,
+        channel_size_limit: &Option<(usize, Arc<AtomicUsize>)>,
     ) -> Result<()> {
         let (batch, len, recv_time) = streamer::recv_batch(
             &recvr.lock().expect("'recvr' lock in fn verifier"),
@@ -89,7 +99,24 @@ impl SigVerifyStage {
         let verified_batch = verifier.verify_batch(batch);
 
         for v in verified_batch {
-            sendr.send(vec![v])?;
+            let v_len = v.packets.len();
+            let should_send = channel_size_limit
+                .as_ref()
+                .map(|(limit, channel_size_tracker)| {
+                    if channel_size_tracker.load(SeqCst) + v_len <= *limit {
+                        // Send first to avoid consumer from removing from the channel,
+                        // subtracting from the counter, and causing overflow
+                        channel_size_tracker.fetch_add(v_len, SeqCst);
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(true);
+
+            if should_send {
+                sendr.send(vec![v])?;
+            }
         }
 
         verify_batch_time.stop();
@@ -120,12 +147,19 @@ impl SigVerifyStage {
         verified_sender: CrossbeamSender<Vec<Packets>>,
         id: usize,
         verifier: &T,
+        channel_size_limit: Option<(usize, Arc<AtomicUsize>)>,
     ) -> JoinHandle<()> {
         let verifier = verifier.clone();
         Builder::new()
             .name(format!("solana-verifier-{}", id))
             .spawn(move || loop {
-                if let Err(e) = Self::verifier(&packet_receiver, &verified_sender, id, &verifier) {
+                if let Err(e) = Self::verifier(
+                    &packet_receiver,
+                    &verified_sender,
+                    id,
+                    &verifier,
+                    &channel_size_limit,
+                ) {
                     match e {
                         SigVerifyServiceError::StreamerError(StreamerError::RecvTimeoutError(
                             RecvTimeoutError::Disconnected,
@@ -147,11 +181,18 @@ impl SigVerifyStage {
         packet_receiver: PacketReceiver,
         verified_sender: CrossbeamSender<Vec<Packets>>,
         verifier: T,
+        channel_size_limit: Option<(usize, &Arc<AtomicUsize>)>,
     ) -> Vec<JoinHandle<()>> {
         let receiver = Arc::new(Mutex::new(packet_receiver));
         (0..4)
             .map(|id| {
-                Self::verifier_service(receiver.clone(), verified_sender.clone(), id, &verifier)
+                Self::verifier_service(
+                    receiver.clone(),
+                    verified_sender.clone(),
+                    id,
+                    &verifier,
+                    channel_size_limit.map(|(limit, limit_tracker)| (limit, limit_tracker.clone())),
+                )
             })
             .collect()
     }

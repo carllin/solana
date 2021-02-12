@@ -2,7 +2,7 @@
 //! multi-stage transaction processing pipeline in software.
 
 use crate::{
-    banking_stage::BankingStage,
+    banking_stage::{BankingStage, TOTAL_BUFFERED_PACKETS},
     broadcast_stage::{BroadcastStage, BroadcastStageType, RetransmitSlotsReceiver},
     cluster_info::ClusterInfo,
     cluster_info_vote_listener::{ClusterInfoVoteListener, VerifiedVoteSender, VoteTracker},
@@ -22,7 +22,7 @@ use solana_runtime::{
 use std::{
     net::UdpSocket,
     sync::{
-        atomic::AtomicBool,
+        atomic::{AtomicBool, AtomicUsize},
         mpsc::{channel, Receiver},
         Arc, Mutex, RwLock,
     },
@@ -70,9 +70,15 @@ impl Tpu {
         );
         let (verified_sender, verified_receiver) = unbounded();
 
+        let channel_size_tracker = Arc::new(AtomicUsize::new(0));
         let sigverify_stage = {
             let verifier = TransactionSigVerifier::default();
-            SigVerifyStage::new(packet_receiver, verified_sender, verifier)
+            SigVerifyStage::new(
+                packet_receiver,
+                verified_sender,
+                verifier,
+                Some((TOTAL_BUFFERED_PACKETS, &channel_size_tracker)),
+            )
         };
 
         let (verified_vote_packets_sender, verified_vote_packets_receiver) = unbounded();
@@ -97,6 +103,7 @@ impl Tpu {
             verified_vote_packets_receiver,
             transaction_status_sender,
             replay_vote_sender,
+            &channel_size_tracker,
         );
 
         let broadcast_stage = broadcast_type.new_broadcast_stage(

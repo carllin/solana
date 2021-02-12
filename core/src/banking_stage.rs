@@ -67,7 +67,7 @@ pub const FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET: u64 = 2;
 // Fixed thread size seems to be fastest on GCP setup
 pub const NUM_THREADS: u32 = 4;
 
-const TOTAL_BUFFERED_PACKETS: usize = 500_000;
+pub const TOTAL_BUFFERED_PACKETS: usize = 500_000;
 
 const MAX_NUM_TRANSACTIONS_PER_BATCH: usize = 128;
 
@@ -92,7 +92,7 @@ impl BankingStageStats {
         }
     }
 
-    fn report(&self, report_interval_ms: u64) {
+    fn report(&self, report_interval_ms: u64, channel_size_tracker: &AtomicUsize) {
         let should_report = {
             let last = self.last_report.load(Ordering::Relaxed);
             let now = solana_sdk::timing::timestamp();
@@ -140,6 +140,11 @@ impl BankingStageStats {
                     self.rebuffered_packets_count.swap(0, Ordering::Relaxed) as i64,
                     i64
                 ),
+                (
+                    "pending_transactions_channel_len",
+                    channel_size_tracker.load(Ordering::Relaxed) as i64,
+                    i64
+                ),
             );
         }
     }
@@ -167,6 +172,7 @@ impl BankingStage {
         verified_vote_receiver: CrossbeamReceiver<Vec<Packets>>,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
+        channel_size_tracker: &Arc<AtomicUsize>,
     ) -> Self {
         Self::new_num_threads(
             cluster_info,
@@ -176,6 +182,7 @@ impl BankingStage {
             Self::num_threads(),
             transaction_status_sender,
             gossip_vote_sender,
+            channel_size_tracker,
         )
     }
 
@@ -187,6 +194,7 @@ impl BankingStage {
         num_threads: u32,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
+        channel_size_tracker: &Arc<AtomicUsize>,
     ) -> Self {
         let batch_limit = TOTAL_BUFFERED_PACKETS / ((num_threads - 1) as usize * PACKETS_PER_BATCH);
         // Single thread to generate entries from many banks.
@@ -205,6 +213,7 @@ impl BankingStage {
 
                 let poh_recorder = poh_recorder.clone();
                 let cluster_info = cluster_info.clone();
+                let channel_size_tracker = channel_size_tracker.clone();
                 let mut recv_start = Instant::now();
                 let transaction_status_sender = transaction_status_sender.clone();
                 let gossip_vote_sender = gossip_vote_sender.clone();
@@ -215,6 +224,7 @@ impl BankingStage {
                         Self::process_loop(
                             my_pubkey,
                             &verified_receiver,
+                            &channel_size_tracker,
                             &poh_recorder,
                             &cluster_info,
                             &mut recv_start,
@@ -462,6 +472,7 @@ impl BankingStage {
     pub fn process_loop(
         my_pubkey: Pubkey,
         verified_receiver: &CrossbeamReceiver<Vec<Packets>>,
+        channel_size_tracker: &AtomicUsize,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
         cluster_info: &ClusterInfo,
         recv_start: &mut Instant,
@@ -507,6 +518,7 @@ impl BankingStage {
             match Self::process_packets(
                 &my_pubkey,
                 &verified_receiver,
+                &channel_size_tracker,
                 &poh_recorder,
                 recv_start,
                 recv_timeout,
@@ -521,7 +533,7 @@ impl BankingStage {
                 Err(RecvTimeoutError::Disconnected) => break,
             }
 
-            banking_stage_stats.report(100);
+            banking_stage_stats.report(100, &channel_size_tracker);
         }
     }
 
@@ -1015,6 +1027,7 @@ impl BankingStage {
     pub fn process_packets(
         my_pubkey: &Pubkey,
         verified_receiver: &CrossbeamReceiver<Vec<Packets>>,
+        channel_size_tracker: &AtomicUsize,
         poh: &Arc<Mutex<PohRecorder>>,
         recv_start: &mut Instant,
         recv_timeout: Duration,
@@ -1031,6 +1044,7 @@ impl BankingStage {
 
         let mms_len = mms.len();
         let count: usize = mms.iter().map(|x| x.packets.len()).sum();
+        channel_size_tracker.fetch_sub(count, Ordering::SeqCst);
         debug!(
             "@{:?} process start stalled for: {:?}ms txs: {} id: {}",
             timestamp(),
