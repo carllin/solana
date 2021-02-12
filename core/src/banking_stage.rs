@@ -1044,7 +1044,13 @@ impl BankingStage {
 
         let mms_len = mms.len();
         let count: usize = mms.iter().map(|x| x.packets.len()).sum();
+        let before = channel_size_tracker.load(Ordering::SeqCst);
         channel_size_tracker.fetch_sub(count, Ordering::SeqCst);
+        let after = channel_size_tracker.load(Ordering::SeqCst);
+        println!(
+            "received count: {}, before: {}, after: {}",
+            count, before, after
+        );
         debug!(
             "@{:?} process start stalled for: {:?}ms txs: {} id: {}",
             timestamp(),

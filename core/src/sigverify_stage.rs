@@ -103,12 +103,21 @@ impl SigVerifyStage {
             let should_send = channel_size_limit
                 .as_ref()
                 .map(|(limit, channel_size_tracker)| {
-                    if channel_size_tracker.load(SeqCst) + v_len <= *limit {
+                    let size = channel_size_tracker.load(SeqCst);
+                    if size + v_len <= *limit {
                         // Send first to avoid consumer from removing from the channel,
                         // subtracting from the counter, and causing overflow
+                        info!(
+                            "Sending packet because size: {}, requested: {}, limit: {}",
+                            size, v_len, *limit
+                        );
                         channel_size_tracker.fetch_add(v_len, SeqCst);
                         true
                     } else {
+                        info!(
+                            "Dumped packet because size: {}, requested: {}, limit: {}",
+                            size, v_len, *limit
+                        );
                         false
                     }
                 })
