@@ -12,7 +12,6 @@ use rand::Rng;
 use rayon::prelude::*;
 use std::ops::{Index, IndexMut};
 use std::slice::SliceIndex;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
 use std::os::raw::c_int;
@@ -67,9 +66,6 @@ pub struct PinnedVec<T: Default + Clone + Sized> {
 }
 
 impl<T: Default + Clone + Sized> Reset for PinnedVec<T> {
-    fn len(&self) -> usize {
-        self.x.capacity()
-    }
     fn reset(&mut self) {
         self.resize(0, T::default());
     }
@@ -205,20 +201,7 @@ impl<T: Clone + Default + Sized> PinnedVec<T> {
                 unpin(self.x.as_mut_ptr());
                 self.pinned = false;
             }
-            let old_size = self.capacity();
             self.x.reserve(size);
-            if let Some(strong) = self.recycler_ref() {
-                let new_size = self.capacity();
-                if new_size > old_size {
-                    strong
-                        .outstanding_len
-                        .fetch_add(new_size - old_size, Ordering::SeqCst);
-                } else {
-                    strong
-                        .outstanding_len
-                        .fetch_sub(old_size - new_size, Ordering::SeqCst);
-                }
-            }
         }
         self.set_pinnable();
         if !self.pinned {

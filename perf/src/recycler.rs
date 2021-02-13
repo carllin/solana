@@ -49,7 +49,6 @@ impl<T: Default> RecyclerX<T> {
 }
 
 pub trait Reset {
-    fn len(&self) -> usize;
     fn reset(&mut self);
     fn warm(&mut self, size_hint: usize);
     fn set_recycler(&mut self, recycler: Weak<RecyclerX<Self>>)
@@ -118,24 +117,11 @@ impl<T: Default + Reset + Sized> Recycler<T> {
         let should_allocate = self
             .recycler
             .limit
-            .map(|limit| {
-                let res = self.recycler.outstanding_len.load(Ordering::SeqCst) + t.len() <= limit;
-                if !res {
-                    info!(
-                        "DROPPING IN RECYCLER outstanding: {}, capacity: {}, limit: {}",
-                        self.recycler.outstanding_len.load(Ordering::SeqCst),
-                        t.len(),
-                        limit
-                    );
-                }
-                res
-            })
+            .map(|limit| self.recycler.outstanding_len.load(Ordering::SeqCst) < limit)
             .unwrap_or(true);
         if should_allocate {
             t.set_recycler(Arc::downgrade(&self.recycler));
-            self.recycler
-                .outstanding_len
-                .fetch_add(256, Ordering::SeqCst);
+            self.recycler.outstanding_len.fetch_add(1, Ordering::SeqCst);
             Some(t)
         } else {
             None
