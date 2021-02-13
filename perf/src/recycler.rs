@@ -21,7 +21,7 @@ pub struct RecyclerX<T> {
     gc: Mutex<Vec<T>>,
     stats: RecyclerStats,
     id: usize,
-    outstanding_len: AtomicUsize,
+    pub outstanding_len: AtomicUsize,
     limit: Option<usize>,
 }
 
