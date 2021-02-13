@@ -99,11 +99,10 @@ impl Tpu {
         let banking_stage = BankingStage::new(
             &cluster_info,
             poh_recorder,
-            verified_receiver,
+            (verified_receiver, &channel_size_tracker),
             verified_vote_packets_receiver,
             transaction_status_sender,
             replay_vote_sender,
-            &channel_size_tracker,
         );
 
         let broadcast_stage = broadcast_type.new_broadcast_stage(

@@ -92,7 +92,7 @@ impl BankingStageStats {
         }
     }
 
-    fn report(&self, report_interval_ms: u64, channel_size_tracker: &AtomicUsize) {
+    fn report(&self, report_interval_ms: u64) {
         let should_report = {
             let last = self.last_report.load(Ordering::Relaxed);
             let now = solana_sdk::timing::timestamp();
@@ -140,11 +140,6 @@ impl BankingStageStats {
                     self.rebuffered_packets_count.swap(0, Ordering::Relaxed) as i64,
                     i64
                 ),
-                (
-                    "pending_transactions_channel_len",
-                    channel_size_tracker.load(Ordering::Relaxed) as i64,
-                    i64
-                ),
             );
         }
     }
@@ -168,33 +163,36 @@ impl BankingStage {
     pub fn new(
         cluster_info: &Arc<ClusterInfo>,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
-        verified_receiver: CrossbeamReceiver<Vec<Packets>>,
+        (verified_receiver, channel_size_tracker): (
+            CrossbeamReceiver<Vec<Packets>>,
+            &Arc<AtomicUsize>,
+        ),
         verified_vote_receiver: CrossbeamReceiver<Vec<Packets>>,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
-        channel_size_tracker: &Arc<AtomicUsize>,
     ) -> Self {
         Self::new_num_threads(
             cluster_info,
             poh_recorder,
-            verified_receiver,
+            (verified_receiver, channel_size_tracker),
             verified_vote_receiver,
             Self::num_threads(),
             transaction_status_sender,
             gossip_vote_sender,
-            channel_size_tracker,
         )
     }
 
     fn new_num_threads(
         cluster_info: &Arc<ClusterInfo>,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
-        verified_receiver: CrossbeamReceiver<Vec<Packets>>,
+        (verified_receiver, channel_size_tracker): (
+            CrossbeamReceiver<Vec<Packets>>,
+            &Arc<AtomicUsize>,
+        ),
         verified_vote_receiver: CrossbeamReceiver<Vec<Packets>>,
         num_threads: u32,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
-        channel_size_tracker: &Arc<AtomicUsize>,
     ) -> Self {
         let batch_limit = TOTAL_BUFFERED_PACKETS / ((num_threads - 1) as usize * PACKETS_PER_BATCH);
         // Single thread to generate entries from many banks.
@@ -204,16 +202,20 @@ impl BankingStage {
         // Many banks that process transactions in parallel.
         let bank_thread_hdls: Vec<JoinHandle<()>> = (0..num_threads)
             .map(|i| {
-                let (verified_receiver, enable_forwarding) = if i < num_threads - 1 {
-                    (verified_receiver.clone(), true)
-                } else {
-                    // Disable forwarding of vote transactions, as votes are gossiped
-                    (verified_vote_receiver.clone(), false)
-                };
+                let (verified_receiver, channel_size_tracker, enable_forwarding) =
+                    if i < num_threads - 1 {
+                        (
+                            verified_receiver.clone(),
+                            Some(channel_size_tracker.clone()),
+                            true,
+                        )
+                    } else {
+                        // Disable forwarding of vote transactions, as votes are gossiped
+                        (verified_vote_receiver.clone(), None, false)
+                    };
 
                 let poh_recorder = poh_recorder.clone();
                 let cluster_info = cluster_info.clone();
-                let channel_size_tracker = channel_size_tracker.clone();
                 let mut recv_start = Instant::now();
                 let transaction_status_sender = transaction_status_sender.clone();
                 let gossip_vote_sender = gossip_vote_sender.clone();
@@ -224,7 +226,7 @@ impl BankingStage {
                         Self::process_loop(
                             my_pubkey,
                             &verified_receiver,
-                            &channel_size_tracker,
+                            channel_size_tracker.as_ref(),
                             &poh_recorder,
                             &cluster_info,
                             &mut recv_start,
@@ -472,7 +474,7 @@ impl BankingStage {
     pub fn process_loop(
         my_pubkey: Pubkey,
         verified_receiver: &CrossbeamReceiver<Vec<Packets>>,
-        channel_size_tracker: &AtomicUsize,
+        channel_size_tracker: Option<&Arc<AtomicUsize>>,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
         cluster_info: &ClusterInfo,
         recv_start: &mut Instant,
@@ -518,7 +520,7 @@ impl BankingStage {
             match Self::process_packets(
                 &my_pubkey,
                 &verified_receiver,
-                &channel_size_tracker,
+                channel_size_tracker,
                 &poh_recorder,
                 recv_start,
                 recv_timeout,
@@ -533,7 +535,7 @@ impl BankingStage {
                 Err(RecvTimeoutError::Disconnected) => break,
             }
 
-            banking_stage_stats.report(100, &channel_size_tracker);
+            banking_stage_stats.report(100);
         }
     }
 
@@ -1027,7 +1029,7 @@ impl BankingStage {
     pub fn process_packets(
         my_pubkey: &Pubkey,
         verified_receiver: &CrossbeamReceiver<Vec<Packets>>,
-        channel_size_tracker: &AtomicUsize,
+        channel_size_tracker: Option<&Arc<AtomicUsize>>,
         poh: &Arc<Mutex<PohRecorder>>,
         recv_start: &mut Instant,
         recv_timeout: Duration,
@@ -1044,13 +1046,15 @@ impl BankingStage {
 
         let mms_len = mms.len();
         let count: usize = mms.iter().map(|x| x.packets.len()).sum();
-        let before = channel_size_tracker.load(Ordering::SeqCst);
-        channel_size_tracker.fetch_sub(count, Ordering::SeqCst);
-        let after = channel_size_tracker.load(Ordering::SeqCst);
-        println!(
-            "received count: {}, before: {}, after: {}",
-            count, before, after
-        );
+        if let Some(channel_size_tracker) = channel_size_tracker {
+            let before = channel_size_tracker.load(Ordering::SeqCst);
+            channel_size_tracker.fetch_sub(count, Ordering::SeqCst);
+            let after = channel_size_tracker.load(Ordering::SeqCst);
+            println!(
+                "received count: {}, before: {}, after: {}",
+                count, before, after
+            );
+        }
         debug!(
             "@{:?} process start stalled for: {:?}ms txs: {} id: {}",
             timestamp(),

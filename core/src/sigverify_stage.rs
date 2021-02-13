@@ -15,7 +15,7 @@ use solana_sdk::timing;
 use solana_streamer::streamer::{self, PacketReceiver, StreamerError};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering::SeqCst},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use std::thread::{self, Builder, JoinHandle};
@@ -34,6 +34,43 @@ pub enum SigVerifyServiceError {
 }
 
 type Result<T> = std::result::Result<T, SigVerifyServiceError>;
+
+#[derive(Debug, Default)]
+pub struct SigVerifyStageChannelLimitStats {
+    last_report: AtomicU64,
+    dropped_packets: AtomicUsize,
+}
+impl SigVerifyStageChannelLimitStats {
+    fn report(&self, report_interval_ms: u64, channel_size_tracker: &AtomicUsize) {
+        let should_report = {
+            let last = self.last_report.load(Ordering::Relaxed);
+            let now = solana_sdk::timing::timestamp();
+            now.saturating_sub(last) > report_interval_ms
+                && self.last_report.compare_exchange(
+                    last,
+                    now,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) == Ok(last)
+        };
+
+        if should_report {
+            datapoint_info!(
+                "sigverify_stage-channel-limit-stats",
+                (
+                    "dropped_packets",
+                    self.dropped_packets.swap(0, Ordering::Relaxed) as i64,
+                    i64
+                ),
+                (
+                    "current_channel_size",
+                    channel_size_tracker.load(Ordering::Relaxed) as i64,
+                    i64
+                )
+            );
+        }
+    }
+}
 
 pub struct SigVerifyStage {
     thread_hdls: Vec<JoinHandle<()>>,
@@ -77,6 +114,7 @@ impl SigVerifyStage {
         id: usize,
         verifier: &T,
         channel_size_limit: &Option<(usize, Arc<AtomicUsize>)>,
+        sigverify_stage_stats: &SigVerifyStageChannelLimitStats,
     ) -> Result<()> {
         let (batch, len, recv_time) = streamer::recv_batch(
             &recvr.lock().expect("'recvr' lock in fn verifier"),
@@ -103,7 +141,7 @@ impl SigVerifyStage {
             let should_send = channel_size_limit
                 .as_ref()
                 .map(|(limit, channel_size_tracker)| {
-                    let size = channel_size_tracker.load(SeqCst);
+                    let size = channel_size_tracker.load(Ordering::SeqCst);
                     if size + v_len <= *limit {
                         // Send first to avoid consumer from removing from the channel,
                         // subtracting from the counter, and causing overflow
@@ -111,9 +149,12 @@ impl SigVerifyStage {
                             "Sending packet because size: {}, requested: {}, limit: {}",
                             size, v_len, *limit
                         );
-                        channel_size_tracker.fetch_add(v_len, SeqCst);
+                        channel_size_tracker.fetch_add(v_len, Ordering::SeqCst);
                         true
                     } else {
+                        sigverify_stage_stats
+                            .dropped_packets
+                            .fetch_add(v_len, Ordering::Relaxed);
                         info!(
                             "Dumped packet because size: {}, requested: {}, limit: {}",
                             size, v_len, *limit
@@ -157,6 +198,7 @@ impl SigVerifyStage {
         id: usize,
         verifier: &T,
         channel_size_limit: Option<(usize, Arc<AtomicUsize>)>,
+        sigverify_stage_stats: Arc<SigVerifyStageChannelLimitStats>,
     ) -> JoinHandle<()> {
         let verifier = verifier.clone();
         Builder::new()
@@ -168,6 +210,7 @@ impl SigVerifyStage {
                     id,
                     &verifier,
                     &channel_size_limit,
+                    &sigverify_stage_stats,
                 ) {
                     match e {
                         SigVerifyServiceError::StreamerError(StreamerError::RecvTimeoutError(
@@ -182,6 +225,12 @@ impl SigVerifyStage {
                         _ => error!("{:?}", e),
                     }
                 }
+
+                if id == 0 {
+                    if let Some((_, channel_size_tracker)) = &channel_size_limit {
+                        sigverify_stage_stats.report(1000, channel_size_tracker);
+                    }
+                }
             })
             .unwrap()
     }
@@ -193,6 +242,7 @@ impl SigVerifyStage {
         channel_size_limit: Option<(usize, &Arc<AtomicUsize>)>,
     ) -> Vec<JoinHandle<()>> {
         let receiver = Arc::new(Mutex::new(packet_receiver));
+        let sigverify_stage_stats = Arc::new(SigVerifyStageChannelLimitStats::default());
         (0..4)
             .map(|id| {
                 Self::verifier_service(
@@ -201,6 +251,7 @@ impl SigVerifyStage {
                     id,
                     &verifier,
                     channel_size_limit.map(|(limit, limit_tracker)| (limit, limit_tracker.clone())),
+                    sigverify_stage_stats.clone(),
                 )
             })
             .collect()

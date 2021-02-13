@@ -228,11 +228,10 @@ fn main() {
         let banking_stage = BankingStage::new(
             &cluster_info,
             &poh_recorder,
-            verified_receiver,
+            (verified_receiver, &channel_size_tracker),
             vote_receiver,
             None,
             replay_vote_sender,
-            &channel_size_tracker,
         );
         poh_recorder.lock().unwrap().set_bank(&bank);
 
