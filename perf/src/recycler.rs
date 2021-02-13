@@ -115,7 +115,6 @@ impl<T: Default + Reset + Sized> Recycler<T> {
         );
 
         let mut t = T::default();
-        t.set_recycler(Arc::downgrade(&self.recycler));
         let should_allocate = self
             .recycler
             .limit
@@ -133,6 +132,7 @@ impl<T: Default + Reset + Sized> Recycler<T> {
             })
             .unwrap_or(true);
         if should_allocate {
+            t.set_recycler(Arc::downgrade(&self.recycler));
             self.recycler
                 .outstanding_len
                 .fetch_add(256, Ordering::SeqCst);
