@@ -119,12 +119,23 @@ impl<T: Default + Reset + Sized> Recycler<T> {
         let should_allocate = self
             .recycler
             .limit
-            .map(|limit| self.recycler.outstanding_len.load(Ordering::SeqCst) + t.len() <= limit)
+            .map(|limit| {
+                let res = self.recycler.outstanding_len.load(Ordering::SeqCst) + t.len() <= limit;
+                if !res {
+                    info!(
+                        "DROPPING IN RECYCLER outstanding: {}, capacity: {}, limit: {}",
+                        self.recycler.outstanding_len.load(Ordering::SeqCst),
+                        t.len(),
+                        limit
+                    );
+                }
+                res
+            })
             .unwrap_or(true);
         if should_allocate {
             self.recycler
                 .outstanding_len
-                .fetch_add(t.len(), Ordering::SeqCst);
+                .fetch_add(256, Ordering::SeqCst);
             Some(t)
         } else {
             None
