@@ -98,6 +98,7 @@ pub struct ExecuteTimings {
     pub load_us: u64,
     pub execute_us: u64,
     pub store_us: u64,
+    pub pubkeys_referenced: HashMap<Pubkey, usize>,
 }
 
 impl ExecuteTimings {
@@ -105,6 +106,9 @@ impl ExecuteTimings {
         self.load_us += other.load_us;
         self.execute_us += other.execute_us;
         self.store_us += other.store_us;
+        for (pk, count) in other.pubkeys_referenced.iter() {
+            *self.pubkeys_referenced.entry(*pk).or_default() += count;
+        }
     }
 }
 
@@ -2869,6 +2873,7 @@ impl Bank {
             &mut error_counters,
             &self.rent_collector,
             &self.feature_set,
+            Some(timings),
         );
         load_time.stop();
 
@@ -2890,7 +2895,6 @@ impl Bank {
                     signature_count += u64::from(tx.message().header.num_required_signatures);
 
                     let executors = self.get_executors(&tx.message, &loaded_transaction.loaders);
-
                     let (account_refcells, account_dep_refcells, loader_refcells) =
                         Self::accounts_to_refcells(
                             &mut loaded_transaction.accounts,

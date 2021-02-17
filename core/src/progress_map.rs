@@ -32,6 +32,18 @@ impl std::ops::DerefMut for ReplaySlotStats {
 
 impl ReplaySlotStats {
     pub fn report_stats(&self, slot: Slot, num_entries: usize, num_shreds: u64) {
+        let mut pubkey_references: Vec<(usize, Pubkey)> = self
+            .execute_timings
+            .pubkeys_referenced
+            .iter()
+            .map(|(pubkey, count)| (*count, *pubkey))
+            .collect();
+        pubkey_references.sort_by_key(|(count, _)| *count);
+        let (last_pubkey, last_count) = pubkey_references
+            .last()
+            .map(|(c, k)| (*k, *c))
+            .unwrap_or((Pubkey::default(), 0));
+        info!("Transaction pubkey references: {:#?}", pubkey_references);
         datapoint_info!(
             "replay-slot-stats",
             ("slot", slot as i64, i64),
@@ -62,6 +74,8 @@ impl ReplaySlotStats {
             ("load_us", self.execute_timings.load_us, i64),
             ("execute_us", self.execute_timings.execute_us, i64),
             ("store_us", self.execute_timings.store_us, i64),
+            ("most_referenced_pubkey", last_pubkey.to_string(), String),
+            ("most_referenced_count", last_count, i64),
         );
     }
 }

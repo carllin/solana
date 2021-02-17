@@ -171,7 +171,10 @@ fn execute_batches(
     replay_vote_sender: Option<&ReplayVoteSender>,
     timings: &mut ExecuteTimings,
 ) -> Result<()> {
-    inc_new_counter_debug!("bank-par_execute_entries-count", batches.len());
+    datapoint_info!(
+        "bank-par_execute_entries-count",
+        ("len", batches.len() as i64, i64)
+    );
     let (results, new_timings): (Vec<Result<()>>, Vec<ExecuteTimings>) =
         PAR_THREAD_POOL.with(|thread_pool| {
             thread_pool.borrow().install(|| {

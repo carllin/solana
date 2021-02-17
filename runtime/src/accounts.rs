@@ -2,7 +2,8 @@ use crate::{
     accounts_db::{AccountsDB, BankHashInfo, ErrorCounters, LoadedAccount, ScanStorageResult},
     accounts_index::{AccountIndex, Ancestors, IndexKey},
     bank::{
-        NonceRollbackFull, NonceRollbackInfo, TransactionCheckResult, TransactionExecutionResult,
+        ExecuteTimings, NonceRollbackFull, NonceRollbackInfo, TransactionCheckResult,
+        TransactionExecutionResult,
     },
     blockhash_queue::BlockhashQueue,
     rent_collector::RentCollector,
@@ -158,6 +159,7 @@ impl Accounts {
         error_counters: &mut ErrorCounters,
         rent_collector: &RentCollector,
         feature_set: &FeatureSet,
+        timings: &mut Option<&mut ExecuteTimings>,
     ) -> Result<LoadedTransaction> {
         // Copy all the accounts
         let message = tx.message();
@@ -174,6 +176,9 @@ impl Accounts {
 
             for (i, key) in message.account_keys.iter().enumerate() {
                 let account = if message.is_non_loader_key(key, i) {
+                    if let Some(ref mut timings) = timings {
+                        *timings.pubkeys_referenced.entry(*key).or_default() += 1;
+                    }
                     if payer_index.is_none() {
                         payer_index = Some(i);
                     }
@@ -373,6 +378,7 @@ impl Accounts {
         error_counters: &mut ErrorCounters,
         rent_collector: &RentCollector,
         feature_set: &FeatureSet,
+        mut timings: Option<&mut ExecuteTimings>,
     ) -> Vec<TransactionLoadResult> {
         let fee_config = FeeConfig {
             secp256k1_program_enabled: feature_set
@@ -403,6 +409,7 @@ impl Accounts {
                         error_counters,
                         rent_collector,
                         feature_set,
+                        &mut timings,
                     ) {
                         Ok(loaded_transaction) => loaded_transaction,
                         Err(e) => return (Err(e), None),
@@ -1103,6 +1110,7 @@ mod tests {
             error_counters,
             rent_collector,
             &FeatureSet::all_enabled(),
+            None,
         )
     }
 
@@ -2014,6 +2022,7 @@ mod tests {
             &mut error_counters,
             &rent_collector,
             &FeatureSet::all_enabled(),
+            None,
         )
     }
 
