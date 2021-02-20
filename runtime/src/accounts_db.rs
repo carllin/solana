@@ -208,11 +208,12 @@ impl Versioned for (u64, AccountInfo) {
 
 pub enum LoadedAccountAccessor<'a> {
     Stored(Option<(Arc<AccountStorageEntry>, usize)>),
-    Cached((&'a AccountsCache, Slot, &'a Pubkey)),
+    // None value in Cached variant means the cache was flushed
+    Cached(Option<(Pubkey, Cow<'a, CachedAccount>)>),
 }
 
 impl<'a> LoadedAccountAccessor<'a> {
-    fn get_loaded_account(&self) -> Option<LoadedAccount> {
+    fn get_loaded_account(&mut self) -> Option<LoadedAccount> {
         match self {
             LoadedAccountAccessor::Stored(storage_entry) => {
                 // May not be present if slot was cleaned up in between
@@ -222,11 +223,14 @@ impl<'a> LoadedAccountAccessor<'a> {
                         .map(LoadedAccount::Stored)
                 })
             }
-            LoadedAccountAccessor::Cached((cache, slot, pubkey)) => {
-                // May not be present if slot was cleaned up in between
-                cache.load(*slot, pubkey).map(|cached_account| {
-                    LoadedAccount::Cached((**pubkey, Cow::Owned(cached_account)))
-                })
+            LoadedAccountAccessor::Cached(maybe_cached_account) => {
+                let cached_account: Option<(Pubkey, Cow<'a, CachedAccount>)> =
+                    maybe_cached_account.take();
+                let cached_account = cached_account.expect(
+                    "Cache flushed should be handled before
+                trying to fetch account",
+                );
+                Some(LoadedAccount::Cached(cached_account))
             }
         }
     }
@@ -2223,29 +2227,65 @@ impl AccountsDb {
         self.do_load(ancestors, pubkey, None)
     }
 
+    fn accounts_index_get(
+        &self,
+        ancestors: &Ancestors,
+        pubkey: &Pubkey,
+        max_root: Option<Slot>,
+    ) -> Option<(Slot, AppendVecId, usize)> {
+        let (lock, index) = self.accounts_index.get(pubkey, Some(ancestors), max_root)?;
+        let slot_list = lock.slot_list();
+        let (
+            slot,
+            AccountInfo {
+                store_id, offset, ..
+            },
+        ) = slot_list[index];
+        Some((slot, store_id, offset))
+    }
+
+    // `max_root` should always be None, unless we're doing tests, otherwise it may
+    // trigger assertions due to races with account cleans that assume this functions
+    // is searching in the accounts index based on the latest roots
     fn do_load(
         &self,
         ancestors: &Ancestors,
         pubkey: &Pubkey,
         max_root: Option<Slot>,
     ) -> Option<(Account, Slot)> {
-        let (slot, store_id, offset) = {
-            let (lock, index) = self.accounts_index.get(pubkey, Some(ancestors), max_root)?;
-            let slot_list = lock.slot_list();
-            let (
-                slot,
-                AccountInfo {
-                    store_id, offset, ..
-                },
-            ) = slot_list[index];
-            (slot, store_id, offset)
-            // `lock` released here
-        };
+        // If there are no entries in the index, return
+        let (slot, store_id, offset) = self.accounts_index_get(ancestors, pubkey, max_root)?;
 
         //TODO: thread this as a ref
-        self.get_account_accessor_from_cache_or_storage(slot, pubkey, store_id, offset)
-            .get_loaded_account()
-            .map(|loaded_account| (loaded_account.account(), slot))
+        let mut account_accessor =
+            self.get_account_accessor_from_cache_or_storage(slot, pubkey, store_id, offset);
+
+        if let LoadedAccountAccessor::Cached(None) = account_accessor {
+            // Accounts cache was just flushed, look in the index to find
+            // the account storage again. This works because in accounts cache flush,
+            // by an account is written to storage before it is removed from the cache
+            account_accessor =
+                self.get_account_accessor_from_cache_or_storage(slot, pubkey, store_id, offset);
+        }
+
+        let loaded_account: LoadedAccount = match &mut account_accessor {
+            LoadedAccountAccessor::Cached(None) => {
+                panic!("Should have already been take care of above, see comment above");
+            }
+            LoadedAccountAccessor::Cached(_) | LoadedAccountAccessor::Stored(Some(_)) => {
+                account_accessor
+                    .get_loaded_account()
+                    .expect("If an account was found in the index, it cannot have been cleaned.
+                    This is because clean should not be removing storage entries that have alive accounts")
+            }
+            LoadedAccountAccessor::Stored(None) => panic!(
+                "It should not happen that the storage entry doesn't exist if the entry in
+                the accounts index is the latest version of this account. This is because clean
+                should not be removing storage entries that have alive accounts"
+            ),
+        };
+
+        Some((loaded_account.account(), slot))
     }
 
     pub fn load_account_hash(&self, ancestors: &Ancestors, pubkey: &Pubkey) -> Hash {
@@ -2288,7 +2328,11 @@ impl AccountsDb {
         offset: usize,
     ) -> LoadedAccountAccessor<'a> {
         if store_id == CACHE_VIRTUAL_STORAGE_ID {
-            LoadedAccountAccessor::Cached((&self.accounts_cache, slot, pubkey))
+            let cached_account = self
+                .accounts_cache
+                .load(slot, pubkey)
+                .map(|cached_account| (*pubkey, Cow::Owned(cached_account)));
+            LoadedAccountAccessor::Cached(cached_account)
         } else {
             let account_storage_entry = self.storage.get_account_storage_entry(slot, store_id);
             LoadedAccountAccessor::Stored(
