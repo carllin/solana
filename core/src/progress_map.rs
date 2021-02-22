@@ -62,6 +62,59 @@ impl ReplaySlotStats {
             ("load_us", self.execute_timings.load_us, i64),
             ("execute_us", self.execute_timings.execute_us, i64),
             ("store_us", self.execute_timings.store_us, i64),
+            (
+                "execute_batches_us",
+                self.execute_timings.execute_batches_us,
+                i64
+            ),
+            (
+                "prepare_batch_us",
+                self.execute_timings.prepare_batch_us,
+                i64
+            ),
+            (
+                "load_and_execute_time_us",
+                self.execute_timings.load_and_execute_time_us,
+                i64
+            ),
+            (
+                "transaction_log_collector_config_read_lock_us",
+                self.execute_timings
+                    .transaction_log_collector_config_read_lock_us,
+                i64
+            ),
+            (
+                "transaction_log_collector_write_lock_us",
+                self.execute_timings.transaction_log_collector_write_lock_us,
+                i64
+            ),
+            (
+                "post_execute_processing_us",
+                self.execute_timings.post_execute_processing_us,
+                i64
+            ),
+            (
+                "commit_update_transaction_statuses_us",
+                self.execute_timings.commit_update_transaction_statuses_us,
+                i64
+            ),
+            (
+                "filter_program_errors_and_collect_fee_us",
+                self.execute_timings
+                    .filter_program_errors_and_collect_fee_us,
+                i64
+            ),
+            ("commit_us", self.execute_timings.commit_us, i64),
+            (
+                "collect_token_balances_us",
+                self.execute_timings.collect_token_balances_us,
+                i64
+            ),
+            (
+                "post_collect_token_balances_us",
+                self.execute_timings.post_collect_token_balances_us,
+                i64
+            ),
         );
     }
 }

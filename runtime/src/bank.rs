@@ -98,6 +98,17 @@ pub struct ExecuteTimings {
     pub load_us: u64,
     pub execute_us: u64,
     pub store_us: u64,
+    pub execute_batches_us: u64,
+    pub prepare_batch_us: u64,
+    pub load_and_execute_time_us: u64,
+    pub transaction_log_collector_config_read_lock_us: u64,
+    pub transaction_log_collector_write_lock_us: u64,
+    pub post_execute_processing_us: u64,
+    pub commit_us: u64,
+    pub commit_update_transaction_statuses_us: u64,
+    pub filter_program_errors_and_collect_fee_us: u64,
+    pub post_collect_token_balances_us: u64,
+    pub collect_token_balances_us: u64,
 }
 
 impl ExecuteTimings {
@@ -105,6 +116,20 @@ impl ExecuteTimings {
         self.load_us += other.load_us;
         self.execute_us += other.execute_us;
         self.store_us += other.store_us;
+        self.execute_batches_us += other.execute_batches_us;
+        self.prepare_batch_us += other.prepare_batch_us;
+        self.load_and_execute_time_us += other.load_and_execute_time_us;
+        self.transaction_log_collector_config_read_lock_us +=
+            other.transaction_log_collector_config_read_lock_us;
+        self.transaction_log_collector_write_lock_us +=
+            other.transaction_log_collector_write_lock_us;
+        self.post_execute_processing_us += other.post_execute_processing_us;
+        self.commit_us += other.commit_us;
+        self.commit_update_transaction_statuses_us += other.commit_update_transaction_statuses_us;
+        self.filter_program_errors_and_collect_fee_us +=
+            other.filter_program_errors_and_collect_fee_us;
+        self.collect_token_balances_us += other.collect_token_balances_us;
+        self.post_collect_token_balances_us += other.post_collect_token_balances_us;
     }
 }
 
@@ -2857,8 +2882,8 @@ impl Bank {
         debug!("processing transactions: {}", txs.len());
         inc_new_counter_info!("bank-process_transactions", txs.len());
         let mut error_counters = ErrorCounters::default();
-        let mut load_time = Measure::start("accounts_load");
 
+        let mut load_time = Measure::start("accounts_load");
         let retryable_txs: Vec<_> =
             OrderedIterator::new(batch.lock_results(), batch.iteration_order())
                 .enumerate()
@@ -2879,6 +2904,7 @@ impl Bank {
             max_age,
             &mut error_counters,
         );
+
         let mut loaded_accounts = self.load_accounts(
             txs,
             batch.iteration_order(),
@@ -2988,10 +3014,17 @@ impl Bank {
         timings.load_us += load_time.as_us();
         timings.execute_us += execution_time.as_us();
 
+        let mut post_execute_processing_time = Measure::start("post_execute_processing_time");
         let mut tx_count: u64 = 0;
         let err_count = &mut error_counters.total;
+
+        let mut transaction_log_collector_config_read_lock_time =
+            Measure::start("transaction_log_collector_config_read_lock_time");
         let transaction_log_collector_config =
             self.transaction_log_collector_config.read().unwrap();
+        transaction_log_collector_config_read_lock_time.stop();
+        timings.transaction_log_collector_config_read_lock_us +=
+            transaction_log_collector_config_read_lock_time.as_us();
 
         for (i, ((r, _nonce_rollback), tx)) in executed.iter().zip(txs.iter()).enumerate() {
             if let Some(debug_keys) = &self.transaction_debug_keys {
@@ -3004,7 +3037,12 @@ impl Bank {
             }
 
             if transaction_log_collector_config.filter != TransactionLogCollectorFilter::None {
+                let mut transaction_log_collector_write_lock_time =
+                    Measure::start("transaction_log_collector_write_lock_time");
                 let mut transaction_log_collector = self.transaction_log_collector.write().unwrap();
+                transaction_log_collector_write_lock_time.stop();
+                timings.transaction_log_collector_write_lock_us +=
+                    transaction_log_collector_write_lock_time.as_us();
                 let transaction_log_index = transaction_log_collector.logs.len();
 
                 let mut mentioned_address = false;
@@ -3063,6 +3101,9 @@ impl Bank {
             );
         }
         Self::update_error_counters(&error_counters);
+        post_execute_processing_time.stop();
+        timings.post_execute_processing_us += post_execute_processing_time.as_us();
+
         (
             loaded_accounts,
             executed,
@@ -3183,10 +3224,21 @@ impl Bank {
         write_time.stop();
         debug!("store: {}us txs_len={}", write_time.as_us(), txs.len(),);
         timings.store_us += write_time.as_us();
+
+        let mut commit_update_transaction_statuses_time =
+            Measure::start("commit_update_transaction_statuses_time");
         self.update_transaction_statuses(txs, iteration_order, &executed);
+        commit_update_transaction_statuses_time.stop();
+        timings.commit_update_transaction_statuses_us +=
+            commit_update_transaction_statuses_time.as_us();
+
+        let mut filter_program_errors_and_collect_fee_time =
+            Measure::start("filter_program_errors_and_collect_fee_time");
         let fee_collection_results =
             self.filter_program_errors_and_collect_fee(txs, iteration_order, executed);
-
+        filter_program_errors_and_collect_fee_time.stop();
+        timings.filter_program_errors_and_collect_fee_us +=
+            filter_program_errors_and_collect_fee_time.as_us();
         TransactionResults {
             fee_collection_results,
             execution_results: executed.to_vec(),
@@ -3778,6 +3830,7 @@ impl Bank {
             vec![]
         };
 
+        let mut load_and_execute_time = Measure::start("load_and_execute_time");
         let (
             mut loaded_accounts,
             executed,
@@ -3793,7 +3846,10 @@ impl Bank {
             enable_log_recording,
             timings,
         );
+        load_and_execute_time.stop();
+        timings.load_and_execute_time_us += load_and_execute_time.as_us();
 
+        let mut commit_time = Measure::start("commit_time");
         let results = self.commit_transactions(
             batch.transactions(),
             batch.iteration_order(),
@@ -3803,6 +3859,9 @@ impl Bank {
             signature_count,
             timings,
         );
+        commit_time.stop();
+        timings.commit_us += commit_time.as_us();
+
         let post_balances = if collect_balances {
             self.collect_balances(batch)
         } else {

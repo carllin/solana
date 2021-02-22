@@ -112,11 +112,14 @@ fn execute_batch(
 
     let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
 
+    let mut collect_token_balances_time = Measure::start("collect_token_balances_time");
     let pre_token_balances = if record_token_balances {
         collect_token_balances(&bank, &batch, &mut mint_decimals)
     } else {
         vec![]
     };
+    collect_token_balances_time.stop();
+    timings.collect_token_balances_us += collect_token_balances_time.as_us();
 
     let (tx_results, balances, inner_instructions, transaction_logs) =
         batch.bank().load_execute_and_commit_transactions(
@@ -137,6 +140,8 @@ fn execute_batch(
     } = tx_results;
 
     if let Some(transaction_status_sender) = transaction_status_sender {
+        let mut post_collect_token_balances_time =
+            Measure::start("post_collect_token_balances_time");
         let post_token_balances = if record_token_balances {
             collect_token_balances(&bank, &batch, &mut mint_decimals)
         } else {
@@ -157,6 +162,8 @@ fn execute_batch(
             transaction_logs,
             transaction_status_sender,
         );
+        post_collect_token_balances_time.stop();
+        timings.post_collect_token_balances_us += post_collect_token_balances_time.as_us();
     }
 
     let first_err = get_first_error(batch, fee_collection_results);
@@ -171,6 +178,7 @@ fn execute_batches(
     replay_vote_sender: Option<&ReplayVoteSender>,
     timings: &mut ExecuteTimings,
 ) -> Result<()> {
+    let mut execute_batches_time = Measure::start("execute_batches_time");
     inc_new_counter_debug!("bank-par_execute_entries-count", batches.len());
     let (results, new_timings): (Vec<Result<()>>, Vec<ExecuteTimings>) =
         PAR_THREAD_POOL.with(|thread_pool| {
@@ -198,6 +206,8 @@ fn execute_batches(
     for timing in new_timings {
         timings.accumulate(&timing);
     }
+    execute_batches_time.stop();
+    timings.execute_batches_us += execute_batches_time.as_us();
 
     first_err(&results)
 }
@@ -271,7 +281,10 @@ fn process_entries_with_callback(
             };
 
             // try to lock the accounts
+            let mut prepare_batch_time = Measure::start("prepare_batch_time");
             let batch = bank.prepare_batch(&entry.transactions, iteration_order);
+            prepare_batch_time.stop();
+            timings.prepare_batch_us += prepare_batch_time.as_us();
 
             let first_lock_err = first_err(batch.lock_results());
 
