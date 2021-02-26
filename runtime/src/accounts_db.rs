@@ -9898,4 +9898,66 @@ pub mod tests {
         assert_eq!(recycle_stores.entry_count(), 1);
         assert_eq!(recycle_stores.total_bytes(), dummy_size);
     }
+
+    #[test]
+    fn test_load_account_and_cache_flush_race() {
+        let db = Arc::new(AccountsDb::new(Vec::new(), &ClusterType::Development));
+        let pubkey = Arc::new(Pubkey::new_unique());
+        let exit = Arc::new(AtomicBool::new(false));
+        db.store_cached(
+            0,
+            &[(&pubkey, &Account::new(1, 0, &Account::default().owner))],
+        );
+        db.add_root(0);
+        db.flush_accounts_cache(true, None);
+
+        let t_flush_accounts_cache = {
+            let db = db.clone();
+            let exit = exit.clone();
+            let pubkey = pubkey.clone();
+            let mut account = Account::new(1, 0, &Account::default().owner);
+            std::thread::Builder::new()
+                .name("account-cache-flush".to_string())
+                .spawn(move || {
+                    let mut slot = 1;
+                    loop {
+                        if exit.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        account.lamports = slot + 1;
+                        db.store_cached(slot, &[(&pubkey, &account)]);
+                        db.add_root(slot);
+                        db.flush_accounts_cache(true, None);
+                        slot += 1;
+                        sleep(Duration::from_millis(10));
+                    }
+                })
+                .unwrap()
+        };
+
+        let t_do_load = {
+            let exit = exit.clone();
+            std::thread::Builder::new()
+                .name("account-do-load".to_string())
+                .spawn(move || {
+                    loop {
+                        if exit.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        // Load should never be unable to find this key
+                        let loaded_account = db
+                            .do_load(&Ancestors::default(), &pubkey, None, true)
+                            .unwrap();
+                        // slot + 1 == account.lamports because of the account-cache-flush thread
+                        assert_eq!(loaded_account.0.lamports, loaded_account.1 + 1);
+                    }
+                })
+                .unwrap()
+        };
+
+        sleep(Duration::from_secs(2));
+        exit.store(true, Ordering::Relaxed);
+        t_flush_accounts_cache.join().unwrap();
+        t_do_load.join().unwrap();
+    }
 }
