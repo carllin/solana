@@ -57,7 +57,8 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     sync::{Arc, Mutex, MutexGuard, RwLock},
-    time::Instant,
+    thread::sleep,
+    time::{Duration, Instant},
 };
 use tempfile::TempDir;
 
@@ -2266,7 +2267,30 @@ impl AccountsDb {
         let mut account_accessor =
             self.get_account_accessor_from_cache_or_storage(slot, pubkey, store_id, offset);
 
-        if let LoadedAccountAccessor::Cached(None) = account_accessor {
+        // Handle some potential race conditions with cache flush and accounts clean
+        loop {
+            match account_accessor {
+                LoadedAccountAccessor::Stored(None) => {
+                    if is_transaction_load {
+                        panic!(
+                            "It should not happen that the storage entry doesn't exist if the entry in
+                            the accounts index is the latest version of this account. This is because clean
+                            should not be removing storage entries that have alive accounts"
+                        );
+                    }
+                    // RPC get_account() may have fetched an old root from the index that was
+                    // cleaned up by clean_accounts(), so retry
+                }
+                LoadedAccountAccessor::Cached(None) =>
+                    // Cache was flushed in between checking the index and retrieving from the cache,
+                // so retry
+                    {}
+                _ => {
+                    // Everything else means there was no race, so break out and continue
+                    break;
+                }
+            }
+            let (slot, store_id, offset) = self.accounts_index_get(ancestors, pubkey, max_root)?;
             // Accounts cache was just flushed, look in the index to find
             // the account storage again. This works because in accounts cache flush,
             // by an account is written to storage before it is removed from the cache
@@ -2275,8 +2299,8 @@ impl AccountsDb {
         }
 
         let loaded_account: Option<LoadedAccount> = match &mut account_accessor {
-            LoadedAccountAccessor::Cached(None) => {
-                panic!("Should have already been take care of above, see comment above");
+            LoadedAccountAccessor::Cached(None) | LoadedAccountAccessor::Stored(None) => {
+                panic!("Should have already been taken care of above, see comment above");
             }
             LoadedAccountAccessor::Cached(_) => {
                 // Cached(Some(x)) variant always produces `Some` for get_loaded_account() since
@@ -2292,19 +2316,6 @@ impl AccountsDb {
                 } else {
                     // RPC may have fetched this storage entry after it was already `reset` by clean
                     load_result
-                }
-            }
-            LoadedAccountAccessor::Stored(None) => {
-                if is_transaction_load {
-                    panic!(
-                        "It should not happen that the storage entry doesn't exist if the entry in
-                        the accounts index is the latest version of this account. This is because clean
-                        should not be removing storage entries that have alive accounts"
-                    );
-                } else {
-                    // RPC get_account() may be fetching old cleaned accounts on banks that
-                    // have already been purged
-                    None
                 }
             }
         };
@@ -9901,7 +9912,13 @@ pub mod tests {
 
     #[test]
     fn test_load_account_and_cache_flush_race() {
-        let db = Arc::new(AccountsDb::new(Vec::new(), &ClusterType::Development));
+        let caching_enabled = true;
+        let db = Arc::new(AccountsDb::new_with_config(
+            Vec::new(),
+            &ClusterType::Development,
+            HashSet::new(),
+            caching_enabled,
+        ));
         let pubkey = Arc::new(Pubkey::new_unique());
         let exit = Arc::new(AtomicBool::new(false));
         db.store_cached(
@@ -9927,9 +9944,9 @@ pub mod tests {
                         account.lamports = slot + 1;
                         db.store_cached(slot, &[(&pubkey, &account)]);
                         db.add_root(slot);
+                        sleep(Duration::from_millis(10));
                         db.flush_accounts_cache(true, None);
                         slot += 1;
-                        sleep(Duration::from_millis(10));
                     }
                 })
                 .unwrap()
@@ -9955,7 +9972,7 @@ pub mod tests {
                 .unwrap()
         };
 
-        sleep(Duration::from_secs(2));
+        sleep(Duration::from_secs(1));
         exit.store(true, Ordering::Relaxed);
         t_flush_accounts_cache.join().unwrap();
         t_do_load.join().unwrap();
