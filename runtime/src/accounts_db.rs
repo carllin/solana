@@ -2281,7 +2281,12 @@ impl AccountsDb {
             self.get_account_accessor_from_cache_or_storage(slot, pubkey, store_id, offset);
 
         // Handle some potential race conditions with cache flush and accounts clean
+        let mut num_acceptable_failed_iterations = 0;
         loop {
+            if num_acceptable_failed_iterations >= 10 {
+                warn!("do_load() failed to get key: {} from storage", pubkey);
+                return None;
+            }
             match account_accessor {
                 LoadedAccountAccessor::Stored(None) => {
                     if is_transaction_load {
@@ -2293,10 +2298,15 @@ impl AccountsDb {
                     }
                     // RPC get_account() may have fetched an old root from the index that was
                     // cleaned up by clean_accounts(), so retry
+                    else {
+                        // Increment failsafe
+                        num_acceptable_failed_iterations += 1;
+                    }
                 }
                 LoadedAccountAccessor::Cached(None) =>
                     // Cache was flushed in between checking the index and retrieving from the cache,
-                // so retry
+                // so retry. Don't increment `num_failed_iterations` here becuase it's unacceptable
+                // for this to fail for transaction loads.
                     {}
                 _ => {
                     // Everything else means there was no race, so break out and continue
