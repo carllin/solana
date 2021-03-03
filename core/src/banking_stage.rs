@@ -39,6 +39,7 @@ use solana_sdk::{
     },
     poh_config::PohConfig,
     pubkey::Pubkey,
+    signature::Signature,
     timing::{duration_as_ms, timestamp},
     transaction::{self, Transaction, TransactionError},
 };
@@ -58,8 +59,64 @@ use std::{
     time::Instant,
 };
 
-type PacketsAndOffsets = (Packets, Vec<usize>);
-pub type UnprocessedPackets = VecDeque<PacketsAndOffsets>;
+struct UnprocessedTransactions {
+    transactions: Vec<Transaction>,
+    transaction_to_packet_indexes: Vec<usize>,
+    unprocessed_packet: &mut UnprocessedPacket,
+}
+
+impl UnprocessedTransactions {
+    fn tracer_tx_signature(&self, tx_index: usize) -> &Option<Signature> {
+        let packet_index = self.transaction_to_packet_indexes[tx_index];
+        &msgs.packets[packet_index].header.tracer_tx_signature
+    }
+}
+
+struct UnprocessedPacket {
+    packets: Packets,
+    valid_indexes: Vec<(usize, bool)>,
+}
+
+impl UnprocessedPacket {
+    fn from_valid_indexes(packets: Packets, valid_indexes: Vec<(usize, bool)>) -> Self {
+        Self {
+            packets,
+            valid_indexes,
+        }
+    }
+
+    fn is_tracer_tx(&self, index: usize) -> bool {
+        self.packets.packets[index]
+            .meta
+            .tracer_tx_signature
+            .is_some()
+    }
+
+    fn set_new_valid_indexes(new_valid_indexes: Vec<usize>) {
+        self.valid_indexes = new_valid_indexes
+            .into_iter()
+            .map(|tx_index| (tx_index, self.is_tracer_tx(tx_index)))
+            .collect();
+    }
+
+    fn tracer_tx_signatures(&self) -> impl Iterator<Item = Signature> {
+        self.valid_indexes.filter_map(|(index, is_tracer_tx)| {
+            if is_tracer_tx {
+                Some(
+                    self.packets[index]
+                        .meta
+                        .tracer_tx_signature
+                        .as_ref()
+                        .unwrap(),
+                )
+            } else {
+                None
+            }
+        })
+    }
+}
+
+pub type UnprocessedPackets = VecDeque<UnprocessedPacket>;
 
 /// Transaction forwarding
 pub const FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET: u64 = 2;
@@ -232,17 +289,22 @@ impl BankingStage {
     }
 
     fn filter_valid_packets_for_forwarding<'a>(
-        all_packets: impl Iterator<Item = &'a PacketsAndOffsets>,
+        all_packets: impl Iterator<Item = &'a UnprocessedPacket>,
     ) -> Vec<&'a Packet> {
         all_packets
-            .flat_map(|(p, valid_indexes)| valid_indexes.iter().map(move |x| &p.packets[*x]))
+            .flat_map(|unprocessed_packet| {
+                unprocessed_packet
+                    .valid_indexes
+                    .iter()
+                    .map(move |x| &unprocessed_packet.packets[*x])
+            })
             .collect()
     }
 
     fn forward_buffered_packets(
         socket: &std::net::UdpSocket,
         tpu_forwards: &std::net::SocketAddr,
-        unprocessed_packets: &VecDeque<PacketsAndOffsets>,
+        unprocessed_packets: &VecDeque<UnprocessedPacket>,
     ) -> std::io::Result<()> {
         let packets = Self::filter_valid_packets_for_forwarding(unprocessed_packets.iter());
         inc_new_counter_info!("banking_stage-forwarded_packets", packets.len());
@@ -859,7 +921,9 @@ impl BankingStage {
         let packets = Packets::new(
             transaction_indexes
                 .iter()
-                .map(|x| msgs.packets[*x].to_owned())
+                .map(|x| {
+                    let p = msgs.packets[*x].to_owned();
+                })
                 .collect_vec(),
         );
 
@@ -927,14 +991,13 @@ impl BankingStage {
     fn process_received_packets(
         bank: &Arc<Bank>,
         poh: &Arc<Mutex<PohRecorder>>,
-        msgs: &Packets,
-        packet_indexes: Vec<usize>,
+        unprocessed_packet: &mut UnprocessedPacket,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: &ReplayVoteSender,
-    ) -> (usize, usize, Vec<usize>) {
+    ) -> (usize, usize) {
         let (transactions, transaction_to_packet_indexes) = Self::transactions_from_packets(
-            msgs,
-            &packet_indexes,
+            &unprocessed_packet.packets,
+            &unprocessed_packet.valid_indexes,
             bank.secp256k1_program_enabled(),
         );
         debug!(
@@ -953,8 +1016,8 @@ impl BankingStage {
             gossip_vote_sender,
         );
 
+        // Filter out any outdated packets that haven't yet been processed
         let unprocessed_tx_count = unprocessed_tx_indexes.len();
-
         let filtered_unprocessed_packet_indexes = Self::filter_pending_packets_from_pending_txs(
             bank,
             &transactions,
@@ -966,13 +1029,14 @@ impl BankingStage {
             unprocessed_tx_count.saturating_sub(filtered_unprocessed_packet_indexes.len())
         );
 
-        (processed, tx_len, filtered_unprocessed_packet_indexes)
+        unprocessed_packet.set_new_valid_indexes(filtered_unprocessed_packet_indexes);
+
+        (processed, tx_len)
     }
 
     fn filter_unprocessed_packets(
         bank: &Arc<Bank>,
-        msgs: &Packets,
-        transaction_indexes: &[usize],
+        unprocessed_packet: &UnprocessedPacket,
         my_pubkey: &Pubkey,
         next_leader: Option<Pubkey>,
     ) -> Vec<usize> {
@@ -986,7 +1050,7 @@ impl BankingStage {
         }
 
         let (transactions, transaction_to_packet_indexes) = Self::transactions_from_packets(
-            msgs,
+            &unprocessed_packet.packets,
             &transaction_indexes,
             bank.secp256k1_program_enabled(),
         );
@@ -1009,19 +1073,21 @@ impl BankingStage {
         filtered_unprocessed_packet_indexes
     }
 
-    fn generate_packet_indexes(vers: &PinnedVec<Packet>) -> Vec<usize> {
-        vers.iter()
+    fn generate_new_unprocessed_packets(packets: Packets) -> UnprocessedPacket {
+        let unprocessed_indexes = packets
+            .packets
+            .iter()
             .enumerate()
-            .filter_map(
-                |(index, ver)| {
-                    if !ver.meta.discard {
-                        Some(index)
-                    } else {
-                        None
-                    }
-                },
-            )
-            .collect()
+            .filter_map(|(index, ver)| {
+                if !ver.meta.discard {
+                    Some((index, ver.meta.tracer_tx_signature.is_some()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        UnprocessedPacket::from_valid_indexes(packets, packet_indexes);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1060,26 +1126,27 @@ impl BankingStage {
         let mut dropped_batches_count = 0;
         let mut newly_buffered_packets_count = 0;
         while let Some(msgs) = mms_iter.next() {
-            let packet_indexes = Self::generate_packet_indexes(&msgs.packets);
+            let mut unprocessed_packet = Self::generate_new_unprocessed_packets(msgs);
             let bank = poh.lock().unwrap().bank();
             if bank.is_none() {
                 Self::push_unprocessed(
                     buffered_packets,
-                    msgs,
-                    packet_indexes,
+                    unprocessed_packet,
                     &mut dropped_batches_count,
                     &mut newly_buffered_packets_count,
                     batch_limit,
+                    "Not leader yet",
                 );
                 continue;
             }
             let bank = bank.unwrap();
 
-            let (processed, verified_txs_len, unprocessed_indexes) = Self::process_received_packets(
+            let (processed, verified_txs_len) = Self::process_received_packets(
                 &bank,
                 &poh,
-                &msgs,
-                packet_indexes,
+                // This function removes the processed/invalid packet indexes
+                // from this object
+                &mut unprocessed_packet,
                 transaction_status_sender.clone(),
                 gossip_vote_sender,
             );
@@ -1089,11 +1156,11 @@ impl BankingStage {
             // Collect any unprocessed transactions in this batch for forwarding
             Self::push_unprocessed(
                 buffered_packets,
-                msgs,
-                unprocessed_indexes,
+                unprocessed_packet,
                 &mut dropped_batches_count,
                 &mut newly_buffered_packets_count,
                 batch_limit,
+                "retryable tx",
             );
 
             if processed < verified_txs_len {
@@ -1101,11 +1168,10 @@ impl BankingStage {
                 // Walk thru rest of the transactions and filter out the invalid (e.g. too old) ones
                 #[allow(clippy::while_let_on_iterator)]
                 while let Some(msgs) = mms_iter.next() {
-                    let packet_indexes = Self::generate_packet_indexes(&msgs.packets);
+                    let unprocessed_packet = Self::generate_new_unprocessed_packets(msgs);
                     let unprocessed_indexes = Self::filter_unprocessed_packets(
                         &bank,
-                        &msgs,
-                        &packet_indexes,
+                        &unprocessed_packet,
                         &my_pubkey,
                         next_leader,
                     );
@@ -1155,23 +1221,31 @@ impl BankingStage {
 
     fn push_unprocessed(
         unprocessed_packets: &mut UnprocessedPackets,
-        packets: Packets,
-        packet_indexes: Vec<usize>,
+        new_unprocessed_packet: UnprocessedPacket,
         dropped_batches_count: &mut usize,
         newly_buffered_packets_count: &mut usize,
         batch_limit: usize,
+        unprocessed_reason: &str,
     ) {
         if Self::packet_has_more_unprocessed_transactions(&packet_indexes) {
             if unprocessed_packets.len() >= batch_limit {
                 *dropped_batches_count += 1;
-                unprocessed_packets.pop_front();
+                let outdated_packet = unprocessed_packets.pop_front();
+                // Trace here, removed from buffered queue
+                for tracer_tx_signature in outdated_packet.tracer_tx_signatures() {
+                    //TODO: datapoint_info!
+                }
             }
             *newly_buffered_packets_count += packet_indexes.len();
-            unprocessed_packets.push_back((packets, packet_indexes));
+            // Trace here, added to buffered queue
+            for tracer_tx_signature in new_unprocessed_packet.tracer_tx_signatures() {
+                //TODO: datapoint_info!
+            }
+            unprocessed_packets.push_back(new_unprocessed_packet);
         }
     }
 
-    fn packet_has_more_unprocessed_transactions(packet_indexes: &[usize]) -> bool {
+    fn packet_has_more_unprocessed_transactions(packet_indexes: &[(usize, bool)]) -> bool {
         !packet_indexes.is_empty()
     }
 
