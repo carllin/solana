@@ -336,30 +336,20 @@ impl ClusterInfoVoteListener {
         votes: Vec<Transaction>,
         labels: Vec<CrdsValueLabel>,
     ) -> (Vec<Transaction>, Vec<(CrdsValueLabel, Packets)>) {
-        let msgs = packet::to_packets_chunked(&votes, 1);
-        let r = sigverify::ed25519_verify_cpu(&msgs);
+        let mut msgs = packet::to_packets_chunked(&votes, 1);
+        sigverify::ed25519_verify_cpu(&mut msgs);
 
-        assert_eq!(
-            r.iter()
-                .map(|packets_results| packets_results.len())
-                .sum::<usize>(),
-            votes.len()
-        );
-
-        let (vote_txs, packets) = izip!(
-            labels.into_iter(),
-            votes.into_iter(),
-            r.iter().flatten(),
-            msgs,
-        )
-        .filter_map(|(label, vote, verify_result, packet)| {
-            if *verify_result != 0 {
-                Some((vote, (label, packet)))
-            } else {
-                None
-            }
-        })
-        .unzip();
+        let (vote_txs, packets) = izip!(labels.into_iter(), votes.into_iter(), msgs)
+            .filter_map(|(label, vote, packets)| {
+                // to_packets_chunked() above split into 1 packet long chunks
+                assert_eq!(packets.packets.len(), 1);
+                if !packets.packets[0].meta.discard {
+                    Some((vote, (label, packets)))
+                } else {
+                    None
+                }
+            })
+            .unzip();
         (vote_txs, packets)
     }
 
