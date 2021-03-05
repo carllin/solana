@@ -2257,9 +2257,6 @@ impl AccountsDb {
         Some((slot, store_id, offset))
     }
 
-    // `max_root` should always be None, unless we're doing tests, otherwise it may
-    // trigger assertions due to races with account cleans that assume this functions
-    // is searching in the accounts index based on the latest roots
     fn do_load(
         &self,
         ancestors: &Ancestors,
@@ -2276,15 +2273,27 @@ impl AccountsDb {
             sleep(Duration::from_millis(self.load_delay));
         }
 
-        //TODO: thread this as a ref
         let mut account_accessor =
             self.get_account_accessor_from_cache_or_storage(slot, pubkey, store_id, offset);
 
-        // Handle some potential race conditions with cache flush and accounts clean
+        // Failsafe for potential race conditions with cache flush and accounts clean
         let mut num_acceptable_failed_iterations = 0;
         loop {
             if num_acceptable_failed_iterations >= 10 {
-                warn!("do_load() failed to get key: {} from storage", pubkey);
+                // The latest version of the account existed in the index, but could not be
+                // fetched from storage. This means a race occurred between this function and clean
+                // accounts/purge_slots
+                datapoint_warn!(
+                    "accounts_db-do_load_warn",
+                    (
+                        "warn",
+                        format!("do_load() failed to get key: {} from storage, latest attempt was for slot: {}, storage_entry: {}",
+                        pubkey,
+                        slot,
+                        store_id),
+                        String
+                    ),
+                );
                 return None;
             }
             match account_accessor {
@@ -2297,28 +2306,56 @@ impl AccountsDb {
                         );
                     }
                     // RPC get_account() may have fetched an old root from the index that was
-                    // cleaned up by clean_accounts(), so retry
+                    // either:
+                    // 1) Cleaned up by clean_accounts(), so the accounts index has been updated
+                    // and the storage entries have been removed.
+                    // 2) Dropped by purge_slots() because the slot was on a minor fork, which
+                    // removes the slots' storage entries but doesn't purge from the accounts index
+                    // (account index cleanup is left to clean for stored slots).
                     else {
                         // Increment failsafe
                         num_acceptable_failed_iterations += 1;
                     }
                 }
-                LoadedAccountAccessor::Cached(None) =>
+                LoadedAccountAccessor::Cached(None) => {
                     // Cache was flushed in between checking the index and retrieving from the cache,
-                // so retry. Don't increment `num_failed_iterations` here becuase it's unacceptable
-                // for this to fail for transaction loads.
-                    {}
+                    // so retry. Don't increment `num_failed_iterations` here because it's impossible
+                    // for this to fail for transaction loads more than once. This is because for a slot
+                    // `X` that's being replayed, there is only one latest ancestor containing the latest
+                    // update for the account, and this ancestor can only be flushed once.
+                    num_acceptable_failed_iterations += 1;
+                    if is_transaction_load {
+                        assert!(num_acceptable_failed_iterations <= 1);
+                    }
+                }
                 _ => {
                     // Everything else means there was no race, so break out and continue
                     break;
                 }
             }
-            let (slot, store_id, offset) = self.accounts_index_get(ancestors, pubkey, max_root)?;
+            let (new_slot, new_store_id, new_offset) =
+                self.accounts_index_get(ancestors, pubkey, max_root)?;
+            if new_slot == slot && new_store_id == store_id {
+                // If the entry was missing from the cache, that means it must have been flushed,
+                // and the accounts index is always updated before cache flush, so this
+                // should be impossible
+                assert!(new_store_id != CACHE_VIRTUAL_STORAGE_ID);
+
+                // If this is not a cache entry, then this was a minor fork slot
+                // that had its storage entries cleaned up by purge_slots() but hasn't been
+                // cleaned yet, so return None
+                return None;
+            }
+
             // Accounts cache was just flushed, look in the index to find
             // the account storage again. This works because in accounts cache flush,
-            // by an account is written to storage before it is removed from the cache
-            account_accessor =
-                self.get_account_accessor_from_cache_or_storage(slot, pubkey, store_id, offset);
+            // an account is written to storage *before* it is removed from the cache
+            account_accessor = self.get_account_accessor_from_cache_or_storage(
+                new_slot,
+                pubkey,
+                new_store_id,
+                new_offset,
+            );
         }
 
         let loaded_account: Option<LoadedAccount> = match &mut account_accessor {
