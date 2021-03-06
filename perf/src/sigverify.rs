@@ -89,6 +89,8 @@ fn verify_packet(packet: &mut Packet) {
     let mut pubkey_start = packet_offsets.pubkey_start as usize;
     let msg_start = packet_offsets.msg_start as usize;
 
+    packet.meta.discard = false;
+
     if packet_offsets.sig_len == 0 {
         packet.meta.discard = true;
         return;
@@ -106,6 +108,7 @@ fn verify_packet(packet: &mut Packet) {
 
         if pubkey_end >= packet.meta.size || sig_end >= packet.meta.size {
             packet.meta.discard = true;
+            return;
         }
 
         let signature = Signature::new(&packet.data[sig_start..sig_end]);
@@ -129,8 +132,6 @@ fn verify_packet(packet: &mut Packet) {
         pubkey_start += size_of::<Pubkey>();
         sig_start += size_of::<Signature>();
     }
-
-    packet.meta.discard = false;
 }
 
 pub fn batch_size(batches: &[Packets]) -> usize {
