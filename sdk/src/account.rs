@@ -1,6 +1,6 @@
 use crate::{clock::Epoch, pubkey::Pubkey};
 use solana_program::{account_info::AccountInfo, sysvar::Sysvar};
-use std::{cell::Ref, cell::RefCell, cmp, fmt, rc::Rc};
+use std::{cell::Ref, cell::RefCell, cmp, fmt, ops::Index, rc::Rc, slice::SliceIndex};
 
 /// An Account with data that is stored on chain
 #[repr(C)]
@@ -75,9 +75,23 @@ impl From<Account> for AccountSharedData {
     }
 }
 
+pub trait AccountData: Clone
+{
+    fn truncate(&mut self, len: usize);
+}
+
+impl AccountData for Vec<u8> {
+    fn truncate(&mut self, len: usize) {
+        self.truncate(len)
+    }
+}
+
 pub trait WritableAccount: ReadableAccount {
+    type data: AccountData;
+
     fn set_lamports(&mut self, lamports: u64);
     fn data_as_mut_slice(&mut self) -> &mut [u8];
+    fn data_mut(&mut self) -> &mut Self::data;
     fn set_owner(&mut self, owner: Pubkey);
     fn set_executable(&mut self, executable: bool);
     fn set_rent_epoch(&mut self, epoch: Epoch);
@@ -117,10 +131,15 @@ impl ReadableAccount for Account {
 }
 
 impl WritableAccount for Account {
+    type data = Vec<u8>;
+
     fn set_lamports(&mut self, lamports: u64) {
         self.lamports = lamports;
     }
     fn data_as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.data
+    }
+    fn data_mut(&mut self) -> &mut Self::data {
         &mut self.data
     }
     fn set_owner(&mut self, owner: Pubkey) {
@@ -150,10 +169,15 @@ impl WritableAccount for Account {
 }
 
 impl WritableAccount for AccountSharedData {
+    type data = Vec<u8>;
+
     fn set_lamports(&mut self, lamports: u64) {
         self.lamports = lamports;
     }
     fn data_as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.data
+    }
+    fn data_mut(&mut self) -> &mut Self::data {
         &mut self.data
     }
     fn set_owner(&mut self, owner: Pubkey) {
