@@ -106,6 +106,7 @@ pub struct Tower {
     threshold_size: f64,
     lockouts: VoteState,
     last_vote: Vote,
+    pub was_last_vote_reverted: bool,
     last_timestamp: BlockTimestamp,
     #[serde(skip)]
     path: PathBuf,
@@ -131,6 +132,7 @@ impl Default for Tower {
             threshold_size: VOTE_THRESHOLD_SIZE,
             lockouts: VoteState::default(),
             last_vote: Vote::default(),
+            was_last_vote_reverted: false,
             last_timestamp: BlockTimestamp::default(),
             path: PathBuf::default(),
             tmp_path: PathBuf::default(),
@@ -406,7 +408,7 @@ impl Tower {
         self.lockouts.process_vote_unchecked(&vote);
         self.last_vote = vote;
         let new_root = self.root();
-
+        self.was_last_vote_reverted = false;
         datapoint_info!("tower-vote", ("latest", slot, i64), ("root", new_root, i64));
         if old_root != new_root {
             Some(new_root)
@@ -605,6 +607,84 @@ impl Tower {
 
                 let switch_slot_ancestors = ancestors.get(&switch_slot).unwrap();
 
+                // If the last vote was on a duplicate slot `S`, or a descendant of `S` and:
+                // 1. The saved tower on disk has that vote
+                // 2. We've purged the bad version of that vote
+                //
+                // Then now there are two cases:
+                //
+                // 1) The old version of the slot was dumped, but there's no new version yet.
+                // In this case, ancestors of the last vote `last_vote_ancestors` will be empty
+                // because BankForks does not contain a bank for `S`. This means this that this
+                // switch check will count any and all forks toward the switch threshold. For
+                // instance:
+                //
+                //              10 (last vote)
+                //               |
+                //               9
+                //               |
+                //               8 (duplicate slot version A)
+                //               |
+                //               7
+                // Then when a confirmed version of 8 was found, 8,9,10 were dumped. Now if on
+                // restart we get another version of 8, then the fork structure could look like:
+                //
+                //          10 (last vote, dumped from blockstore)
+                //               |
+                //               9 (dumped from blockstore)
+                //               |
+                //               8 (duplicate slot version A, dumped from blockstore)
+                //               |
+                //               7       8 (duplicate slot version B)
+                //                 \    /
+                //                    6
+                // Here, if we count the votes on 8 toward the switch threshold it's fine because it's
+                // essentially on a different fork.
+                //
+                // Even if we were to repair the same version of 8 again, like:
+                //
+                //         10 (last vote)
+                //               |
+                //               9 (dumped, repaired)    11 (new fork, repaired)
+                //               \                        /
+                //                  8 (repaired same version A of this slot)
+                //                  |
+                //                  7
+                //
+                // We will count the votes on slot 9 toward the switch threshold on slot 11 (which is normally bad)
+                // but that's ok because we know that because we dumped 10, there must be *some fork* built off
+                // of an alternate version of 8 that got > 2/3. Now a natural question arises, normally to count those
+                // switch votes on something like the other version `B` of slot 8, we need not only for the lockout
+                // to be on a different fork, i.e. not an ancestor or descendant, but the length
+                // of the lockout must also extend *past* your last vote (see the
+                // `for (_lockout_interval_end, intervals_keyed_by_end) in lockout_intervals.range((Included(last_voted_slot), Unbounded)) {)`
+                // logic below). So how do we know those lockouts on version `B` of slot 8 extend past slot 10?
+                //
+                // However, this case is unique because we know > 2/3 voted on some other version of 8, and those people
+                // could not have voted on our version of 10 because they will not switch to anoher version of 8 (in order
+                // to switch they would need to see 2/3 on our version, which is not possible with <= 1/3 malicious). Thus
+                // there's no way our last vote on 10 can be confirmed. Hence we don't care about the length of the lockouts there.
+                //
+                // This is ok because the only way we dumped `S` is if that version is if another
+                // version was confirmed, so we should be safe to switch because that means that version
+                // (which is on another fork than the last vote on S) had > 2/3, which is enough
+                // for the switching threshold.
+                //
+                // 2) A new confirmed version of that slot `S'` with potentially different ancestors
+                // is in blockstore.
+                // Then on restart, the validator will replay the new confirmed version `S'`
+                // and its descendants. When the validator does the switch check on those
+                // descendants, the `switch_slot_ancestors.contains(&last_voted_slot)` check
+                // below should be true, allowing the validator to vote again. This is ok
+                // because the only way we have another version of `S` is if that version is
+                // confirmed, so we should be safe to switch because that means that version
+                // (which is on another fork than the last vote on S) had > 2/3, which is enough
+                // for the switching threshold.
+
+                // TODO: When dumping save off the lastest ancestor of the dumped slot (the parent).
+                // Switching threshold should not accept lockouts on any parent of that slot (but descendants
+                // are fine). Also account for when you repair the same version of the slot (can't count votes
+                // on that slot).
                 if switch_slot == last_voted_slot || switch_slot_ancestors.contains(&last_voted_slot) {
                     // If the `switch_slot is a descendant of the last vote,
                     // no switching proof is necessary
@@ -622,7 +702,7 @@ impl Tower {
                         // the `last_voted_slot`. This is in contrast to usual SwitchFailure where ReplayStage continues to build blocks
                         // on latest vote. See `select_vote_and_reset_forks()` for more details.
                         return rollback_due_to_to_to_duplicate_ancestor(latest_duplicate_ancestor);
-                    } else {
+                    } else if !self.was_last_vote_reverted {
                         panic!(
                             "Should never consider switching to ancestor ({}) of last vote: {}, ancestors({:?})",
                             switch_slot,
@@ -671,7 +751,9 @@ impl Tower {
                     // By the time we reach here, any ancestors of the `last_vote`,
                     // should have been filtered out, as they all have a descendant,
                     // namely the `last_vote` itself.
-                    assert!(!last_vote_ancestors.contains(candidate_slot));
+                    if !self.was_last_vote_reverted {
+                        assert!(!last_vote_ancestors.contains(candidate_slot));
+                    }
 
                     // Evaluate which vote accounts in the bank are locked out
                     // in the interval candidate_slot..last_vote, which means

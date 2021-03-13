@@ -649,7 +649,7 @@ impl ReplayStage {
                     let mut repair_correct_slots_time = Measure::start("repair_correct_slots_time");
                     // Used for correctness check
                     let poh_bank = poh_recorder.lock().unwrap().bank();
-                    Self::repair_correct_slots(&mut duplicate_slots_to_repair, &mut ancestors, &mut descendants, &mut progress, &bank_forks, &blockstore, poh_bank.map(|bank| bank.slot()));
+                    Self::repair_correct_slots(&mut duplicate_slots_to_repair, &mut ancestors, &mut descendants, &mut progress, &bank_forks, &blockstore, poh_bank.map(|bank| bank.slot()), &mut tower);
                     repair_correct_slots_time.stop();
 
                     let mut wait_receive_time = Measure::start("wait_receive_time");
@@ -783,12 +783,13 @@ impl ReplayStage {
         bank_forks: &RwLock<BankForks>,
         blockstore: &Blockstore,
         poh_bank_slot: Option<Slot>,
+        tower: &mut Tower,
     ) {
         if duplicate_slots_to_repair.is_empty() {
             return;
         }
 
-        let root_bank = bank_forks.read().unwrap().root_bank().clone();
+        let root_bank = bank_forks.read().unwrap().root_bank();
         duplicate_slots_to_repair.retain(|(duplicate_slot, _correct_hash)| {
             // Should not purge duplicate slots if there is currently a poh bank building
             // on top of that slot, as BankingStage might still be referencing/touching that state
@@ -820,6 +821,7 @@ impl ReplayStage {
                         &root_bank,
                         bank_forks,
                         blockstore,
+                        tower,
                     );
                     true
                 // TODO: Send signal to repair to repair the correct version of
@@ -848,8 +850,10 @@ impl ReplayStage {
         root_bank: &Bank,
         bank_forks: &RwLock<BankForks>,
         blockstore: &Blockstore,
+        tower: &mut Tower,
     ) {
         warn!("purging slot {}", duplicate_slot);
+        let last_vote = tower.last_voted_slot();
 
         // Doesn't need to be root bank, just needs a common bank to
         // access the status cache and accounts
@@ -874,6 +878,13 @@ impl ReplayStage {
             .chain(std::iter::once(&duplicate_slot))
         {
             warn!("purging descendant: {} of slot {}", slot, duplicate_slot);
+            if last_vote
+                .map(|last_vote| *slot == last_vote)
+                .unwrap_or(false)
+            {
+                tower.was_last_vote_reverted = true;
+            }
+
             // Clear the slot signatures from status cache for this slot
             root_bank.clear_slot_signatures(*slot);
 
@@ -4211,6 +4222,7 @@ pub(crate) mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
+            &mut Tower::default(),
         );
         for i in 5..=7 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
@@ -4248,6 +4260,7 @@ pub(crate) mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
+            &mut Tower::default(),
         );
         for i in 4..=7 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
@@ -4271,6 +4284,7 @@ pub(crate) mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
+            &mut Tower::default(),
         );
         for i in 1..=7 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
