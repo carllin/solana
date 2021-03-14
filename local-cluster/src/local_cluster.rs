@@ -215,7 +215,7 @@ impl LocalCluster {
             &leader_vote_keypair.pubkey(),
             vec![leader_vote_keypair.clone()],
             vec![],
-            &leader_config,
+            &mut leader_config,
             true, // should_check_duplicate_instance
             Arc::new(RwLock::new(ValidatorStartProgress::default())),
         );
@@ -357,7 +357,7 @@ impl LocalCluster {
             &voting_keypair.pubkey(),
             vec![voting_keypair.clone()],
             vec![self.entry_point_info.clone()],
-            &config,
+            &mut config,
             true, // should_check_duplicate_instance
             Arc::new(RwLock::new(ValidatorStartProgress::default())),
         );
@@ -674,7 +674,7 @@ impl Cluster for LocalCluster {
             entry_point_info
                 .map(|entry_point_info| vec![entry_point_info])
                 .unwrap_or_default(),
-            &safe_clone_config(&cluster_validator_info.config),
+            &mut safe_clone_config(&cluster_validator_info.config),
             true, // should_check_duplicate_instance
             Arc::new(RwLock::new(ValidatorStartProgress::default())),
         );

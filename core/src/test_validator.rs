@@ -381,7 +381,7 @@ impl TestValidator {
         let mut rpc_config = config.rpc_config.clone();
         rpc_config.identity_pubkey = validator_identity.pubkey();
 
-        let validator_config = ValidatorConfig {
+        let mut validator_config = ValidatorConfig {
             rpc_addrs: Some((
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), node.info.rpc.port()),
                 SocketAddr::new(
@@ -414,7 +414,7 @@ impl TestValidator {
             &validator_vote_account.pubkey(),
             vec![Arc::new(validator_vote_account)],
             vec![],
-            &validator_config,
+            &mut validator_config,
             true, // should_check_duplicate_instance
             config.start_progress.clone(),
         ));

@@ -1,7 +1,7 @@
 //! The `validator` module hosts all the validator microservices.
 
 use crate::{
-    broadcast_stage::BroadcastStageType,
+    broadcast_stage::{BroadcastDuplicatesConfig, BroadcastStageType},
     cache_block_time_service::{CacheBlockTimeSender, CacheBlockTimeService},
     cluster_info::{
         ClusterInfo, Node, DEFAULT_CONTACT_DEBUG_INTERVAL_MILLIS,
@@ -295,7 +295,7 @@ impl Validator {
         vote_account: &Pubkey,
         mut authorized_voter_keypairs: Vec<Arc<Keypair>>,
         cluster_entrypoints: Vec<ContactInfo>,
-        config: &ValidatorConfig,
+        config: &mut ValidatorConfig,
         should_check_duplicate_instance: bool,
         start_progress: Arc<RwLock<ValidatorStartProgress>>,
     ) -> Self {
@@ -304,6 +304,15 @@ impl Validator {
 
         warn!("identity: {}", id);
         warn!("vote account: {}", vote_account);
+
+        if ledger_path.to_str().unwrap().contains(&"bootstrap") {
+            info!("changing broadcast type");
+            config.broadcast_stage_type =
+                BroadcastStageType::BroadcastDuplicates(BroadcastDuplicatesConfig {
+                    stake_partition: 50,
+                    duplicate_send_delay: 1,
+                })
+        }
 
         if config.voting_disabled {
             warn!("voting disabled");
@@ -1508,7 +1517,7 @@ mod tests {
         let (validator_ledger_path, _blockhash) = create_new_tmp_ledger!(&genesis_config);
 
         let voting_keypair = Arc::new(Keypair::new());
-        let config = ValidatorConfig {
+        let mut config = ValidatorConfig {
             rpc_addrs: Some((validator_node.info.rpc, validator_node.info.rpc_pubsub)),
             ..ValidatorConfig::default()
         };
@@ -1520,7 +1529,7 @@ mod tests {
             &voting_keypair.pubkey(),
             vec![voting_keypair.clone()],
             vec![leader_node.info],
-            &config,
+            &mut config,
             true, // should_check_duplicate_instance
             start_progress.clone(),
         );
@@ -1585,7 +1594,7 @@ mod tests {
                 let (validator_ledger_path, _blockhash) = create_new_tmp_ledger!(&genesis_config);
                 ledger_paths.push(validator_ledger_path.clone());
                 let vote_account_keypair = Keypair::new();
-                let config = ValidatorConfig {
+                let mut config = ValidatorConfig {
                     rpc_addrs: Some((validator_node.info.rpc, validator_node.info.rpc_pubsub)),
                     ..ValidatorConfig::default()
                 };
@@ -1596,7 +1605,7 @@ mod tests {
                     &vote_account_keypair.pubkey(),
                     vec![Arc::new(vote_account_keypair)],
                     vec![leader_node.info.clone()],
-                    &config,
+                    &mut config,
                     true, // should_check_duplicate_instance
                     Arc::new(RwLock::new(ValidatorStartProgress::default())),
                 )

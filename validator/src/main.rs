@@ -2323,7 +2323,7 @@ pub fn main() {
         &vote_account,
         authorized_voter_keypairs,
         cluster_entrypoints,
-        &validator_config,
+        &mut validator_config,
         should_check_duplicate_instance,
         start_progress,
     );
