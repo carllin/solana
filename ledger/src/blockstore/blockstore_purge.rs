@@ -102,14 +102,13 @@ impl Blockstore {
         self.run_purge_with_stats(from_slot, to_slot, purge_type, &mut PurgeStats::default())
     }
 
-    // Returns whether or not all columns successfully purged the slot range
-    pub(crate) fn run_purge_with_stats(
+    pub(crate) fn get_purge_write_batch(
         &self,
         from_slot: Slot,
         to_slot: Slot,
         purge_type: PurgeType,
-        purge_stats: &mut PurgeStats,
-    ) -> Result<bool> {
+        purge_stats: Option<&mut PurgeStats>,
+    ) -> Result<(WriteBatch, bool)> {
         let mut write_batch = self
             .db
             .batch()
@@ -182,6 +181,22 @@ impl Blockstore {
             }
         }
         delete_range_timer.stop();
+        if let Some(purge_stats) = purge_stats {
+            purge_stats.delete_range += delete_range_timer.as_us();
+        }
+        Ok((write_batch, columns_purged))
+    }
+
+    // Returns whether or not all columns successfully purged the slot range
+    pub(crate) fn run_purge_with_stats(
+        &self,
+        from_slot: Slot,
+        to_slot: Slot,
+        purge_type: PurgeType,
+        purge_stats: &mut PurgeStats,
+    ) -> Result<bool> {
+        let (write_batch, columns_purged) =
+            self.get_purge_write_batch(from_slot, to_slot, purge_type, Some(purge_stats))?;
         let mut write_timer = Measure::start("write_batch");
         if let Err(e) = self.db.write(write_batch) {
             error!(
@@ -191,7 +206,6 @@ impl Blockstore {
             return Err(e);
         }
         write_timer.stop();
-        purge_stats.delete_range += delete_range_timer.as_us();
         purge_stats.write_batch += write_timer.as_us();
         Ok(columns_purged)
     }

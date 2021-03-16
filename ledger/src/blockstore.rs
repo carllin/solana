@@ -961,20 +961,42 @@ impl Blockstore {
 
     pub fn clear_unconfirmed_slot(&self, slot: Slot) {
         let _lock = self.insert_shreds_lock.lock().unwrap();
-        if let Some(mut slot_meta) = self
+        if let Some(slot_meta) = self
             .meta(slot)
             .expect("Couldn't fetch from SlotMeta column family")
         {
             // Clear all slot related information
-            self.run_purge(slot, slot, PurgeType::PrimaryIndex)
+            let (mut write_batch, _) = self
+                .get_purge_write_batch(slot, slot, PurgeType::PrimaryIndex, None)
                 .expect("Purge database operations failed");
 
-            // Reinsert parts of `slot_meta` that are important to retain, like the `next_slots`
-            // field.
-            slot_meta.clear_unconfirmed_slot();
-            self.meta_cf
-                .put(slot, &slot_meta)
-                .expect("Couldn't insert into SlotMeta column family");
+            let parent_slot = slot_meta.parent_slot;
+            if let Some(mut parent_slot_meta) = self
+                .meta(parent_slot)
+                .expect("Couldn't fetch from SlotMeta column family")
+            {
+                if let Some(pos) = parent_slot_meta
+                    .next_slots
+                    .iter()
+                    .position(|s| *s == parent_slot)
+                {
+                    parent_slot_meta.next_slots.remove(pos);
+                } else {
+                    error!(
+                        "Parent Slotmeta {} of slot {} doesn't contain the slot in its next_slots list",
+                        parent_slot, slot,
+                    );
+                }
+                write_batch
+                    .put::<cf::SlotMeta>(parent_slot, &parent_slot_meta)
+                    .expect("Couldn't insert into write batch");
+            } else {
+                error!(
+                    "Parent slot {} of slot {} to be purged doesn't have a SlotMeta",
+                    parent_slot, slot,
+                );
+            }
+            self.db.write(write_batch);
         } else {
             error!(
                 "clear_unconfirmed_slot() called on slot {} with no SlotMeta",
