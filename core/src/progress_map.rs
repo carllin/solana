@@ -249,6 +249,7 @@ pub(crate) struct ForkStats {
     pub(crate) confirmation_reported: bool,
     pub(crate) computed: bool,
     pub(crate) lockout_intervals: LockoutIntervals,
+    pub(crate) bank_hash: Option<Hash>,
 }
 
 #[derive(Clone, Default)]
@@ -361,6 +362,12 @@ impl ProgressMap {
         self.progress_map
             .get(&slot)
             .map(|fork_progress| fork_progress.is_dead)
+    }
+
+    pub fn get_hash(&self, slot: Slot) -> Option<Hash> {
+        self.progress_map
+            .get(&slot)
+            .and_then(|fork_progress| fork_progress.fork_stats.bank_hash)
     }
 
     pub fn is_propagated(&self, slot: Slot) -> bool {
