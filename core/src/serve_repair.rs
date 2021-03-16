@@ -437,6 +437,10 @@ impl ServeRepair {
     ) -> Result<Vec<u8>> {
         match repair_request {
             RepairType::Shred(slot, shred_index) => {
+                println!(
+                    "making repair request for slot: {}, index: {}",
+                    slot, shred_index
+                );
                 repair_stats
                     .shred
                     .update(repair_peer_id, *slot, *shred_index);
@@ -525,6 +529,10 @@ impl ServeRepair {
         let blockstore = blockstore?;
         // Try to find the requested index in one of the slots
         let meta = blockstore.meta(slot).ok()??;
+        println!(
+            "got highest window request for slot {}, highest: {}",
+            slot, highest_index
+        );
         if meta.received > highest_index {
             // meta.received must be at least 1 by this point
             let packet = repair_response::repair_response_packet(
@@ -534,6 +542,10 @@ impl ServeRepair {
                 from_addr,
                 nonce,
             )?;
+            println!(
+                "responded to highest window request for slot {}, highest: {}",
+                slot, highest_index
+            );
             return Packets::new_with_recycler_data(recycler, vec![packet]);
         }
         None

@@ -1264,6 +1264,11 @@ impl Blockstore {
         is_recovered: bool,
     ) -> bool {
         loop {
+            println!(
+                "Checking insert for slot: {}, shred: {}",
+                shred.slot(),
+                shred.index()
+            );
             let shred_index = u64::from(shred.index());
             let slot = shred.slot();
             let last_in_slot = if shred.last_in_slot() {

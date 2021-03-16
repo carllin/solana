@@ -152,6 +152,8 @@ fn output_slot(
         }
     }
 
+    println!("Fetching entries");
+
     let (entries, num_shreds, _is_full) = blockstore
         .get_slot_entries_with_shred_info(slot, 0, allow_dead_slots)
         .map_err(|err| format!("Failed to load entries for slot {}: {:?}", slot, err))?;
@@ -168,6 +170,8 @@ fn output_slot(
                     entries.len()
                 );
             }
+        } else {
+            println!("Could not find slot meta for slot");
         }
     }
 
