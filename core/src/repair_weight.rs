@@ -14,6 +14,7 @@ use solana_sdk::{
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 pub struct RepairWeight {
+    id: Pubkey,
     // Map from root -> a subtree rooted at that `root`
     trees: HashMap<Slot, HeaviestSubtreeForkChoice>,
     // Maps each slot to the root of the tree that contains it
@@ -30,12 +31,13 @@ pub struct RepairWeight {
 }
 
 impl RepairWeight {
-    pub fn new(root: Slot) -> Self {
+    pub fn new(root: Slot, id: Pubkey) -> Self {
         let root_tree = HeaviestSubtreeForkChoice::new((root, Hash::default()));
         let slot_to_tree: HashMap<Slot, Slot> = vec![(root, root)].into_iter().collect();
         let trees: HashMap<Slot, HeaviestSubtreeForkChoice> =
             vec![(root, root_tree)].into_iter().collect();
         Self {
+            id,
             trees,
             slot_to_tree,
             root,
@@ -162,7 +164,13 @@ impl RepairWeight {
 
         let mut get_best_shreds_elapsed = Measure::start("get_best_orphans");
         // Find the best incomplete slots in rooted subtree
-        self.get_best_shreds(blockstore, &mut repairs, max_new_shreds, ignore_slots);
+        self.get_best_shreds(
+            &self.id.clone(),
+            blockstore,
+            &mut repairs,
+            max_new_shreds,
+            ignore_slots,
+        );
         get_best_shreds_elapsed.stop();
 
         if let Some(repair_timing) = repair_timing {
@@ -248,6 +256,7 @@ impl RepairWeight {
     // Generate shred repairs for main subtree rooted at `self.slot`
     fn get_best_shreds<'a>(
         &mut self,
+        id: &Pubkey,
         blockstore: &Blockstore,
         repairs: &mut Vec<RepairType>,
         max_new_shreds: usize,
@@ -255,6 +264,7 @@ impl RepairWeight {
     ) {
         let root_tree = self.trees.get(&self.root).expect("Root tree must exist");
         repair_weighted_traversal::get_best_repair_shreds(
+            id,
             root_tree,
             blockstore,
             repairs,
@@ -578,7 +588,7 @@ mod test {
         let (bank, vote_pubkeys) = bank_utils::setup_bank_and_vote_pubkeys(3, stake);
         let votes = vec![(1, vote_pubkeys.clone())];
 
-        let mut repair_weight = RepairWeight::new(0);
+        let mut repair_weight = RepairWeight::new(0, Pubkey::default());
         repair_weight.add_votes(
             &blockstore,
             votes.into_iter(),
@@ -675,7 +685,7 @@ mod test {
         let (bank, vote_pubkeys) = bank_utils::setup_bank_and_vote_pubkeys(3, stake);
         let votes = vec![(1, vote_pubkeys.clone()), (8, vote_pubkeys.clone())];
 
-        let mut repair_weight = RepairWeight::new(0);
+        let mut repair_weight = RepairWeight::new(0, Pubkey::default());
         repair_weight.add_votes(
             &blockstore,
             votes.into_iter(),
@@ -703,7 +713,7 @@ mod test {
             .is_empty());
 
         let votes = vec![(1, vote_pubkeys.clone()), (10, vote_pubkeys.clone())];
-        let mut repair_weight = RepairWeight::new(0);
+        let mut repair_weight = RepairWeight::new(0, Pubkey::default());
         repair_weight.add_votes(
             &blockstore,
             votes.into_iter(),
@@ -798,7 +808,7 @@ mod test {
             (22, vote_pubkeys[1..3].to_vec()),
         ];
 
-        let mut repair_weight = RepairWeight::new(0);
+        let mut repair_weight = RepairWeight::new(0, Pubkey::default());
         repair_weight.add_votes(
             &blockstore,
             votes.into_iter(),
@@ -850,7 +860,7 @@ mod test {
         let stake = 100;
         let (bank, vote_pubkeys) = bank_utils::setup_bank_and_vote_pubkeys(2, stake);
         let votes = vec![(8, vec![vote_pubkeys[0]]), (20, vec![vote_pubkeys[1]])];
-        let mut repair_weight = RepairWeight::new(0);
+        let mut repair_weight = RepairWeight::new(0, Pubkey::default());
         repair_weight.add_votes(
             &blockstore,
             votes.into_iter(),
@@ -958,7 +968,7 @@ mod test {
         let stake = 100;
         let (bank, vote_pubkeys) = bank_utils::setup_bank_and_vote_pubkeys(2, stake);
         let votes = vec![(8, vec![vote_pubkeys[0]])];
-        let mut repair_weight = RepairWeight::new(0);
+        let mut repair_weight = RepairWeight::new(0, Pubkey::default());
         repair_weight.add_votes(
             &blockstore,
             votes.into_iter(),
@@ -1268,7 +1278,7 @@ mod test {
             (20, vote_pubkeys),
         ];
 
-        let mut repair_weight = RepairWeight::new(0);
+        let mut repair_weight = RepairWeight::new(0, Pubkey::default());
         repair_weight.add_votes(
             &blockstore,
             votes.into_iter(),

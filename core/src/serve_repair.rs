@@ -438,8 +438,10 @@ impl ServeRepair {
         match repair_request {
             RepairType::Shred(slot, shred_index) => {
                 println!(
-                    "making repair request for slot: {}, index: {}",
-                    slot, shred_index
+                    "{} making repair request for slot: {}, index: {}",
+                    self.my_info().id,
+                    slot,
+                    shred_index
                 );
                 repair_stats
                     .shred
@@ -447,6 +449,12 @@ impl ServeRepair {
                 Ok(self.window_index_request_bytes(*slot, *shred_index, nonce)?)
             }
             RepairType::HighestShred(slot, shred_index) => {
+                println!(
+                    "{} making highest shred request for slot: {}, index: {}",
+                    self.my_info().id,
+                    slot,
+                    shred_index
+                );
                 repair_stats
                     .highest_shred
                     .update(repair_peer_id, *slot, *shred_index);

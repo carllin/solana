@@ -6,6 +6,7 @@ use solana_ledger::blockstore::Blockstore;
 use solana_runtime::contains::Contains;
 use solana_sdk::{clock::Slot, hash::Hash};
 use std::collections::{HashMap, HashSet};
+use solana_sdk::pubkey::Pubkey;
 
 #[derive(Debug, PartialEq)]
 enum Visit {
@@ -71,6 +72,7 @@ impl<'a> Iterator for RepairWeightTraversal<'a> {
 
 // Generate shred repairs for main subtree rooted at `self.slot`
 pub fn get_best_repair_shreds<'a>(
+    id: &Pubkey,
     tree: &HeaviestSubtreeForkChoice,
     blockstore: &Blockstore,
     repairs: &mut Vec<RepairType>,
@@ -83,6 +85,7 @@ pub fn get_best_repair_shreds<'a>(
     let mut visited_set = HashSet::new();
     let mut slot_meta_cache = HashMap::new();
     for next in weighted_iter {
+        println!("{} repair iterator next is {}", id, next.slot());
         if repairs.len() > max_repairs {
             break;
         }
@@ -130,6 +133,8 @@ pub fn get_best_repair_shreds<'a>(
                     }
                 }
             }
+        } else {
+            println!("Not repairing slot {} because slotmeta doesn't exist", next.slot());
         }
     }
 }
@@ -217,6 +222,7 @@ pub mod test {
         let mut repairs = vec![];
         let last_shred = blockstore.meta(0).unwrap().unwrap().received;
         get_best_repair_shreds(
+            &Pubkey::default(),
             &heaviest_subtree_fork_choice,
             &blockstore,
             &mut repairs,
@@ -244,6 +250,7 @@ pub mod test {
             Hash::default(),
         );
         get_best_repair_shreds(
+            &Pubkey::default(),
             &heaviest_subtree_fork_choice,
             &blockstore,
             &mut repairs,
@@ -279,6 +286,7 @@ pub mod test {
             .insert_shreds(completed_shreds, None, false)
             .unwrap();
         get_best_repair_shreds(
+            &Pubkey::default(),
             &heaviest_subtree_fork_choice,
             &blockstore,
             &mut repairs,
@@ -298,6 +306,7 @@ pub mod test {
         repairs = vec![];
         blockstore.add_tree(tr(2) / (tr(8)), true, false, 2, Hash::default());
         get_best_repair_shreds(
+            &Pubkey::default(),
             &heaviest_subtree_fork_choice,
             &blockstore,
             &mut repairs,
@@ -321,6 +330,7 @@ pub mod test {
         blockstore.add_tree(tr(2) / (tr(6) / tr(7)), true, false, 2, Hash::default());
         let mut repairs = vec![];
         get_best_repair_shreds(
+            &Pubkey::default(),
             &heaviest_subtree_fork_choice,
             &blockstore,
             &mut repairs,
@@ -347,6 +357,7 @@ pub mod test {
         let mut ignore_set: HashSet<Slot> = vec![1, 3].into_iter().collect();
         let last_shred = blockstore.meta(0).unwrap().unwrap().received;
         get_best_repair_shreds(
+            &Pubkey::default(),
             &heaviest_subtree_fork_choice,
             &blockstore,
             &mut repairs,
@@ -367,6 +378,7 @@ pub mod test {
         blockstore.add_tree(tr(2) / (tr(6) / tr(7)), true, false, 2, Hash::default());
         ignore_set.insert(2);
         get_best_repair_shreds(
+            &Pubkey::default(),
             &heaviest_subtree_fork_choice,
             &blockstore,
             &mut repairs,
@@ -386,6 +398,7 @@ pub mod test {
         repairs = vec![];
         ignore_set.insert(6);
         get_best_repair_shreds(
+            &Pubkey::default(),
             &heaviest_subtree_fork_choice,
             &blockstore,
             &mut repairs,

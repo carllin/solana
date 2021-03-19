@@ -173,7 +173,10 @@ impl RepairService {
         cluster_slots: &ClusterSlots,
         verified_vote_receiver: VerifiedVoteReceiver,
     ) {
-        let mut repair_weight = RepairWeight::new(repair_info.bank_forks.read().unwrap().root());
+        let mut repair_weight = RepairWeight::new(
+            repair_info.bank_forks.read().unwrap().root(),
+            cluster_info.id(),
+        );
         let serve_repair = ServeRepair::new(cluster_info.clone());
         let id = cluster_info.id();
         let mut repair_stats = RepairStats::default();
@@ -679,7 +682,7 @@ mod test {
             let (shreds2, _) = make_slot_entries(5, 2, 1);
             shreds.extend(shreds2);
             blockstore.insert_shreds(shreds, None, false).unwrap();
-            let mut repair_weight = RepairWeight::new(0);
+            let mut repair_weight = RepairWeight::new(0, Pubkey::default());
             assert_eq!(
                 repair_weight.get_best_weighted_repairs(
                     &blockstore,
@@ -708,7 +711,7 @@ mod test {
             // Write this shred to slot 2, should chain to slot 0, which we haven't received
             // any shreds for
             blockstore.insert_shreds(shreds, None, false).unwrap();
-            let mut repair_weight = RepairWeight::new(0);
+            let mut repair_weight = RepairWeight::new(0, Pubkey::default());
 
             // Check that repair tries to patch the empty slot
             assert_eq!(
@@ -765,7 +768,7 @@ mod test {
                 })
                 .collect();
 
-            let mut repair_weight = RepairWeight::new(0);
+            let mut repair_weight = RepairWeight::new(0, Pubkey::default());
             assert_eq!(
                 repair_weight.get_best_weighted_repairs(
                     &blockstore,
@@ -816,7 +819,7 @@ mod test {
             let expected: Vec<RepairType> =
                 vec![RepairType::HighestShred(0, num_shreds_per_slot - 1)];
 
-            let mut repair_weight = RepairWeight::new(0);
+            let mut repair_weight = RepairWeight::new(0, Pubkey::default());
             assert_eq!(
                 repair_weight.get_best_weighted_repairs(
                     &blockstore,
