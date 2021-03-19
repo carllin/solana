@@ -4,9 +4,9 @@ use crate::{
 };
 use solana_ledger::blockstore::Blockstore;
 use solana_runtime::contains::Contains;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::{clock::Slot, hash::Hash};
 use std::collections::{HashMap, HashSet};
-use solana_sdk::pubkey::Pubkey;
 
 #[derive(Debug, PartialEq)]
 enum Visit {
@@ -134,7 +134,20 @@ pub fn get_best_repair_shreds<'a>(
                 }
             }
         } else {
-            println!("Not repairing slot {} because slotmeta doesn't exist", next.slot());
+            println!(
+                "Not repairing slot {} because slotmeta doesn't exist",
+                next.slot()
+            );
+            // If the SlotMeta doesn't exist then it must have been purged due to something
+            // like duplicate slots. This is because the SlotMeta *must* have existed at some
+            // point since this slot was discoverable from the root tree. If the slot had always been
+            // an orphan, the slot would still be tracked in in some orphan tree in repair,
+            // not the root tree.
+
+            // TODO: If we repair the slot and it has a different parent, we need to either:
+            // 1. If the new parent exists in the current root tree, reattach the parent
+            // 2. Otherwise split and add this branch back to the orphans subtrees
+            repairs.push(RepairType::HighestShred(next.slot(), 0));
         }
     }
 }

@@ -27,6 +27,7 @@ pub struct RepairWeight {
     // does not exist in `slot_to_tree` and any descendants of
     // slots in the set `unrooted_slots` must also be in the set
     unrooted_slots: BTreeSet<Slot>,
+
     root: Slot,
 }
 
