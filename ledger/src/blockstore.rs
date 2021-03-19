@@ -1286,11 +1286,14 @@ impl Blockstore {
         is_recovered: bool,
     ) -> bool {
         loop {
-            println!(
-                "Checking insert for slot: {}, shred: {}",
-                shred.slot(),
-                shred.index()
-            );
+            if shred.is_data() {
+                println!(
+                    "Checking insert for slot: {}, parent: {}, shred: {}",
+                    shred.slot(),
+                    shred.parent(),
+                    shred.index()
+                );
+            }
             let shred_index = u64::from(shred.index());
             let slot = shred.slot();
             let last_in_slot = if shred.last_in_slot() {
@@ -2630,7 +2633,12 @@ impl Blockstore {
                         .next_slots
                         .iter()
                         .cloned()
-                        .filter(|s| !self.is_dead(*s))
+                        .filter(|s| {
+                            if self.is_dead(*s) {
+                                println!("Slot {} is dead", *s);
+                            }
+                            !self.is_dead(*s)
+                        })
                         .collect();
                     (*height, valid_next_slots)
                 })

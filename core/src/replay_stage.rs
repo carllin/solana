@@ -136,6 +136,7 @@ impl ReplayTiming {
     #[allow(clippy::too_many_arguments)]
     fn update(
         &mut self,
+        id: &Pubkey,
         collect_frozen_banks_elapsed: u64,
         compute_bank_stats_elapsed: u64,
         select_vote_and_reset_forks_elapsed: u64,
@@ -173,6 +174,7 @@ impl ReplayTiming {
         let now = timestamp();
         let elapsed_ms = now - self.last_print;
         if elapsed_ms > 1000 {
+            info!("{} is still replaying", id);
             datapoint_info!(
                 "replay-loop-timing-stats",
                 ("total_elapsed_us", elapsed_ms * 1000, i64),
@@ -668,6 +670,7 @@ impl ReplayStage {
                     wait_receive_time.stop();
 
                     replay_timing.update(
+                        &my_pubkey,
                         collect_frozen_banks_time.as_us(),
                         compute_bank_stats_time.as_us(),
                         select_vote_and_reset_forks_time.as_us(),
@@ -2295,6 +2298,7 @@ impl ReplayStage {
         let next_slots = blockstore
             .get_slots_since(&frozen_bank_slots)
             .expect("Db error");
+        info!("{} next slots: {:?}", id, next_slots);
         // Filter out what we've already seen
         trace!("generate new forks {:?}", {
             let mut next_slots = next_slots.iter().collect::<Vec<_>>();
