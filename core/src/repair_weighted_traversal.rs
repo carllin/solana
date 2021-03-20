@@ -98,56 +98,56 @@ pub fn get_best_repair_shreds<'a>(
         // like duplicate slots. TODO: Account for duplicate slot may be in orphans, especially
         // if earlier duplicate was already removed
         if let Some(slot_meta) = slot_meta {
-            match next {
-                Visit::Unvisited(slot) => {
-                    if !ignore_slots.contains(&slot) {
-                        let new_repairs = RepairService::generate_repairs_for_slot(
-                            blockstore,
-                            slot,
-                            &slot_meta,
-                            max_repairs - repairs.len(),
-                        );
-                        repairs.extend(new_repairs);
-                    }
-                    visited_set.insert(slot);
-                }
-                Visit::Visited(_) => {
-                    // By the time we reach here, this means all the children of this slot
-                    // have been explored/repaired. Although this slot has already been visited,
-                    // this slot is still the heaviest slot left in the traversal. Thus any
-                    // remaining children that have not been explored should now be repaired.
-                    for new_child_slot in &slot_meta.next_slots {
-                        // If the `new_child_slot` has not been visited by now, it must
-                        // not exist in `tree`
-                        if !visited_set.contains(new_child_slot) {
-                            // Generate repairs for entire subtree rooted at `new_child_slot`
-                            RepairService::generate_repairs_for_fork(
+            if slot_meta.parent_slot != std::u64::MAX {
+                match next {
+                    Visit::Unvisited(slot) => {
+                        if !ignore_slots.contains(&slot) {
+                            let new_repairs = RepairService::generate_repairs_for_slot(
                                 blockstore,
-                                repairs,
-                                max_repairs,
-                                *new_child_slot,
-                                ignore_slots,
+                                slot,
+                                &slot_meta,
+                                max_repairs - repairs.len(),
                             );
+                            repairs.extend(new_repairs);
                         }
-                        visited_set.insert(*new_child_slot);
+                        visited_set.insert(slot);
+                    }
+                    Visit::Visited(_) => {
+                        // By the time we reach here, this means all the children of this slot
+                        // have been explored/repaired. Although this slot has already been visited,
+                        // this slot is still the heaviest slot left in the traversal. Thus any
+                        // remaining children that have not been explored should now be repaired.
+                        for new_child_slot in &slot_meta.next_slots {
+                            // If the `new_child_slot` has not been visited by now, it must
+                            // not exist in `tree`
+                            if !visited_set.contains(new_child_slot) {
+                                // Generate repairs for entire subtree rooted at `new_child_slot`
+                                RepairService::generate_repairs_for_fork(
+                                    blockstore,
+                                    repairs,
+                                    max_repairs,
+                                    *new_child_slot,
+                                    ignore_slots,
+                                );
+                            }
+                            visited_set.insert(*new_child_slot);
+                        }
                     }
                 }
-            }
-        } else {
-            println!(
-                "Not repairing slot {} because slotmeta doesn't exist",
-                next.slot()
-            );
-            // If the SlotMeta doesn't exist then it must have been purged due to something
-            // like duplicate slots. This is because the SlotMeta *must* have existed at some
-            // point since this slot was discoverable from the root tree. If the slot had always been
-            // an orphan, the slot would still be tracked in in some orphan tree in repair,
-            // not the root tree.
+            } else {
+                println!(
+                    "Not repairing slot {} because slotmeta doesn't exist",
+                    next.slot()
+                );
+                // If the SlotMeta parent == std::u64::MAX then it must have been purged by
+                // blockstore::clear_unconfirmed_slot() due to something like duplicate slots.
 
-            // TODO: If we repair the slot and it has a different parent, we need to either:
-            // 1. If the new parent exists in the current root tree, reattach the parent
-            // 2. Otherwise split and add this branch back to the orphans subtrees
-            repairs.push(RepairType::HighestShred(next.slot(), 0));
+                // TODO: If we repair the slot and it has a different parent than what's in the
+                // tree, we need to either:
+                // 1. If the new parent exists in the current root tree, reattach the parent
+                // 2. Otherwise split and add this branch back to the orphans subtrees
+                repairs.push(RepairType::HighestShred(next.slot(), 0));
+            }
         }
     }
 }

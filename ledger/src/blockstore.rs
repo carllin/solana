@@ -958,42 +958,20 @@ impl Blockstore {
 
     pub fn clear_unconfirmed_slot(&self, slot: Slot) {
         let _lock = self.insert_shreds_lock.lock().unwrap();
-        if let Some(slot_meta) = self
+        if let Some(mut slot_meta) = self
             .meta(slot)
             .expect("Couldn't fetch from SlotMeta column family")
         {
             // Clear all slot related information
-            let (mut write_batch, _) = self
-                .get_purge_write_batch(slot, slot, PurgeType::PrimaryIndex, None)
+            self.run_purge(slot, slot, PurgeType::PrimaryIndex)
                 .expect("Purge database operations failed");
 
-            let parent_slot = slot_meta.parent_slot;
-            if let Some(mut parent_slot_meta) = self
-                .meta(parent_slot)
-                .expect("Couldn't fetch from SlotMeta column family")
-            {
-                if let Some(pos) = parent_slot_meta
-                    .next_slots
-                    .iter()
-                    .position(|s| *s == parent_slot)
-                {
-                    parent_slot_meta.next_slots.remove(pos);
-                } else {
-                    error!(
-                        "Parent Slotmeta {} of slot {} doesn't contain the slot in its next_slots list",
-                        parent_slot, slot,
-                    );
-                }
-                write_batch
-                    .put::<cf::SlotMeta>(parent_slot, &parent_slot_meta)
-                    .expect("Couldn't insert into write batch");
-            } else {
-                error!(
-                    "Parent slot {} of slot {} to be purged doesn't have a SlotMeta",
-                    parent_slot, slot,
-                );
-            }
-            self.db.write(write_batch);
+            // Reinsert parts of `slot_meta` that are important/hard to reconstruct,
+            // like the `next_slots` field.
+            slot_meta.clear_unconfirmed_slot();
+            self.meta_cf
+                .put(slot, &slot_meta)
+                .expect("Couldn't insert into SlotMeta column family");
         } else {
             error!(
                 "clear_unconfirmed_slot() called on slot {} with no SlotMeta",
@@ -2957,10 +2935,15 @@ fn get_slot_meta_entry<'a>(
         // Store a 2-tuple of the metadata (working copy, backup copy)
         if let Some(mut meta) = meta_cf.get(slot).expect("Expect database get to succeed") {
             let backup = Some(meta.clone());
-            // If parent_slot == std::u64::MAX, then this is one of the orphans inserted
-            // during the chaining process, see the function find_slot_meta_in_cached_state()
-            // for details. Slots that are orphans are missing a parent_slot, so we should
-            // fill in the parent now that we know it.
+            // If parent_slot == std::u64::MAX, then either:
+
+            // 1) This is one of the orphans inserted during the chaining process,
+            // see the function find_slot_meta_in_cached_state() for details. Slots
+            // that are orphans are missing a parent_slot, so we should fill in the parent
+            // now that we know it.
+
+            // 2) The slot was cleared via clear_unconfirmed_slot() and thus we need to
+            // fill in the parent slot again
             if is_orphan(&meta) {
                 meta.parent_slot = parent_slot;
             }
@@ -3427,7 +3410,7 @@ macro_rules! create_new_tmp_ledger {
 pub fn verify_shred_slots(slot: Slot, parent_slot: Slot, last_root: Slot) -> bool {
     if !is_valid_write_to_slot_0(slot, parent_slot, last_root) {
         // Check that the parent_slot < slot
-        if parent_slot >= slot {
+        if parent_slot != std::u64::MAX && parent_slot >= slot {
             return false;
         }
 
