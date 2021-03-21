@@ -759,6 +759,7 @@ impl Blockstore {
     where
         F: Fn(Shred),
     {
+        info!("insert_shreds_handle_duplicate: {}", shreds.len());
         let mut total_start = Measure::start("Total elapsed");
         let mut start = Measure::start("Blockstore lock");
         let _lock = self.insert_shreds_lock.lock().unwrap();
@@ -781,6 +782,11 @@ impl Blockstore {
         let mut newly_completed_data_sets: Vec<CompletedDataSetInfo> = vec![];
         let mut inserted_indices = Vec::new();
         shreds.into_iter().enumerate().for_each(|(i, shred)| {
+            println!(
+                "Top of filter Checking shred {} {}",
+                shred.slot(),
+                shred.index()
+            );
             if shred.is_data() {
                 let shred_slot = shred.slot();
                 if let Ok(completed_data_sets) = self.check_insert_data_shred(
@@ -805,6 +811,8 @@ impl Blockstore {
                     ));
                     inserted_indices.push(i);
                     num_inserted += 1;
+                } else {
+                    info!("failed insert");
                 }
             } else if shred.is_code() {
                 self.check_cache_coding_shred(
@@ -830,6 +838,7 @@ impl Blockstore {
         let mut num_recovered_failed_invalid = 0;
         let mut num_recovered_exists = 0;
         if let Some(leader_schedule_cache) = leader_schedule {
+            info!("in shred recovery");
             let recovered_data = Self::try_shred_recovery(
                 &db,
                 &erasure_metas,
@@ -882,6 +891,7 @@ impl Blockstore {
                 }
             });
         }
+        info!("shred recovery finished");
         start.stop();
         let shred_recovery_elapsed = start.as_us();
 
@@ -900,16 +910,22 @@ impl Blockstore {
         let mut start = Measure::start("Shred recovery");
         // Handle chaining for the members of the slot_meta_working_set that were inserted into,
         // drop the others
-        handle_chaining(&self.db, &mut write_batch, &mut slot_meta_working_set)?;
+        info!("doing chaining");
+        let err = handle_chaining(&self.db, &mut write_batch, &mut slot_meta_working_set);
+        info!("handle chaining result: {:?}", err);
+        err?;
         start.stop();
         let chaining_elapsed = start.as_us();
 
         let mut start = Measure::start("Commit Working Sets");
-        let (should_signal, newly_completed_slots) = commit_slot_meta_working_set(
+        let err = commit_slot_meta_working_set(
             &slot_meta_working_set,
             &self.completed_slots_senders,
             &mut write_batch,
-        )?;
+        );
+
+        info!("commit slot meta working set result: {:?}", err);
+        let (should_signal, newly_completed_slots) = err?;
 
         for ((slot, set_index), erasure_meta) in erasure_metas {
             write_batch.put::<cf::ErasureMeta>((slot, set_index), &erasure_meta)?;
@@ -924,7 +940,9 @@ impl Blockstore {
         let commit_working_sets_elapsed = start.as_us();
 
         let mut start = Measure::start("Write Batch");
-        self.db.write(write_batch)?;
+        let res = self.db.write(write_batch);
+        info!("write batch result: {:?}", res);
+        res?;
         start.stop();
         let write_batch_elapsed = start.as_us();
 
@@ -1165,20 +1183,25 @@ impl Blockstore {
     where
         F: Fn(Shred),
     {
+        info!("check_insert_data_shred");
         let slot = shred.slot();
         let shred_index = u64::from(shred.index());
 
+        info!("get_index_meta_entry");
         let index_meta_working_set_entry =
             get_index_meta_entry(&self.db, slot, index_working_set, index_meta_time);
 
         let index_meta = &mut index_meta_working_set_entry.index;
+        info!("get_slot_meta_entry");
         let slot_meta_entry =
             get_slot_meta_entry(&self.db, slot_meta_working_set, slot, shred.parent());
 
         let slot_meta = &mut slot_meta_entry.new_slot_meta.borrow_mut();
 
         if !is_trusted {
+            info!("is_data_shred_present");
             if Self::is_data_shred_present(&shred, slot_meta, &index_meta.data()) {
+                info!("handle duplicate");
                 handle_duplicate(shred);
                 return Err(InsertDataShredError::Exists);
             } else if !self.should_insert_data_shred(
@@ -1193,8 +1216,14 @@ impl Blockstore {
         }
 
         let set_index = u64::from(shred.common_header.fec_set_index);
+        info!("insert_data_shred");
         let newly_completed_data_sets =
             self.insert_data_shred(slot_meta, index_meta.data_mut(), &shred, write_batch)?;
+        info!(
+            "inserted shred slot {} index: {}",
+            shred.slot(),
+            shred.index()
+        );
         just_inserted_data_shreds.insert((slot, shred_index), shred);
         index_meta_working_set_entry.did_insert_occur = true;
         slot_meta_entry.did_insert_occur = true;
@@ -1264,18 +1293,16 @@ impl Blockstore {
         is_recovered: bool,
     ) -> bool {
         loop {
-            if shred.is_data() {
-                println!(
-                    "Checking insert for slot: {}, parent: {}, shred: {}",
-                    shred.slot(),
-                    shred.parent(),
-                    shred.index()
-                );
-            }
+            info!(
+                "top of loop for should_insert_data_shred(), {} {} {:?}",
+                shred.slot(),
+                shred.index(),
+                slot_meta
+            );
             let shred_index = u64::from(shred.index());
             let slot = shred.slot();
             let last_in_slot = if shred.last_in_slot() {
-                debug!("got last in slot");
+                info!("got last in slot");
                 true
             } else {
                 false
@@ -1293,6 +1320,7 @@ impl Blockstore {
                 if ending_shred.is_none() {
                     // Slot data must have been reset, try to get the updated SlotMeta
                     // and try again
+                    info!("continuing 1");
                     continue;
                 }
                 let ending_shred = ending_shred.unwrap();
@@ -1327,6 +1355,7 @@ impl Blockstore {
                 if ending_shred.is_none() {
                     // Slot data must have been reset, try to get the updated SlotMeta
                     // and try again
+                    info!("continuing 2");
                     continue;
                 }
                 let ending_shred = ending_shred.unwrap();
@@ -1353,7 +1382,19 @@ impl Blockstore {
             }
 
             let last_root = *last_root.read().unwrap();
-            return verify_shred_slots(slot, slot_meta.parent_slot, last_root);
+            let res = verify_shred_slots(slot, slot_meta.parent_slot, last_root);
+            if shred.is_data() {
+                println!(
+                    "Checking insert for slot: {}, parent: {}, shred: {}, should_insert: {}",
+                    shred.slot(),
+                    shred.parent(),
+                    shred.index(),
+                    res,
+                );
+            } else {
+                println!("res for coding: {}", res);
+            }
+            return res;
         }
     }
 
