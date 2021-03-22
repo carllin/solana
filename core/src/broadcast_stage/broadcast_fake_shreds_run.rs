@@ -26,6 +26,7 @@ pub(super) struct BroadcastFakeShredsRun {
     next_shred_index: u32,
     shred_version: u16,
     keypair: Arc<Keypair>,
+    current_slot: Slot,
 }
 
 impl BroadcastFakeShredsRun {
@@ -46,6 +47,7 @@ impl BroadcastFakeShredsRun {
             last_fake_entry_hash: Hash::default(),
             shred_version,
             keypair,
+            current_slot: 0,
         }
     }
 
@@ -145,6 +147,12 @@ impl BroadcastRun for BroadcastFakeShredsRun {
         let receive_results = broadcast_utils::recv_slot_entries(receiver)?;
         let bank = receive_results.bank.clone();
         let last_tick_height = receive_results.last_tick_height;
+
+        // Handle interrupted slot
+        if bank.slot() != self.current_slot {
+            self.next_shred_index = 0;
+            self.current_slot = bank.slot();
+        }
 
         if self.next_shred_index == u32::MAX {
             self.next_shred_index = blockstore
