@@ -176,6 +176,14 @@ impl BroadcastRun for BroadcastFakeShredsRun {
             self.next_shred_index,
         );
 
+        for s in data_shreds.iter() {
+            info!(
+                "broadcast created data shred from entries {} {}",
+                s.slot(),
+                s.index()
+            );
+        }
+
         let (fake_entries, next_fake_shred_index) =
             self.queue_or_create_fake_entries(&bank, &receive_results);
         let (fake_data_shreds, fake_coding_shreds, _) = if !fake_entries.is_empty() {
@@ -259,7 +267,17 @@ impl BroadcastRun for BroadcastFakeShredsRun {
         let real_recipients = Arc::new(real_recipients);
 
         let data_shreds = Arc::new(data_shreds);
-        blockstore_sender.send((data_shreds.clone(), None))?;
+        let res = blockstore_sender.send((data_shreds.clone(), None));
+        for s in data_shreds.iter() {
+            info!(
+                "broadcast sending shred for insert {} {}, result: {:?}",
+                s.slot(),
+                s.index(),
+                res
+            );
+        }
+
+        res?;
 
         // 3) Start broadcast step
         socket_sender.send((
