@@ -1166,6 +1166,34 @@ impl Blockstore {
         conflicting_shred
     }
 
+    fn purge_data_shreds_greater_than_or_equal_to_index(
+        &self,
+        slot_meta: &mut SlotMeta,
+        start_index: u32,
+        just_inserted_data_shreds: &mut HashMap<(u64, u64), Shred>,
+        shred_index: &mut Index,
+        write_batch: &mut WriteBatch,
+    ) {
+        assert!(slot_meta.consumed <= start_index as u64);
+        for index in start_index as u64..slot_meta.received {
+            if shred_index.data().is_present(index) {
+                just_inserted_data_shreds.remove(&(slot_meta.slot, index));
+                write_batch
+                    .delete::<cf::ShredData>((slot_meta.slot, index))
+                    .unwrap();
+                shred_index.data_mut().set_present(index, false);
+            }
+        }
+
+        // Update slot_meta.received to the next largest thing
+        slot_meta.received = shred_index.data().largest().unwrap_or(0) + 1;
+        let received = slot_meta.received;
+        slot_meta
+            .completed_data_indexes
+            .retain(|i| (*i as u64) < received);
+        slot_meta.last_index = std::u64::MAX;
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn check_insert_data_shred<F>(
         &self,
@@ -1214,6 +1242,24 @@ impl Blockstore {
                 is_recovered,
             ) {
                 return Err(InsertDataShredError::InvalidShred);
+            } else if shred.last_in_slot() && shred_index < slot_meta.received {
+                // We got a last shred < slot_meta.received, and `should_insert_data_shred` returned
+                // true, so we need to purge all shreds > shred.index(). For reasoning, see comment
+                // in `should_insert_data_shred()`.
+
+                // Note purge_data_shreds_gt will delete all shreds >= shred.index(), and will set
+                // slot_meta.received == shred.index. In the comment above we concluded we wanted to
+                // to purge all shreds > shred.index(), but it's also safe to purge shreds == shred.index(),
+                // since we know no data shred exists in the store with index == shred.index(),
+                // otherwise `should_insert_data_shred()` above would have returned false and
+                // we would never have hit this case.
+                self.purge_data_shreds_greater_than_or_equal_to_index(
+                    slot_meta,
+                    shred.index(),
+                    just_inserted_data_shreds,
+                    index_meta,
+                    write_batch,
+                );
             }
         }
 
@@ -1394,7 +1440,17 @@ impl Blockstore {
                         String
                     )
                 );
-            return false;
+
+            // If consumed <= shred_index, then We haven't gotten all the shreds up to `shred_index` yet.
+            // In this case, there's a chance hat since `shred_index` < the current last index, this shred
+            // index is necessary to complete the entry for replay. Worst case it's the wrong version,
+            // replay marks the slot as dead. However, if we don't insert here, then there's a chance we never
+            // get all the shreds < the current last index, never replay, and make no progress (for instance if
+            // a leader sends an additional detached "last index" shred with a very high index, but none of the
+            // intermediate shreds).
+            if slot_meta.consumed > shred_index {
+                return false;
+            }
         }
 
         let last_root = *last_root.read().unwrap();
@@ -7515,6 +7571,186 @@ pub mod tests {
             // Check no coding shreds are inserted
             let res = blockstore.get_coding_shreds_for_slot(slot, 0).unwrap();
             assert!(res.is_empty());
+        }
+        Blockstore::destroy(&blockstore_path).expect("Expected successful database destruction");
+    }
+
+    #[test]
+    fn test_duplicate_last_index() {
+        let num_shreds = 2;
+        let num_entries = max_ticks_per_n_shreds(num_shreds, None);
+        let slot = 1;
+        let (mut shreds, _) = make_slot_entries(slot, 0, num_entries);
+
+        // Mark both as last shred
+        shreds[0].set_last_in_slot();
+        shreds[1].set_last_in_slot();
+        let blockstore_path = get_tmp_ledger_path!();
+        {
+            let blockstore = Blockstore::open(&blockstore_path).unwrap();
+            blockstore.insert_shreds(shreds, None, false).unwrap();
+
+            assert!(blockstore.get_duplicate_slot(slot).is_some());
+        }
+        Blockstore::destroy(&blockstore_path).expect("Expected successful database destruction");
+    }
+
+    #[test]
+    fn test_duplicate_last_index_purge_larger() {
+        let num_shreds = 10;
+        let smaller_last_shred_index = 5;
+        let larger_last_shred_index = 8;
+
+        let setup_test_shreds = |slot: Slot| -> Vec<Shred> {
+            let num_entries = max_ticks_per_n_shreds(num_shreds, None);
+            let (mut shreds, _) = make_slot_entries(slot, 0, num_entries);
+            shreds[smaller_last_shred_index].set_last_in_slot();
+            shreds[larger_last_shred_index].set_last_in_slot();
+            shreds
+        };
+
+        let get_expected_slot_meta_and_index_meta =
+            |blockstore: &Blockstore, shreds: Vec<Shred>| -> (SlotMeta, Index) {
+                let slot = shreds[0].slot();
+                blockstore
+                    .insert_shreds(shreds.clone(), None, false)
+                    .unwrap();
+                let meta = blockstore.meta(slot).unwrap().unwrap();
+                assert_eq!(meta.consumed, shreds.len() as u64);
+                let shreds_index = blockstore.get_index(slot).unwrap().unwrap();
+                for i in 0..shreds.len() as u64 {
+                    assert!(shreds_index.data().is_present(i));
+                }
+
+                // Cleanup the slot
+                blockstore
+                    .run_purge(slot, slot, PurgeType::PrimaryIndex)
+                    .expect("Purge database operations failed");
+                assert!(blockstore.meta(slot).unwrap().is_none());
+
+                (meta, shreds_index)
+            };
+
+        let blockstore_path = get_tmp_ledger_path!();
+        {
+            let blockstore = Blockstore::open(&blockstore_path).unwrap();
+            let mut slot = 0;
+            let shreds = setup_test_shreds(slot);
+
+            // Case 1: Insert in the same batch. Since we're inserting the shreds in order,
+            // any shreds > smaller_last_shred_index will not be inserted
+            let (expected_slot_meta, expected_index) = get_expected_slot_meta_and_index_meta(
+                &blockstore,
+                shreds[..=smaller_last_shred_index].to_vec(),
+            );
+            blockstore
+                .insert_shreds(shreds.clone(), None, false)
+                .unwrap();
+            assert!(blockstore.get_duplicate_slot(slot).is_some());
+            for i in 0..num_shreds {
+                if i <= smaller_last_shred_index as u64 {
+                    assert_eq!(
+                        blockstore.get_data_shred(slot, i).unwrap().unwrap(),
+                        shreds[i as usize].payload
+                    );
+                } else {
+                    assert!(blockstore.get_data_shred(slot, i).unwrap().is_none());
+                }
+            }
+            let mut meta = blockstore.meta(slot).unwrap().unwrap();
+            meta.first_shred_timestamp = expected_slot_meta.first_shred_timestamp;
+            assert_eq!(meta, expected_slot_meta);
+            assert_eq!(blockstore.get_index(slot).unwrap().unwrap(), expected_index);
+
+            // Case 2: Inserting a duplicate with an even smaller last shred index should not
+            // purge anything since SlotMeta.consumed signals that all the shreds up to
+            // `smaller_last_shred_index` have been received
+            let mut even_smaller_last_shred_duplicate =
+                shreds[smaller_last_shred_index - 1].clone();
+            even_smaller_last_shred_duplicate.set_last_in_slot();
+            // Flip a byte to create a duplicate shred
+            even_smaller_last_shred_duplicate.payload[0] =
+                std::u8::MAX - even_smaller_last_shred_duplicate.payload[0];
+            assert!(blockstore
+                .is_shred_duplicate(
+                    slot,
+                    even_smaller_last_shred_duplicate.index(),
+                    &even_smaller_last_shred_duplicate.payload,
+                    true
+                )
+                .is_some());
+            blockstore
+                .insert_shreds(vec![even_smaller_last_shred_duplicate], None, false)
+                .unwrap();
+            for i in 0..num_shreds {
+                if i <= smaller_last_shred_index as u64 {
+                    assert_eq!(
+                        blockstore.get_data_shred(slot, i).unwrap().unwrap(),
+                        shreds[i as usize].payload
+                    );
+                } else {
+                    assert!(blockstore.get_data_shred(slot, i).unwrap().is_none());
+                }
+            }
+            let mut meta = blockstore.meta(slot).unwrap().unwrap();
+            meta.first_shred_timestamp = expected_slot_meta.first_shred_timestamp;
+            assert_eq!(meta, expected_slot_meta);
+            assert_eq!(blockstore.get_index(slot).unwrap().unwrap(), expected_index);
+
+            // Case 3: Insert shreds in reverse so that consumed will not be updated. Now on insert, the
+            // smaller_last_shred_index will purge all the shreds before it. Insert all the shreds
+            // in the same batch
+            slot += 1;
+            let mut shreds = setup_test_shreds(slot);
+            let (expected_slot_meta, expected_index) = get_expected_slot_meta_and_index_meta(
+                &blockstore,
+                shreds[..=smaller_last_shred_index].to_vec(),
+            );
+            shreds.reverse();
+            blockstore
+                .insert_shreds(shreds.clone(), None, false)
+                .unwrap();
+            for i in 0..num_shreds {
+                if i <= smaller_last_shred_index as u64 {
+                    assert_eq!(
+                        blockstore.get_data_shred(slot, i).unwrap().unwrap(),
+                        shreds[shreds.len() - i as usize - 1].payload
+                    );
+                } else {
+                    assert!(blockstore.get_data_shred(slot, i).unwrap().is_none());
+                }
+            }
+            let mut meta = blockstore.meta(slot).unwrap().unwrap();
+            meta.first_shred_timestamp = expected_slot_meta.first_shred_timestamp;
+            assert_eq!(meta, expected_slot_meta);
+            assert_eq!(blockstore.get_index(slot).unwrap().unwrap(), expected_index);
+
+            // Case 4: Same as Case 3, but this time insert the shreds one at a time to test that the clearing
+            // of data shreds works even after they've been committed
+            slot += 1;
+            let mut shreds = setup_test_shreds(slot);
+            let (expected_slot_meta, expected_index) = get_expected_slot_meta_and_index_meta(
+                &blockstore,
+                shreds[..=smaller_last_shred_index].to_vec(),
+            );
+            shreds.reverse();
+            for shred in shreds.clone() {
+                blockstore.insert_shreds(vec![shred], None, false).unwrap();
+            }
+            for i in 0..num_shreds {
+                if i <= smaller_last_shred_index as u64 {
+                    assert_eq!(
+                        blockstore.get_data_shred(slot, i).unwrap().unwrap(),
+                        shreds[shreds.len() - i as usize - 1].payload
+                    );
+                } else {
+                    assert!(blockstore.get_data_shred(slot, i).unwrap().is_none());
+                }
+            }
+            let mut meta = blockstore.meta(slot).unwrap().unwrap();
+            meta.first_shred_timestamp = expected_slot_meta.first_shred_timestamp;
+            assert_eq!(meta, expected_slot_meta);
+            assert_eq!(blockstore.get_index(slot).unwrap().unwrap(), expected_index);
         }
         Blockstore::destroy(&blockstore_path).expect("Expected successful database destruction");
     }
