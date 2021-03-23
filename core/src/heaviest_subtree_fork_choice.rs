@@ -206,9 +206,18 @@ impl HeaviestSubtreeForkChoice {
         epoch_stakes: &HashMap<Epoch, EpochStakes>,
         epoch_schedule: &EpochSchedule,
     ) -> SlotHashKey {
+        let pubkey_votes_cloned: Vec<_> = pubkey_votes.map(|x| x.borrow().clone()).collect();
         // Generate the set of updates
-        let update_operations =
-            self.generate_update_operations(pubkey_votes, epoch_stakes, epoch_schedule);
+        let update_operations = self.generate_update_operations(
+            pubkey_votes_cloned.iter(),
+            epoch_stakes,
+            epoch_schedule,
+        );
+
+        info!(
+            "add_votes {:?}, updates: {:?}",
+            pubkey_votes_cloned, update_operations
+        );
 
         // Finalize all updates
         self.process_update_operations(update_operations);
@@ -254,6 +263,7 @@ impl HeaviestSubtreeForkChoice {
     }
 
     pub fn add_new_leaf_slot(&mut self, slot: SlotHashKey, parent: Option<SlotHashKey>) {
+        info!("heaviest_subtree_fork_choice add_new_leaf_slot: {:?}", slot);
         if self.last_root_time.elapsed().as_secs() > MAX_ROOT_PRINT_SECONDS {
             self.print_state();
             self.last_root_time = Instant::now();
@@ -488,14 +498,17 @@ impl HeaviestSubtreeForkChoice {
     }
 
     fn aggregate_slot(&mut self, slot_hash_key: SlotHashKey) {
+        info!("aggregating slot: {:?}", slot_hash_key);
         let mut stake_voted_subtree;
         let mut best_slot_hash_key = slot_hash_key;
+        let mut children_res = vec![];
         if let Some(fork_info) = self.fork_infos.get(&slot_hash_key) {
             stake_voted_subtree = fork_info.stake_voted_at;
             let mut best_child_stake_voted_subtree = 0;
             let mut best_child_slot = slot_hash_key;
             for child in &fork_info.children {
                 let child_stake_voted_subtree = self.stake_voted_subtree(child).unwrap();
+                children_res.push((*child, child_stake_voted_subtree));
                 // Child forks that are not candidates still contribute to the weight
                 // of the subtree rooted at `slot_hash_key`. For instance:
                 /*
@@ -535,11 +548,16 @@ impl HeaviestSubtreeForkChoice {
                 }
             }
         } else {
+            info!("aggregating slot: {:?} doesn't exist", slot_hash_key);
             return;
         }
 
         let fork_info = self.fork_infos.get_mut(&slot_hash_key).unwrap();
         fork_info.stake_voted_subtree = stake_voted_subtree;
+        info!(
+            "aggregating slot: {:?}, children: {:?}, best: {:?}",
+            slot_hash_key, children_res, best_slot_hash_key
+        );
         fork_info.best_slot = best_slot_hash_key;
     }
 
@@ -833,6 +851,10 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
     }
 
     fn mark_fork_invalid_candidate(&mut self, invalid_slot_hash_key: &SlotHashKey) {
+        info!(
+            "marking slot: {:?} invalid candidate",
+            invalid_slot_hash_key
+        );
         let fork_info = self.fork_infos.get_mut(invalid_slot_hash_key);
         if let Some(fork_info) = fork_info {
             if fork_info.is_candidate {
@@ -846,6 +868,7 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
     }
 
     fn mark_fork_valid_candidate(&mut self, valid_slot_hash_key: &SlotHashKey) {
+        info!("marking slot: {:?} valid candidate", valid_slot_hash_key);
         let mut aggregate_operations = BTreeMap::new();
         let fork_info = self.fork_infos.get_mut(valid_slot_hash_key);
         if let Some(fork_info) = fork_info {

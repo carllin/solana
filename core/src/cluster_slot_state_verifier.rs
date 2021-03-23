@@ -85,6 +85,9 @@ fn on_frozen_slot(
     // and the slot should not be dead
     assert!(*bank_frozen_hash != Hash::default());
     assert!(!is_dead);
+    info!("on_frozen_slot, slot: {}, bank frozen hash: {}, cluster_confirmed_hash: {:?}, is_dup: {}, is_dead: {}",
+        slot, bank_frozen_hash, cluster_duplicate_confirmed_hash, is_slot_duplicate, is_dead,
+    );
 
     if let Some(cluster_duplicate_confirmed_hash) = cluster_duplicate_confirmed_hash {
         // If the cluster duplicate_confirmed some version of this slot, then
@@ -144,8 +147,8 @@ fn on_cluster_update(
     is_dead: bool,
 ) -> Vec<ResultingStateChange> {
     info!(
-        "{} cluster update {} {:?}",
-        pubkey, is_slot_duplicate, cluster_duplicate_confirmed_hash
+        "{} slot: {} cluster update {} {:?}",
+        pubkey, slot, is_slot_duplicate, cluster_duplicate_confirmed_hash
     );
     if is_dead {
         on_dead_slot(
@@ -256,6 +259,10 @@ pub(crate) fn check_slot_agrees_with_cluster(
     duplicate_slots_to_repair: &mut HashSet<(Slot, Hash)>,
     slot_state_update: SlotStateUpdate,
 ) {
+    info!(
+        "check_slot_agrees_with_cluster slot: {} root {} frozen_hash: {:?}, update: {:?}",
+        slot, root, frozen_hash, slot_state_update
+    );
     if slot <= root {
         return;
     }
@@ -269,6 +276,10 @@ pub(crate) fn check_slot_agrees_with_cluster(
 
     let frozen_hash = frozen_hash.unwrap();
     let gossip_duplicate_confirmed_hash = gossip_duplicate_confirmed_slots.get(&slot);
+    info!(
+        "gossip_confirmed_hash: {:?}",
+        gossip_duplicate_confirmed_hash
+    );
     let is_local_replay_duplicate_confirmed = progress.is_supermajority_confirmed(slot).expect("If the frozen hash exists, then the slot must exist in bank forks and thus in progress map");
     let cluster_duplicate_confirmed_hash = get_cluster_duplicate_confirmed_hash(
         slot,
