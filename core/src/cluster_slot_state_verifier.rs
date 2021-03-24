@@ -325,6 +325,8 @@ pub(crate) fn check_slot_agrees_with_cluster(
 mod test {
     use super::*;
     use crate::consensus::test::VoteSimulator;
+    use solana_runtime::bank_forks::BankForks;
+    use std::sync::RwLock;
     use trees::tr;
 
     struct InitialState {
@@ -333,6 +335,7 @@ mod test {
         ancestors: HashMap<Slot, HashSet<Slot>>,
         descendants: HashMap<Slot, HashSet<Slot>>,
         slot: Slot,
+        bank_forks: RwLock<BankForks>,
     }
 
     fn setup() -> InitialState {
@@ -355,6 +358,7 @@ mod test {
             ancestors,
             descendants,
             slot: 0,
+            bank_forks: vote_simulator.bank_forks,
         }
     }
 
@@ -631,6 +635,7 @@ mod test {
             ancestors,
             descendants,
             slot,
+            ..
         } = setup();
 
         // MarkSlotDuplicate should mark progress map and remove
@@ -687,4 +692,102 @@ mod test {
             .is_candidate_slot(&(slot, Hash::default()))
             .unwrap());
     }
-}*/
+
+    #[test]
+    fn test_state_ancestor_confirmed_descendant_duplicate() {
+        // Common state
+        let InitialState {
+            mut heaviest_subtree_fork_choice,
+            mut progress,
+            ancestors,
+            descendants,
+            bank_forks,
+            ..
+        } = setup();
+
+        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot(), 3);
+        let root = 0;
+        let mut gossip_duplicate_confirmed_slots = GossipDuplicateConfirmedSlots::default();
+
+        // Mark slot 2 as duplicate confirmed
+        let slot2_hash = bank_forks.read().unwrap().get(2).unwrap().hash();
+        gossip_duplicate_confirmed_slots.insert(2, slot2_hash);
+        check_slot_agrees_with_cluster(
+            2,
+            root,
+            Some(slot2_hash),
+            &gossip_duplicate_confirmed_slots,
+            &ancestors,
+            &descendants,
+            &mut progress,
+            &mut heaviest_subtree_fork_choice,
+            SlotStateUpdate::DuplicateConfirmed,
+        );
+
+        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot(), 3);
+
+        // Mark 3 as duplicate, should not remove slot 2 from fork choice
+        check_slot_agrees_with_cluster(
+            3,
+            root,
+            Some(bank_forks.read().unwrap().get(3).unwrap().hash()),
+            &gossip_duplicate_confirmed_slots,
+            &ancestors,
+            &descendants,
+            &mut progress,
+            &mut heaviest_subtree_fork_choice,
+            SlotStateUpdate::Duplicate,
+        );
+
+        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot(), 2);
+    }
+
+    #[test]
+    fn test_state_ancestor_duplicate_descendant_confirmed() {
+        // Common state
+        let InitialState {
+            mut heaviest_subtree_fork_choice,
+            mut progress,
+            ancestors,
+            descendants,
+            bank_forks,
+            ..
+        } = setup();
+
+        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot(), 3);
+        let root = 0;
+        let mut gossip_duplicate_confirmed_slots = GossipDuplicateConfirmedSlots::default();
+        // Mark 2 as duplicate confirmed
+        check_slot_agrees_with_cluster(
+            2,
+            root,
+            Some(bank_forks.read().unwrap().get(2).unwrap().hash()),
+            &gossip_duplicate_confirmed_slots,
+            &ancestors,
+            &descendants,
+            &mut progress,
+            &mut heaviest_subtree_fork_choice,
+            SlotStateUpdate::Duplicate,
+        );
+
+        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot(), 1);
+
+        // Mark slot 3 as duplicate confirmed, should mark slot 2 as duplicate confirmed as well
+        let slot3_hash = bank_forks.read().unwrap().get(3).unwrap().hash();
+        gossip_duplicate_confirmed_slots.insert(3, slot3_hash);
+        check_slot_agrees_with_cluster(
+            3,
+            root,
+            Some(slot3_hash),
+            &gossip_duplicate_confirmed_slots,
+            &ancestors,
+            &descendants,
+            &mut progress,
+            &mut heaviest_subtree_fork_choice,
+            SlotStateUpdate::DuplicateConfirmed,
+        );
+
+        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot(), 3);
+    }
+}
+*/
