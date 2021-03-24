@@ -1166,34 +1166,6 @@ impl Blockstore {
         conflicting_shred
     }
 
-    fn purge_data_shreds_greater_than_or_equal_to_index(
-        &self,
-        slot_meta: &mut SlotMeta,
-        start_index: u32,
-        just_inserted_data_shreds: &mut HashMap<(u64, u64), Shred>,
-        shred_index: &mut Index,
-        write_batch: &mut WriteBatch,
-    ) {
-        assert!(slot_meta.consumed <= start_index as u64);
-        for index in start_index as u64..slot_meta.received {
-            if shred_index.data().is_present(index) {
-                just_inserted_data_shreds.remove(&(slot_meta.slot, index));
-                write_batch
-                    .delete::<cf::ShredData>((slot_meta.slot, index))
-                    .unwrap();
-                shred_index.data_mut().set_present(index, false);
-            }
-        }
-
-        // Update slot_meta.received to the next largest thing
-        slot_meta.received = shred_index.data().largest().unwrap_or(0) + 1;
-        let received = slot_meta.received;
-        slot_meta
-            .completed_data_indexes
-            .retain(|i| (*i as u64) < received);
-        slot_meta.last_index = std::u64::MAX;
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn check_insert_data_shred<F>(
         &self,
@@ -1228,7 +1200,19 @@ impl Blockstore {
         let slot_meta = &mut slot_meta_entry.new_slot_meta.borrow_mut();
 
         if !is_trusted {
-            info!("is_data_shred_present");
+            if shred.last_in_slot() && shred_index < slot_meta.received && !slot_meta.is_full() {
+                // We got a last shred < slot_meta.received, which signals there's an alternative,
+                // shorter version of the slot. Because also `!slot_meta.is_full()`, then this
+                // means, for the current version of the slot, we might never get all the
+                // shreds < the current last index, never replaythis slot, and make no
+                // progress (for instance if a leader sends an additional detached "last index"
+                // shred with a very high index, but none of the intermediate shreds). Ideally, we would
+                // just purge all shreds > the new last index slot, but because replay may have already
+                // replayed entries past the newly deteced "last" shred, then mark the slot as dead
+                // and wait for replay to dump and repair the correct version.
+                write_batch.put::<cf::DeadSlots>(slot, &true).unwrap();
+            }
+
             if Self::is_data_shred_present(&shred, slot_meta, &index_meta.data()) {
                 info!("handle duplicate");
                 handle_duplicate(shred);
@@ -1242,24 +1226,6 @@ impl Blockstore {
                 is_recovered,
             ) {
                 return Err(InsertDataShredError::InvalidShred);
-            } else if shred.last_in_slot() && shred_index < slot_meta.received {
-                // We got a last shred < slot_meta.received, and `should_insert_data_shred` returned
-                // true, so we need to purge all shreds > shred.index(). For reasoning, see comment
-                // in `should_insert_data_shred()`.
-
-                // Note purge_data_shreds_gt will delete all shreds >= shred.index(), and will set
-                // slot_meta.received == shred.index. In the comment above we concluded we wanted to
-                // to purge all shreds > shred.index(), but it's also safe to purge shreds == shred.index(),
-                // since we know no data shred exists in the store with index == shred.index(),
-                // otherwise `should_insert_data_shred()` above would have returned false and
-                // we would never have hit this case.
-                self.purge_data_shreds_greater_than_or_equal_to_index(
-                    slot_meta,
-                    shred.index(),
-                    just_inserted_data_shreds,
-                    index_meta,
-                    write_batch,
-                );
             }
         }
 
@@ -1441,16 +1407,7 @@ impl Blockstore {
                     )
                 );
 
-            // If consumed <= shred_index, then We haven't gotten all the shreds up to `shred_index` yet.
-            // In this case, there's a chance hat since `shred_index` < the current last index, this shred
-            // index is necessary to complete the entry for replay. Worst case it's the wrong version,
-            // replay marks the slot as dead. However, if we don't insert here, then there's a chance we never
-            // get all the shreds < the current last index, never replay, and make no progress (for instance if
-            // a leader sends an additional detached "last index" shred with a very high index, but none of the
-            // intermediate shreds).
-            if slot_meta.consumed > shred_index {
-                return false;
-            }
+            return false;
         }
 
         let last_root = *last_root.read().unwrap();
@@ -2707,17 +2664,7 @@ impl Blockstore {
             .zip(slot_metas)
             .filter_map(|(height, meta)| {
                 meta.map(|meta| {
-                    let valid_next_slots: Vec<u64> = meta
-                        .next_slots
-                        .iter()
-                        .cloned()
-                        .filter(|s| {
-                            if self.is_dead(*s) {
-                                println!("Slot {} is dead", *s);
-                            }
-                            !self.is_dead(*s)
-                        })
-                        .collect();
+                    let valid_next_slots: Vec<u64> = meta.next_slots.to_vec();
                     (*height, valid_next_slots)
                 })
             })
@@ -7596,7 +7543,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_duplicate_last_index_purge_larger() {
+    fn test_duplicate_last_index_mark_dead() {
         let num_shreds = 10;
         let smaller_last_shred_index = 5;
         let larger_last_shred_index = 8;
@@ -7638,7 +7585,9 @@ pub mod tests {
             let shreds = setup_test_shreds(slot);
 
             // Case 1: Insert in the same batch. Since we're inserting the shreds in order,
-            // any shreds > smaller_last_shred_index will not be inserted
+            // any shreds > smaller_last_shred_index will not be inserted. Slot is not marked
+            // as dead because no slots > the first "last" index shred are inserted before
+            // the "last" index shred itself is inserted.
             let (expected_slot_meta, expected_index) = get_expected_slot_meta_and_index_meta(
                 &blockstore,
                 shreds[..=smaller_last_shred_index].to_vec(),
@@ -7647,6 +7596,7 @@ pub mod tests {
                 .insert_shreds(shreds.clone(), None, false)
                 .unwrap();
             assert!(blockstore.get_duplicate_slot(slot).is_some());
+            assert!(!blockstore.is_dead(slot));
             for i in 0..num_shreds {
                 if i <= smaller_last_shred_index as u64 {
                     assert_eq!(
@@ -7663,8 +7613,7 @@ pub mod tests {
             assert_eq!(blockstore.get_index(slot).unwrap().unwrap(), expected_index);
 
             // Case 2: Inserting a duplicate with an even smaller last shred index should not
-            // purge anything since SlotMeta.consumed signals that all the shreds up to
-            // `smaller_last_shred_index` have been received
+            // mark the slot as dead since the Slotmeta is full.
             let mut even_smaller_last_shred_duplicate =
                 shreds[smaller_last_shred_index - 1].clone();
             even_smaller_last_shred_duplicate.set_last_in_slot();
@@ -7682,6 +7631,7 @@ pub mod tests {
             blockstore
                 .insert_shreds(vec![even_smaller_last_shred_duplicate], None, false)
                 .unwrap();
+            assert!(!blockstore.is_dead(slot));
             for i in 0..num_shreds {
                 if i <= smaller_last_shred_index as u64 {
                     assert_eq!(
@@ -7698,59 +7648,72 @@ pub mod tests {
             assert_eq!(blockstore.get_index(slot).unwrap().unwrap(), expected_index);
 
             // Case 3: Insert shreds in reverse so that consumed will not be updated. Now on insert, the
-            // smaller_last_shred_index will purge all the shreds before it. Insert all the shreds
-            // in the same batch
+            // the slot should be marked as dead
             slot += 1;
             let mut shreds = setup_test_shreds(slot);
-            let (expected_slot_meta, expected_index) = get_expected_slot_meta_and_index_meta(
-                &blockstore,
-                shreds[..=smaller_last_shred_index].to_vec(),
-            );
             shreds.reverse();
             blockstore
                 .insert_shreds(shreds.clone(), None, false)
                 .unwrap();
+            assert!(blockstore.is_dead(slot));
+            // All the shreds other than the two last index shreds because those two
+            // are marked as last, but less than the first received index == 10.
+            // The others will be inserted even after the slot is marked dead on attempted
+            // insert of the first last_index shred since dead slots can still be
+            // inserted into.
             for i in 0..num_shreds {
-                if i <= smaller_last_shred_index as u64 {
+                let shred_to_check = &shreds[i as usize];
+                let shred_index = shred_to_check.index() as u64;
+                println!("shred index: {}", shred_index);
+                if shred_index != smaller_last_shred_index as u64
+                    && shred_index != larger_last_shred_index as u64
+                {
                     assert_eq!(
-                        blockstore.get_data_shred(slot, i).unwrap().unwrap(),
-                        shreds[shreds.len() - i as usize - 1].payload
+                        blockstore
+                            .get_data_shred(slot, shred_index)
+                            .unwrap()
+                            .unwrap(),
+                        shred_to_check.payload
                     );
                 } else {
-                    assert!(blockstore.get_data_shred(slot, i).unwrap().is_none());
+                    assert!(blockstore
+                        .get_data_shred(slot, shred_index)
+                        .unwrap()
+                        .is_none());
                 }
             }
-            let mut meta = blockstore.meta(slot).unwrap().unwrap();
-            meta.first_shred_timestamp = expected_slot_meta.first_shred_timestamp;
-            assert_eq!(meta, expected_slot_meta);
-            assert_eq!(blockstore.get_index(slot).unwrap().unwrap(), expected_index);
 
             // Case 4: Same as Case 3, but this time insert the shreds one at a time to test that the clearing
             // of data shreds works even after they've been committed
             slot += 1;
             let mut shreds = setup_test_shreds(slot);
-            let (expected_slot_meta, expected_index) = get_expected_slot_meta_and_index_meta(
-                &blockstore,
-                shreds[..=smaller_last_shred_index].to_vec(),
-            );
             shreds.reverse();
             for shred in shreds.clone() {
                 blockstore.insert_shreds(vec![shred], None, false).unwrap();
             }
+            assert!(blockstore.is_dead(slot));
+            // All the shreds will be inserted since dead slots can still be inserted into.
             for i in 0..num_shreds {
-                if i <= smaller_last_shred_index as u64 {
+                let shred_to_check = &shreds[i as usize];
+                let shred_index = shred_to_check.index() as u64;
+                println!("shred index: {}", shred_index);
+                if shred_index != smaller_last_shred_index as u64
+                    && shred_index != larger_last_shred_index as u64
+                {
                     assert_eq!(
-                        blockstore.get_data_shred(slot, i).unwrap().unwrap(),
-                        shreds[shreds.len() - i as usize - 1].payload
+                        blockstore
+                            .get_data_shred(slot, shred_index)
+                            .unwrap()
+                            .unwrap(),
+                        shred_to_check.payload
                     );
                 } else {
-                    assert!(blockstore.get_data_shred(slot, i).unwrap().is_none());
+                    assert!(blockstore
+                        .get_data_shred(slot, shred_index)
+                        .unwrap()
+                        .is_none());
                 }
             }
-            let mut meta = blockstore.meta(slot).unwrap().unwrap();
-            meta.first_shred_timestamp = expected_slot_meta.first_shred_timestamp;
-            assert_eq!(meta, expected_slot_meta);
-            assert_eq!(blockstore.get_index(slot).unwrap().unwrap(), expected_index);
         }
         Blockstore::destroy(&blockstore_path).expect("Expected successful database destruction");
     }
