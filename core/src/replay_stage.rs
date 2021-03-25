@@ -7,6 +7,7 @@ use crate::{
     cluster_info_vote_listener::{GossipDuplicateConfirmedSlotsReceiver, VoteTracker},
     cluster_slot_state_verifier::*,
     cluster_slots::ClusterSlots,
+    cluster_slots_service::ClusterSlotsUpdateSender,
     commitment_service::{AggregateCommitmentService, CommitmentAggregationData},
     consensus::{
         ComputedBankState, Stake, SwitchForkDecision, Tower, VotedStakes, SWITCH_FORK_THRESHOLD,
@@ -276,6 +277,7 @@ impl ReplayStage {
         _duplicate_slots_reset_receiver: DuplicateSlotsResetReceiver,
         replay_vote_sender: ReplayVoteSender,
         gossip_duplicate_confirmed_slots_receiver: GossipDuplicateConfirmedSlotsReceiver,
+        cluster_slots_update_sender: ClusterSlotsUpdateSender,
     ) -> Self {
         let ReplayStageConfig {
             my_pubkey,
@@ -366,7 +368,8 @@ impl ReplayStage {
                         &gossip_duplicate_confirmed_slots,
                         &ancestors,
                         &descendants,
-                        &mut duplicate_slots_to_repair
+                        &mut duplicate_slots_to_repair,
+                        &cluster_slots_update_sender,
                     );
                     replay_active_banks_time.stop();
                     Self::report_memory(&allocated, "replay_active_banks", start);
@@ -1212,9 +1215,8 @@ impl ReplayStage {
                 // Signal retransmit
                 if Self::should_retransmit(poh_slot, &mut skipped_slots_info.last_retransmit_slot) {
                     datapoint_info!("replay_stage-retransmit", ("slot", bank.slot(), i64),);
-                    retransmit_slots_sender
-                        .send(vec![(bank.slot(), bank.clone())].into_iter().collect())
-                        .unwrap();
+                    let _ = retransmit_slots_sender
+                        .send(vec![(bank.slot(), bank.clone())].into_iter().collect());
                 }
                 return;
             }
@@ -1591,6 +1593,7 @@ impl ReplayStage {
         ancestors: &HashMap<Slot, HashSet<Slot>>,
         descendants: &HashMap<Slot, HashSet<Slot>>,
         duplicate_slots_to_repair: &mut HashSet<(Slot, Hash)>,
+        cluster_slots_update_sender: &ClusterSlotsUpdateSender,
     ) -> bool {
         let mut did_complete_bank = false;
         let mut tx_count = 0;
@@ -1680,6 +1683,7 @@ impl ReplayStage {
                 );
                 did_complete_bank = true;
                 info!("{} bank frozen: {}", my_pubkey, bank.slot());
+                let _ = cluster_slots_update_sender.send(vec![*bank_slot]);
                 bank.freeze();
                 let bank_hash = bank.hash();
                 assert_ne!(bank_hash, Hash::default());

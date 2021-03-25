@@ -1,5 +1,6 @@
 use crate::{cluster_info::ClusterInfo, cluster_slots::ClusterSlots};
-use solana_ledger::blockstore::{Blockstore, CompletedSlotsReceiver};
+use crossbeam_channel::{Receiver, Sender};
+use solana_ledger::blockstore::Blockstore;
 use solana_measure::measure::Measure;
 use solana_runtime::bank_forks::BankForks;
 use solana_sdk::{clock::Slot, pubkey::Pubkey};
@@ -13,16 +14,19 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub type ClusterSlotsUpdateReceiver = Receiver<Vec<Slot>>;
+pub type ClusterSlotsUpdateSender = Sender<Vec<Slot>>;
+
 #[derive(Default, Debug)]
 struct ClusterSlotsServiceTiming {
     pub lowest_slot_elapsed: u64,
-    pub update_completed_slots_elapsed: u64,
+    pub process_cluster_slots_updates_elapsed: u64,
 }
 
 impl ClusterSlotsServiceTiming {
-    fn update(&mut self, lowest_slot_elapsed: u64, update_completed_slots_elapsed: u64) {
+    fn update(&mut self, lowest_slot_elapsed: u64, process_cluster_slots_updates_elapsed: u64) {
         self.lowest_slot_elapsed += lowest_slot_elapsed;
-        self.update_completed_slots_elapsed += update_completed_slots_elapsed;
+        self.process_cluster_slots_updates_elapsed += process_cluster_slots_updates_elapsed;
     }
 }
 
@@ -36,12 +40,12 @@ impl ClusterSlotsService {
         cluster_slots: Arc<ClusterSlots>,
         bank_forks: Arc<RwLock<BankForks>>,
         cluster_info: Arc<ClusterInfo>,
-        completed_slots_receiver: CompletedSlotsReceiver,
+        cluster_slots_update_receiver: ClusterSlotsUpdateReceiver,
         exit: Arc<AtomicBool>,
     ) -> Self {
         let id = cluster_info.id();
         Self::initialize_lowest_slot(id, &blockstore, &cluster_info);
-        Self::initialize_epoch_slots(&blockstore, &cluster_info, &completed_slots_receiver);
+        Self::initialize_epoch_slots(&bank_forks, &cluster_info);
         let t_cluster_slots_service = Builder::new()
             .name("solana-cluster-slots-service".to_string())
             .spawn(move || {
@@ -50,7 +54,7 @@ impl ClusterSlotsService {
                     cluster_slots,
                     bank_forks,
                     cluster_info,
-                    completed_slots_receiver,
+                    cluster_slots_update_receiver,
                     exit,
                 )
             })
@@ -70,7 +74,7 @@ impl ClusterSlotsService {
         cluster_slots: Arc<ClusterSlots>,
         bank_forks: Arc<RwLock<BankForks>>,
         cluster_info: Arc<ClusterInfo>,
-        completed_slots_receiver: CompletedSlotsReceiver,
+        cluster_slots_update_receiver: ClusterSlotsUpdateReceiver,
         exit: Arc<AtomicBool>,
     ) {
         let mut cluster_slots_service_timing = ClusterSlotsServiceTiming::default();
@@ -85,15 +89,15 @@ impl ClusterSlotsService {
             let lowest_slot = blockstore.lowest_slot();
             Self::update_lowest_slot(&id, lowest_slot, &cluster_info);
             lowest_slot_elapsed.stop();
-            let mut update_completed_slots_elapsed =
-                Measure::start("update_completed_slots_elapsed");
-            Self::update_completed_slots(&completed_slots_receiver, &cluster_info);
+            let mut process_cluster_slots_updates_elapsed =
+                Measure::start("process_cluster_slots_updates_elapsed");
+            Self::process_cluster_slots_updates(&cluster_slots_update_receiver, &cluster_info);
             cluster_slots.update(new_root, &cluster_info, &bank_forks);
-            update_completed_slots_elapsed.stop();
+            process_cluster_slots_updates_elapsed.stop();
 
             cluster_slots_service_timing.update(
                 lowest_slot_elapsed.as_us(),
-                update_completed_slots_elapsed.as_us(),
+                process_cluster_slots_updates_elapsed.as_us(),
             );
 
             if last_stats.elapsed().as_secs() > 2 {
@@ -105,8 +109,8 @@ impl ClusterSlotsService {
                         i64
                     ),
                     (
-                        "update_completed_slots_elapsed",
-                        cluster_slots_service_timing.update_completed_slots_elapsed,
+                        "process_cluster_slots_updates_elapsed",
+                        cluster_slots_service_timing.process_cluster_slots_updates_elapsed,
                         i64
                     ),
                 );
@@ -117,12 +121,12 @@ impl ClusterSlotsService {
         }
     }
 
-    fn update_completed_slots(
-        completed_slots_receiver: &CompletedSlotsReceiver,
+    fn process_cluster_slots_updates(
+        cluster_slots_update_receiver: &ClusterSlotsUpdateReceiver,
         cluster_info: &ClusterInfo,
     ) {
         let mut slots: Vec<Slot> = vec![];
-        while let Ok(mut more) = completed_slots_receiver.try_recv() {
+        while let Ok(mut more) = cluster_slots_update_receiver.try_recv() {
             slots.append(&mut more);
         }
         #[allow(clippy::stable_sort_primitive)]
@@ -145,29 +149,18 @@ impl ClusterSlotsService {
     }
 
     fn initialize_epoch_slots(
-        blockstore: &Blockstore,
+        bank_forks: &RwLock<BankForks>,
         cluster_info: &ClusterInfo,
-        completed_slots_receiver: &CompletedSlotsReceiver,
     ) {
-        let root = blockstore.last_root();
-        let mut slots: Vec<_> = blockstore
-            .live_slots_iterator(root)
-            .filter_map(|(slot, slot_meta)| {
-                if slot_meta.is_full() {
-                    Some(slot)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // TODO: Should probably incorporate slots that were replayed on startup,
+        // and maybe some that were frozen < snapshot root in case validators restart
+        // from newer snapshots and lose history.
+        let frozen_banks = bank_forks.read().unwrap().frozen_banks();
+        let mut frozen_bank_slots: Vec<Slot> = frozen_banks.keys().cloned().collect();
+        frozen_bank_slots.sort();
 
-        while let Ok(mut more) = completed_slots_receiver.try_recv() {
-            slots.append(&mut more);
-        }
-        slots.sort_unstable();
-        slots.dedup();
-        if !slots.is_empty() {
-            cluster_info.push_epoch_slots(&slots);
+        if !frozen_bank_slots.is_empty() {
+            cluster_info.push_epoch_slots(&frozen_bank_slots);
         }
     }
 }

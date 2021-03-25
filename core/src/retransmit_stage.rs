@@ -5,12 +5,11 @@ use crate::{
     cluster_info::{compute_retransmit_peers, ClusterInfo, DATA_PLANE_FANOUT},
     cluster_info_vote_listener::VerifiedVoteReceiver,
     cluster_slots::ClusterSlots,
-    cluster_slots_service::ClusterSlotsService,
+    cluster_slots_service::{ClusterSlotsService, ClusterSlotsUpdateReceiver},
     completed_data_sets_service::CompletedDataSetsSender,
     contact_info::ContactInfo,
     max_slots::MaxSlots,
-    repair_service::DuplicateSlotsResetSender,
-    repair_service::RepairInfo,
+    repair_service::{DuplicateSlotsResetSender, RepairInfo},
     result::{Error, Result},
     rpc_subscriptions::RpcSubscriptions,
     window_service::{should_retransmit_and_persist, WindowService},
@@ -19,10 +18,7 @@ use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
 use solana_client::rpc_response::SlotUpdate;
 use solana_ledger::shred::{get_shred_slot_index_type, ShredFetchStats};
-use solana_ledger::{
-    blockstore::{Blockstore, CompletedSlotsReceiver},
-    leader_schedule_cache::LeaderScheduleCache,
-};
+use solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache};
 use solana_measure::measure::Measure;
 use solana_metrics::inc_new_counter_error;
 use solana_perf::packet::{Packet, Packets};
@@ -574,7 +570,7 @@ impl RetransmitStage {
         repair_socket: Arc<UdpSocket>,
         verified_receiver: Receiver<Vec<Packets>>,
         exit: &Arc<AtomicBool>,
-        completed_slots_receiver: CompletedSlotsReceiver,
+        cluster_slots_update_receiver: ClusterSlotsUpdateReceiver,
         epoch_schedule: EpochSchedule,
         cfg: Option<Arc<AtomicBool>>,
         shred_version: u16,
@@ -606,7 +602,7 @@ impl RetransmitStage {
             cluster_slots.clone(),
             bank_forks.clone(),
             cluster_info.clone(),
-            completed_slots_receiver,
+            cluster_slots_update_receiver,
             exit.clone(),
         );
         let repair_info = RepairInfo {
