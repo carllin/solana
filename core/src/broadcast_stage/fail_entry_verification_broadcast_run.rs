@@ -2,6 +2,7 @@ use super::*;
 use solana_ledger::shred::Shredder;
 use solana_sdk::hash::Hash;
 use solana_sdk::signature::Keypair;
+use solana_sdk::signature::Signer;
 use std::{thread::sleep, time::Duration};
 
 pub const NUM_BAD_SLOTS: u64 = 10;
@@ -104,6 +105,11 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
         let bank_epoch = bank.get_leader_schedule_epoch(bank.slot());
         let stakes = bank.epoch_staked_nodes(bank_epoch);
         let stakes = stakes.map(Arc::new);
+        info!(
+            "{} Sending good shreds for slot {} to network",
+            self.keypair.pubkey(),
+            data_shreds.first().unwrap().slot()
+        );
         socket_sender.send(((stakes.clone(), data_shreds), None))?;
         if let Some((good_last_data_shred, bad_last_data_shred)) = last_shreds {
             // Stash away the good shred so we can rewrite them later
@@ -112,17 +118,23 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             let bad_last_data_shred = Arc::new(bad_last_data_shred);
             // Store the good shred so that blockstore will signal ClusterSlots
             // that the slot is complete
-            blockstore_sender.send((good_last_data_shred, None))?;
+            /*blockstore_sender.send((good_last_data_shred, None))?;
             loop {
                 // Wait for slot to be complete
                 if blockstore.is_full(bank.slot()) {
                     break;
                 }
                 sleep(Duration::from_millis(10));
-            }
+            }*/
             // Store the bad shred so we serve bad repairs to validators catching up
             blockstore_sender.send((bad_last_data_shred.clone(), None))?;
             // Send bad shreds to rest of network
+            info!(
+                "{} Sending bad shreds for slot {} {} to network",
+                self.keypair.pubkey(),
+                bad_last_data_shred[0].slot(),
+                bad_last_data_shred[0].index()
+            );
             socket_sender.send(((stakes, bad_last_data_shred), None))?;
         }
         Ok(())

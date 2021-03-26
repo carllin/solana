@@ -7,7 +7,7 @@ use crate::{
     cluster_slots::ClusterSlots,
     completed_data_sets_service::CompletedDataSetsSender,
     repair_response,
-    repair_service::{RepairInfo, RepairService},
+    repair_service::{DuplicateSlotRepairRequestReceiver, RepairInfo, RepairService},
     result::{Error, Result},
     serve_repair::DEFAULT_NONCE,
 };
@@ -327,6 +327,7 @@ impl WindowService {
         verified_vote_receiver: VerifiedVoteReceiver,
         completed_data_sets_sender: CompletedDataSetsSender,
         duplicate_slots_sender: DuplicateSlotSender,
+        duplicate_slot_repair_request_receiver: DuplicateSlotRepairRequestReceiver,
     ) -> WindowService
     where
         F: 'static
@@ -344,6 +345,7 @@ impl WindowService {
             repair_info,
             cluster_slots,
             verified_vote_receiver,
+            duplicate_slot_repair_request_receiver,
         );
 
         let (insert_sender, insert_receiver) = unbounded();

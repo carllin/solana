@@ -17,6 +17,7 @@ use solana_core::{
     consensus::{Tower, SWITCH_FORK_THRESHOLD, VOTE_THRESHOLD_DEPTH},
     gossip_service::discover_cluster,
     optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
+    replay_stage::DUPLICATE_THRESHOLD,
     validator::ValidatorConfig,
 };
 use solana_download_utils::download_snapshot;
@@ -1318,21 +1319,27 @@ fn test_snapshots_restart_validity() {
 #[test]
 #[serial]
 #[allow(unused_attributes)]
-#[ignore]
 fn test_fail_entry_verification_leader() {
-    test_faulty_node(BroadcastStageType::FailEntryVerification);
+    let leader_stake = (DUPLICATE_THRESHOLD * 100.0) as u64 + 1;
+    let validator_stake1 = (100 - leader_stake) / 2;
+    let validator_stake2 = 100 - leader_stake - validator_stake1;
+    test_faulty_node(
+        BroadcastStageType::FailEntryVerification,
+        vec![leader_stake, validator_stake1, validator_stake2],
+    );
 }
 
 #[test]
 #[serial]
 #[allow(unused_attributes)]
 fn test_fake_shreds_broadcast_leader() {
-    test_faulty_node(BroadcastStageType::BroadcastDuplicates(
-        BroadcastDuplicatesConfig {
+    test_faulty_node(
+        BroadcastStageType::BroadcastDuplicates(BroadcastDuplicatesConfig {
             stake_partition: 50,
             duplicate_send_delay: 1,
-        },
-    ));
+        }),
+        vec![60, 50, 60],
+    );
 }
 
 #[test]
@@ -1366,17 +1373,18 @@ fn test_duplicate_node() {
     cluster.check_for_new_roots(16, &"test_duplicate_node");
 }
 
-fn test_faulty_node(faulty_node_type: BroadcastStageType) {
+fn test_faulty_node(faulty_node_type: BroadcastStageType, node_stakes: Vec<u64>) {
     solana_logger::setup_with_default("info");
     let num_nodes = 3;
     let mut error_validator_config = ValidatorConfig::default();
     error_validator_config.broadcast_stage_type = faulty_node_type;
     let mut validator_configs = Vec::with_capacity(num_nodes);
-    validator_configs.resize_with(num_nodes - 1, ValidatorConfig::default);
+
+    // First validator is the bootstrap leader with the malicious broadcast logic.
     validator_configs.push(error_validator_config);
+    validator_configs.resize_with(num_nodes, ValidatorConfig::default);
     let mut validator_keys = Vec::with_capacity(num_nodes);
     validator_keys.resize_with(num_nodes, || (Arc::new(Keypair::new()), true));
-    let node_stakes = vec![60, 50, 60];
     assert_eq!(node_stakes.len(), num_nodes);
     assert_eq!(validator_keys.len(), num_nodes);
     let mut cluster_config = ClusterConfig {
@@ -1384,8 +1392,7 @@ fn test_faulty_node(faulty_node_type: BroadcastStageType) {
         node_stakes,
         validator_configs,
         validator_keys: Some(validator_keys),
-        slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH * 2 as u64,
-        stakers_slot_offset: MINIMUM_SLOTS_PER_EPOCH * 2 as u64,
+        skip_warmup_slots: true,
         ..ClusterConfig::default()
     };
 

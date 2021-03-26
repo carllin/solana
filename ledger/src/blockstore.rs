@@ -4381,7 +4381,8 @@ pub mod tests {
         // Initialize ledger
         let ledger_path = get_tmp_ledger_path!();
         let BlockstoreSignals {
-            blockstore: ledger, ..
+            blockstore: mut ledger,
+            ..
         } = Blockstore::open_with_signal(&ledger_path, None, true).unwrap();
         let recvr = ledger.add_completed_slot_sender();
         let ledger = Arc::new(ledger);
@@ -4406,7 +4407,8 @@ pub mod tests {
         // Initialize ledger
         let ledger_path = get_tmp_ledger_path!();
         let BlockstoreSignals {
-            blockstore: ledger, ..
+            blockstore: mut ledger,
+            ..
         } = Blockstore::open_with_signal(&ledger_path, None, true).unwrap();
         let recvr = ledger.add_completed_slot_sender();
         let ledger = Arc::new(ledger);
@@ -4449,7 +4451,8 @@ pub mod tests {
         // Initialize ledger
         let ledger_path = get_tmp_ledger_path!();
         let BlockstoreSignals {
-            blockstore: ledger, ..
+            blockstore: mut ledger,
+            ..
         } = Blockstore::open_with_signal(&ledger_path, None, true).unwrap();
         let recvr = ledger.add_completed_slot_sender();
         let ledger = Arc::new(ledger);
@@ -5239,7 +5242,14 @@ pub mod tests {
                 }
             };
             assert_eq!(
-                blockstore.should_insert_data_shred(&shred7, &slot_meta, &last_root, None, false),
+                blockstore.should_insert_data_shred(
+                    &shred7,
+                    &slot_meta,
+                    &mut HashMap::new(),
+                    &last_root,
+                    None,
+                    false
+                ),
                 false
             );
             assert!(blockstore.has_duplicate_shreds_in_slot(0));
@@ -5256,7 +5266,14 @@ pub mod tests {
                 panic!("Shred in unexpected format")
             }
             assert_eq!(
-                blockstore.should_insert_data_shred(&shred7, &slot_meta, &last_root, None, false),
+                blockstore.should_insert_data_shred(
+                    &shred7,
+                    &slot_meta,
+                    &mut HashMap::new(),
+                    &last_root,
+                    None,
+                    false
+                ),
                 false
             );
         }

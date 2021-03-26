@@ -9,7 +9,7 @@ use crate::{
     completed_data_sets_service::CompletedDataSetsSender,
     contact_info::ContactInfo,
     max_slots::MaxSlots,
-    repair_service::{DuplicateSlotsResetSender, RepairInfo},
+    repair_service::{DeadSlotsResetSender, DuplicateSlotRepairRequestReceiver, RepairInfo},
     result::{Error, Result},
     rpc_subscriptions::RpcSubscriptions,
     window_service::{should_retransmit_and_persist, WindowService},
@@ -575,13 +575,14 @@ impl RetransmitStage {
         cfg: Option<Arc<AtomicBool>>,
         shred_version: u16,
         cluster_slots: Arc<ClusterSlots>,
-        duplicate_slots_reset_sender: DuplicateSlotsResetSender,
+        duplicate_slots_reset_sender: DeadSlotsResetSender,
         verified_vote_receiver: VerifiedVoteReceiver,
         repair_validators: Option<HashSet<Pubkey>>,
         completed_data_sets_sender: CompletedDataSetsSender,
         max_slots: &Arc<MaxSlots>,
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         duplicate_slots_sender: Sender<Slot>,
+        duplicate_slot_repair_request_receiver: DuplicateSlotRepairRequestReceiver,
     ) -> Self {
         let (retransmit_sender, retransmit_receiver) = channel();
 
@@ -639,6 +640,7 @@ impl RetransmitStage {
             verified_vote_receiver,
             completed_data_sets_sender,
             duplicate_slots_sender,
+            duplicate_slot_repair_request_receiver,
         );
 
         let thread_hdls = t_retransmit;

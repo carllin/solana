@@ -17,7 +17,7 @@ use crate::{
     optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSender},
     poh_recorder::{PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
     progress_map::{DuplicateStats, ForkProgress, ProgressMap, PropagatedStats},
-    repair_service::DuplicateSlotsResetReceiver,
+    repair_service::{DeadSlotsResetReceiver, DuplicateSlotRepairRequestSender},
     result::Result,
     rewards_recorder_service::RewardsRecorderSender,
     rpc_subscriptions::RpcSubscriptions,
@@ -274,10 +274,11 @@ impl ReplayStage {
         vote_tracker: Arc<VoteTracker>,
         cluster_slots: Arc<ClusterSlots>,
         retransmit_slots_sender: RetransmitSlotsSender,
-        _duplicate_slots_reset_receiver: DuplicateSlotsResetReceiver,
+        purge_dead_slots_receiver: DeadSlotsResetReceiver,
         replay_vote_sender: ReplayVoteSender,
         gossip_duplicate_confirmed_slots_receiver: GossipDuplicateConfirmedSlotsReceiver,
         cluster_slots_update_sender: ClusterSlotsUpdateSender,
+        duplicate_slot_repair_request_sender: DuplicateSlotRepairRequestSender,
     ) -> Self {
         let ReplayStageConfig {
             my_pubkey,
@@ -377,18 +378,20 @@ impl ReplayStage {
                     let forks_root = bank_forks.read().unwrap().root();
                     let start = allocated.get();
 
-                    // Reset any duplicate slots that have been confirmed
-                    // by the network in anticipation of the confirmed version of
-                    // the slot
-                    /*let mut reset_duplicate_slots_time = Measure::start("reset_duplicate_slots");
-                    Self::reset_duplicate_slots(
-                        &duplicate_slots_reset_receiver,
+                    // Reset any dead slots that have been frozen by a sufficient portion of
+                    // the network. Signalled by repair_service.
+                    let mut purge_dead_slots_time = Measure::start("purge_dead_slots");
+                    Self::purge_dead_slots(
+                        &purge_dead_slots_receiver,
                         &mut ancestors,
                         &mut descendants,
                         &mut progress,
                         &bank_forks,
+                        &blockstore,
+                        &mut tower,
+                        &duplicate_slot_repair_request_sender,
                     );
-                    reset_duplicate_slots_time.stop();*/
+                    purge_dead_slots_time.stop();
 
                     // Check for any newly confirmed slots detected from gossip.
                     let mut process_gossip_duplicate_confirmed_slots_time = Measure::start("process_gossip_duplicate_confirmed_slots");
@@ -850,7 +853,37 @@ impl ReplayStage {
         });
     }
 
-    #[allow(dead_code)]
+    fn purge_dead_slots(
+        purge_dead_slots_receiver: &DeadSlotsResetReceiver,
+        ancestors: &mut HashMap<Slot, HashSet<Slot>>,
+        descendants: &mut HashMap<Slot, HashSet<Slot>>,
+        progress: &mut ProgressMap,
+        bank_forks: &RwLock<BankForks>,
+        blockstore: &Blockstore,
+        tower: &mut Tower,
+        duplicate_slot_repair_request_sender: &DuplicateSlotRepairRequestSender,
+    ) {
+        let root_bank = bank_forks.read().unwrap().root_bank();
+        for dead_slot in purge_dead_slots_receiver.try_iter() {
+            warn!("purging dead slot: {}", dead_slot);
+            Self::purge_unconfirmed_duplicate_slot(
+                dead_slot,
+                ancestors,
+                descendants,
+                progress,
+                &root_bank,
+                bank_forks,
+                blockstore,
+                tower,
+            );
+            warn!(
+                "sending duplicate repair request for dead slot: {}",
+                dead_slot
+            );
+            let _ = duplicate_slot_repair_request_sender.send(dead_slot);
+        }
+    }
+
     fn purge_unconfirmed_duplicate_slot(
         duplicate_slot: Slot,
         ancestors: &mut HashMap<Slot, HashSet<Slot>>,
@@ -868,7 +901,14 @@ impl ReplayStage {
         // access the status cache and accounts
         let slot_descendants = descendants.get(&duplicate_slot).cloned();
         if slot_descendants.is_none() {
-            // Root has already moved past this slot, no need to purge it
+            // Either:
+            // 1) Root has already moved past this slot, no need to purge it
+            // 2) This was a signal from repair to remove a dead slot we haven't
+            // replayed yet, so only need to purge it from blockstore
+            if root_bank.slot() <= duplicate_slot {
+                blockstore.clear_unconfirmed_slot(duplicate_slot);
+            }
+
             return;
         }
 

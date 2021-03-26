@@ -29,8 +29,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub type DuplicateSlotsResetSender = CrossbeamSender<Slot>;
-pub type DuplicateSlotsResetReceiver = CrossbeamReceiver<Slot>;
+pub type DeadSlotsResetSender = CrossbeamSender<Slot>;
+pub type DeadSlotsResetReceiver = CrossbeamReceiver<Slot>;
+pub type DuplicateSlotRepairRequestSender = CrossbeamSender<Slot>;
+pub type DuplicateSlotRepairRequestReceiver = CrossbeamReceiver<Slot>;
 pub type ConfirmedSlotsSender = CrossbeamSender<Vec<Slot>>;
 pub type ConfirmedSlotsReceiver = CrossbeamReceiver<Vec<Slot>>;
 
@@ -109,7 +111,7 @@ pub const MAX_ORPHANS: usize = 5;
 pub struct RepairInfo {
     pub bank_forks: Arc<RwLock<BankForks>>,
     pub epoch_schedule: EpochSchedule,
-    pub duplicate_slots_reset_sender: DuplicateSlotsResetSender,
+    pub duplicate_slots_reset_sender: DeadSlotsResetSender,
     pub repair_validators: Option<HashSet<Pubkey>>,
 }
 
@@ -146,6 +148,7 @@ impl RepairService {
         repair_info: RepairInfo,
         cluster_slots: Arc<ClusterSlots>,
         verified_vote_receiver: VerifiedVoteReceiver,
+        duplicate_slot_repair_request_receiver: DuplicateSlotRepairRequestReceiver,
     ) -> Self {
         let t_repair = Builder::new()
             .name("solana-repair-service".to_string())
@@ -158,6 +161,7 @@ impl RepairService {
                     repair_info,
                     &cluster_slots,
                     verified_vote_receiver,
+                    duplicate_slot_repair_request_receiver,
                 )
             })
             .unwrap();
@@ -173,6 +177,7 @@ impl RepairService {
         repair_info: RepairInfo,
         cluster_slots: &ClusterSlots,
         verified_vote_receiver: VerifiedVoteReceiver,
+        duplicate_slot_repair_request_receiver: DuplicateSlotRepairRequestReceiver,
     ) {
         let mut repair_weight = RepairWeight::new(
             repair_info.bank_forks.read().unwrap().root(),
@@ -183,7 +188,7 @@ impl RepairService {
         let mut repair_stats = RepairStats::default();
         let mut repair_timing = RepairTiming::default();
         let mut last_stats = Instant::now();
-        let duplicate_slot_repair_statuses: HashMap<Slot, DuplicateSlotRepairStatus> =
+        let mut duplicate_slot_repair_statuses: HashMap<Slot, DuplicateSlotRepairStatus> =
             HashMap::new();
 
         loop {
@@ -226,22 +231,31 @@ impl RepairService {
                     root_bank.epoch_schedule(),
                 );
                 add_votes_elapsed.stop();
-                /*let new_duplicate_slots = Self::find_new_duplicate_slots(
+                let repairable_dead_slots = Self::find_new_repairable_dead_slots(
                     &duplicate_slot_repair_statuses,
                     blockstore,
                     cluster_slots,
                     &root_bank,
                 );
-                Self::process_new_duplicate_slots(
-                    &new_duplicate_slots,
+                for slot in repairable_dead_slots {
+                    warn!(
+                        "Cluster froze slot: {}, but we marked it as dead. Sending signal to purge dead slot.",
+                        slot
+                    );
+
+                    // Signal ReplayStage to clear its progress map so that a different
+                    // version of this slot can be replayed
+                    let _ = repair_info.duplicate_slots_reset_sender.send(slot);
+                }
+
+                Self::process_new_duplicate_slot_repair_request_receiver_from_channel(
+                    &duplicate_slot_repair_request_receiver,
                     &mut duplicate_slot_repair_statuses,
                     cluster_slots,
-                    &root_bank,
-                    blockstore,
                     &serve_repair,
-                    &repair_info.duplicate_slots_reset_sender,
                     &repair_info.repair_validators,
                 );
+
                 Self::generate_and_send_duplicate_repairs(
                     &mut duplicate_slot_repair_statuses,
                     cluster_slots,
@@ -250,7 +264,7 @@ impl RepairService {
                     &mut repair_stats,
                     &repair_socket,
                     &repair_info.repair_validators,
-                );*/
+                );
 
                 repair_weight.get_best_weighted_repairs(
                     blockstore,
@@ -548,53 +562,48 @@ impl RepairService {
         }
     }
 
-    #[allow(dead_code)]
-    fn process_new_duplicate_slots(
-        new_duplicate_slots: &[Slot],
+    fn process_new_duplicate_slot_repair_request_receiver_from_channel(
+        duplicate_slot_repair_request_receiver: &DuplicateSlotRepairRequestReceiver,
         duplicate_slot_repair_statuses: &mut HashMap<Slot, DuplicateSlotRepairStatus>,
         cluster_slots: &ClusterSlots,
-        _root_bank: &Bank,
-        _blockstore: &Blockstore,
         serve_repair: &ServeRepair,
-        duplicate_slots_reset_sender: &DuplicateSlotsResetSender,
         repair_validators: &Option<HashSet<Pubkey>>,
     ) {
-        for slot in new_duplicate_slots {
-            warn!(
-                "Cluster confirmed slot: {}, dumping our current version and repairing",
-                slot
+        for duplicate_slot in duplicate_slot_repair_request_receiver.try_iter() {
+            Self::queue_repair_request_for_duplicate_slot(
+                duplicate_slot,
+                duplicate_slot_repair_statuses,
+                cluster_slots,
+                serve_repair,
+                repair_validators,
             );
-            // Clear the slot signatures from status cache for this slot
-            /*root_bank.clear_slot_signatures(*slot);
-
-            // Clear the accounts for this slot
-            root_bank.remove_unrooted_slot(*slot);
-
-            // Clear the slot-related data in blockstore. This will:
-            // 1) Clear old shreds allowing new ones to be inserted
-            // 2) Clear the "dead" flag allowing ReplayStage to start replaying
-            // this slot
-            blockstore.clear_unconfirmed_slot(*slot);*/
-
-            // Signal ReplayStage to clear its progress map so that a different
-            // version of this slot can be replayed
-            let _ = duplicate_slots_reset_sender.send(*slot);
-
-            // Mark this slot as special repair, try to download from single
-            // validator to avoid corruption
-            let repair_pubkey_and_addr = serve_repair
-                .repair_request_duplicate_compute_best_peer(*slot, cluster_slots, repair_validators)
-                .ok();
-            let new_duplicate_slot_repair_status = DuplicateSlotRepairStatus {
-                start: timestamp(),
-                repair_pubkey_and_addr,
-            };
-            duplicate_slot_repair_statuses.insert(*slot, new_duplicate_slot_repair_status);
         }
     }
 
+    fn queue_repair_request_for_duplicate_slot(
+        slot: Slot,
+        duplicate_slot_repair_statuses: &mut HashMap<Slot, DuplicateSlotRepairStatus>,
+        cluster_slots: &ClusterSlots,
+        serve_repair: &ServeRepair,
+        repair_validators: &Option<HashSet<Pubkey>>,
+    ) {
+        if duplicate_slot_repair_statuses.contains_key(&slot) {
+            return;
+        }
+        // Mark this slot as special repair, try to download from single
+        // validator to avoid corruption
+        let repair_pubkey_and_addr = serve_repair
+            .repair_request_duplicate_compute_best_peer(slot, cluster_slots, repair_validators)
+            .ok();
+        let new_duplicate_slot_repair_status = DuplicateSlotRepairStatus {
+            start: timestamp(),
+            repair_pubkey_and_addr,
+        };
+        duplicate_slot_repair_statuses.insert(slot, new_duplicate_slot_repair_status);
+    }
+
     #[allow(dead_code)]
-    fn find_new_duplicate_slots(
+    fn find_new_repairable_dead_slots(
         duplicate_slot_repair_statuses: &HashMap<Slot, DuplicateSlotRepairStatus>,
         blockstore: &Blockstore,
         cluster_slots: &ClusterSlots,
@@ -1100,83 +1109,7 @@ mod test {
     }
 
     #[test]
-    pub fn test_process_new_duplicate_slots() {
-        let blockstore_path = get_tmp_ledger_path!();
-        let blockstore = Blockstore::open(&blockstore_path).unwrap();
-        let cluster_slots = ClusterSlots::default();
-        let serve_repair = ServeRepair::new_with_invalid_keypair(Node::new_localhost().info);
-        let mut duplicate_slot_repair_statuses = HashMap::new();
-        let duplicate_slot = 9;
-
-        // Fill blockstore for dead slot
-        blockstore.set_dead_slot(duplicate_slot).unwrap();
-        assert!(blockstore.is_dead(duplicate_slot));
-        let (shreds, _) = make_slot_entries(duplicate_slot, 0, 1);
-        blockstore.insert_shreds(shreds, None, false).unwrap();
-
-        let keypairs = ValidatorVoteKeypairs::new_rand();
-        let (reset_sender, reset_receiver) = unbounded();
-        let GenesisConfigInfo {
-            genesis_config,
-            mint_keypair,
-            ..
-        } = genesis_utils::create_genesis_config_with_vote_accounts(
-            1_000_000_000,
-            &[&keypairs],
-            vec![10000],
-        );
-        let bank0 = Arc::new(Bank::new(&genesis_config));
-        let bank9 = Bank::new_from_parent(&bank0, &Pubkey::default(), duplicate_slot);
-        let old_balance = bank9.get_balance(&keypairs.node_keypair.pubkey());
-        bank9
-            .transfer(10_000, &mint_keypair, &keypairs.node_keypair.pubkey())
-            .unwrap();
-        let vote_tx = vote_transaction::new_vote_transaction(
-            vec![0],
-            bank0.hash(),
-            bank0.last_blockhash(),
-            &keypairs.node_keypair,
-            &keypairs.vote_keypair,
-            &keypairs.vote_keypair,
-            None,
-        );
-        bank9.process_transaction(&vote_tx).unwrap();
-        assert!(bank9.get_signature_status(&vote_tx.signatures[0]).is_some());
-
-        RepairService::process_new_duplicate_slots(
-            &[duplicate_slot],
-            &mut duplicate_slot_repair_statuses,
-            &cluster_slots,
-            &bank9,
-            &blockstore,
-            &serve_repair,
-            &reset_sender,
-            &None,
-        );
-
-        // Blockstore should have been cleared
-        assert!(!blockstore.is_dead(duplicate_slot));
-
-        // Should not be able to find signature for slot 9 for the tx
-        assert!(bank9.get_signature_status(&vote_tx.signatures[0]).is_none());
-
-        // Getting balance should return the old balance (accounts were cleared)
-        assert_eq!(
-            bank9.get_balance(&keypairs.node_keypair.pubkey()),
-            old_balance
-        );
-
-        // Should add the duplicate slot to the tracker
-        assert!(duplicate_slot_repair_statuses
-            .get(&duplicate_slot)
-            .is_some());
-
-        // A signal should be sent to clear ReplayStage
-        assert!(reset_receiver.try_recv().is_ok());
-    }
-
-    #[test]
-    pub fn test_find_new_duplicate_slots() {
+    pub fn test_find_new_repairable_dead_slots() {
         let blockstore_path = get_tmp_ledger_path!();
         let blockstore = Blockstore::open(&blockstore_path).unwrap();
         let cluster_slots = ClusterSlots::default();
@@ -1192,7 +1125,7 @@ mod test {
         let bank0 = Bank::new(&genesis_config);
 
         // Empty blockstore should have no duplicates
-        assert!(RepairService::find_new_duplicate_slots(
+        assert!(RepairService::find_new_repairable_dead_slots(
             &duplicate_slot_repair_statuses,
             &blockstore,
             &cluster_slots,
@@ -1204,7 +1137,7 @@ mod test {
         // be marked as duplicate
         let dead_slot = 9;
         blockstore.set_dead_slot(dead_slot).unwrap();
-        assert!(RepairService::find_new_duplicate_slots(
+        assert!(RepairService::find_new_repairable_dead_slots(
             &duplicate_slot_repair_statuses,
             &blockstore,
             &cluster_slots,
@@ -1216,7 +1149,7 @@ mod test {
         // marked as a duplicate that needs to be repaired
         cluster_slots.insert_node_id(dead_slot, only_node_id);
         assert_eq!(
-            RepairService::find_new_duplicate_slots(
+            RepairService::find_new_repairable_dead_slots(
                 &duplicate_slot_repair_statuses,
                 &blockstore,
                 &cluster_slots,

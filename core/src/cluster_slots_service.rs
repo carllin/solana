@@ -148,10 +148,7 @@ impl ClusterSlotsService {
         cluster_info.push_lowest_slot(*id, lowest_slot);
     }
 
-    fn initialize_epoch_slots(
-        bank_forks: &RwLock<BankForks>,
-        cluster_info: &ClusterInfo,
-    ) {
+    fn initialize_epoch_slots(bank_forks: &RwLock<BankForks>, cluster_info: &ClusterInfo) {
         // TODO: Should probably incorporate slots that were replayed on startup,
         // and maybe some that were frozen < snapshot root in case validators restart
         // from newer snapshots and lose history.
