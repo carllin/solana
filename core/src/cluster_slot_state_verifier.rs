@@ -3,11 +3,12 @@ use crate::{
     progress_map::ProgressMap,
 };
 use solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub type GossipDuplicateConfirmedSlots = BTreeMap<Slot, Hash>;
+pub type EpochSlotsFrozenSlots = BTreeSet<Slot>;
 type SlotStateHandler =
-    fn(&Pubkey, Slot, &Hash, Option<&Hash>, bool, bool) -> Vec<ResultingStateChange>;
+    fn(&Pubkey, Slot, &Hash, Option<&Hash>, bool, bool, bool) -> Vec<ResultingStateChange>;
 
 #[derive(PartialEq, Debug)]
 pub enum SlotStateUpdate {
@@ -15,6 +16,7 @@ pub enum SlotStateUpdate {
     DuplicateConfirmed,
     Dead,
     Duplicate,
+    EpochSlotsFrozen,
 }
 
 #[derive(PartialEq, Debug)]
@@ -35,6 +37,7 @@ impl SlotStateUpdate {
             SlotStateUpdate::Frozen => on_frozen_slot,
             SlotStateUpdate::DuplicateConfirmed => on_cluster_update,
             SlotStateUpdate::Duplicate => on_cluster_update,
+            SlotStateUpdate::EpochSlotsFrozen => on_cluster_update,
         }
     }
 }
@@ -46,6 +49,7 @@ fn on_dead_slot(
     cluster_duplicate_confirmed_hash: Option<&Hash>,
     _is_slot_duplicate: bool,
     is_dead: bool,
+    is_epoch_slots_frozen: bool,
 ) -> Vec<ResultingStateChange> {
     info!("{} marked slot: {} dead", pubkey, slot);
     assert!(is_dead);
@@ -68,6 +72,15 @@ fn on_dead_slot(
                 *cluster_duplicate_confirmed_hash,
             ),
         ];
+    } else if is_epoch_slots_frozen {
+        // Lower priority than having seen an actual confirmed hash in the `if` case above
+        warn!(
+            "{} Cluster froze slot {}, but we marked slot as dead",
+            pubkey, slot
+        );
+        return vec![ResultingStateChange::RepairDuplicateConfirmedVersion(
+            Hash::default(),
+        )];
     }
 
     vec![]
@@ -80,6 +93,7 @@ fn on_frozen_slot(
     cluster_duplicate_confirmed_hash: Option<&Hash>,
     is_slot_duplicate: bool,
     is_dead: bool,
+    _is_epoch_slots_frozen: bool,
 ) -> Vec<ResultingStateChange> {
     // If a slot is marked frozen, the bank hash should not be default,
     // and the slot should not be dead
@@ -145,6 +159,7 @@ fn on_cluster_update(
     cluster_duplicate_confirmed_hash: Option<&Hash>,
     is_slot_duplicate: bool,
     is_dead: bool,
+    is_epoch_slots_frozen: bool,
 ) -> Vec<ResultingStateChange> {
     info!(
         "{} slot: {} cluster update {} {:?}",
@@ -158,6 +173,7 @@ fn on_cluster_update(
             cluster_duplicate_confirmed_hash,
             is_slot_duplicate,
             is_dead,
+            is_epoch_slots_frozen,
         )
     } else if *bank_frozen_hash != Hash::default() {
         // This case is mutually exclusive with is_dead case above because if a slot is dead,
@@ -169,6 +185,7 @@ fn on_cluster_update(
             cluster_duplicate_confirmed_hash,
             is_slot_duplicate,
             is_dead,
+            is_epoch_slots_frozen,
         )
     } else {
         vec![]
@@ -252,6 +269,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
     root: Slot,
     frozen_hash: Option<Hash>,
     gossip_duplicate_confirmed_slots: &GossipDuplicateConfirmedSlots,
+    epoch_slots_frozen_slots: &EpochSlotsFrozenSlots,
     ancestors: &HashMap<Slot, HashSet<Slot>>,
     descendants: &HashMap<Slot, HashSet<Slot>>,
     progress: &mut ProgressMap,
@@ -300,6 +318,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
         }
     }
     let is_dead = progress.is_dead(slot).expect("If the frozen hash exists, then the slot must exist in bank forks and thus in progress map");
+    let is_epoch_slots_frozen = epoch_slots_frozen_slots.contains(&slot);
 
     let state_handler = slot_state_update.to_handler();
     let state_changes = state_handler(
@@ -309,6 +328,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
         cluster_duplicate_confirmed_hash,
         is_slot_duplicate,
         is_dead,
+        is_epoch_slots_frozen,
     );
     apply_state_changes(
         slot,

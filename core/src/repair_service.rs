@@ -239,7 +239,7 @@ impl RepairService {
                 );
                 for slot in repairable_dead_slots {
                     warn!(
-                        "Cluster froze slot: {}, but we marked it as dead. Sending signal to purge dead slot.",
+                        "Cluster froze slot: {}, but we marked it as dead. RepairService sending signal to purge dead slot.",
                         slot
                     );
 
@@ -451,7 +451,6 @@ impl RepairService {
         }
     }
 
-    #[allow(dead_code)]
     fn generate_duplicate_repairs_for_slot(
         blockstore: &Blockstore,
         slot: Slot,
@@ -476,7 +475,6 @@ impl RepairService {
         }
     }
 
-    #[allow(dead_code)]
     fn generate_and_send_duplicate_repairs(
         duplicate_slot_repair_statuses: &mut HashMap<Slot, DuplicateSlotRepairStatus>,
         cluster_slots: &ClusterSlots,
@@ -524,7 +522,6 @@ impl RepairService {
         })
     }
 
-    #[allow(dead_code)]
     fn serialize_and_send_request(
         repair_type: &RepairType,
         repair_socket: &UdpSocket,
@@ -540,7 +537,6 @@ impl RepairService {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn update_duplicate_slot_repair_addr(
         slot: Slot,
         status: &mut DuplicateSlotRepairStatus,
@@ -602,7 +598,6 @@ impl RepairService {
         duplicate_slot_repair_statuses.insert(slot, new_duplicate_slot_repair_status);
     }
 
-    #[allow(dead_code)]
     fn find_new_repairable_dead_slots(
         duplicate_slot_repair_statuses: &HashMap<Slot, DuplicateSlotRepairStatus>,
         blockstore: &Blockstore,
