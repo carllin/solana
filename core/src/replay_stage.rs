@@ -639,6 +639,18 @@ impl ReplayStage {
 
                     let start = allocated.get();
                     let mut start_leader_time = Measure::start("start_leader_time");
+                    let mut repair_correct_slots_time = Measure::start("repair_correct_slots_time");
+                    // Used for correctness check
+                    let poh_bank = poh_recorder.lock().unwrap().bank();
+                    // Has to be before `maybe_start_leader()`. Otherwise, `ancestors` and `descendants` will be outdated,
+                    // and we cannot assume `poh_bank` will be in either of these maps.
+                    Self::repair_correct_slots(&mut duplicate_slots_to_repair, &mut ancestors, &mut descendants, &mut progress, &bank_forks, &blockstore, poh_bank.map(|bank| bank.slot()), &mut tower, &duplicate_slot_repair_request_sender);
+                    repair_correct_slots_time.stop();
+
+                    // From this point on, its not safe to use ancestors/descendants since maybe_start_leader
+                    // may add a bank that will not included in either of these maps.
+                    drop(ancestors);
+                    drop(descendants);
                     if !tpu_has_bank {
                         Self::maybe_start_leader(
                             &my_pubkey,
@@ -663,12 +675,6 @@ impl ReplayStage {
                     }
                     start_leader_time.stop();
                     Self::report_memory(&allocated, "start_leader", start);
-
-                    let mut repair_correct_slots_time = Measure::start("repair_correct_slots_time");
-                    // Used for correctness check
-                    let poh_bank = poh_recorder.lock().unwrap().bank();
-                    Self::repair_correct_slots(&mut duplicate_slots_to_repair, &mut ancestors, &mut descendants, &mut progress, &bank_forks, &blockstore, poh_bank.map(|bank| bank.slot()), &mut tower, &duplicate_slot_repair_request_sender);
-                    repair_correct_slots_time.stop();
 
                     let mut wait_receive_time = Measure::start("wait_receive_time");
                     if !did_complete_bank {
