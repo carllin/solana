@@ -818,6 +818,12 @@ impl ReplayStage {
         }
 
         let root_bank = bank_forks.read().unwrap().root_bank();
+        info!(
+            "repair_correct_slots: {:?}, poh bank slot: {:?}, root: {}",
+            duplicate_slots_to_repair,
+            poh_bank_slot,
+            root_bank.slot()
+        );
         duplicate_slots_to_repair.retain(|(duplicate_slot, _correct_hash)| {
             // Should not purge duplicate slots if there is currently a poh bank building
             // on top of that slot, as BankingStage might still be referencing/touching that state

@@ -500,6 +500,10 @@ impl ServeRepair {
     ) -> Option<Packets> {
         if let Some(blockstore) = blockstore {
             // Try to find the requested index in one of the slots
+            info!(
+                "got shred request for slot {}, index: {}",
+                slot, shred_index
+            );
             let packet = repair_response::repair_response_packet(
                 blockstore,
                 slot,
@@ -537,7 +541,7 @@ impl ServeRepair {
         let blockstore = blockstore?;
         // Try to find the requested index in one of the slots
         let meta = blockstore.meta(slot).ok()??;
-        println!(
+        info!(
             "got highest window request for slot {}, highest: {}",
             slot, highest_index
         );

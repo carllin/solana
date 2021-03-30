@@ -496,6 +496,10 @@ impl RepairService {
                 let repairs = Self::generate_duplicate_repairs_for_slot(&blockstore, *slot);
 
                 if let Some(repairs) = repairs {
+                    info!(
+                        "Sending duplicate repair requests for slot: {} to peer: {} ",
+                        slot, repair_pubkey
+                    );
                     for repair_type in repairs {
                         if let Err(e) = Self::serialize_and_send_request(
                             &repair_type,
@@ -514,9 +518,14 @@ impl RepairService {
                     }
                     true
                 } else {
+                    info!("No duplicate repairs for slot: {}", slot);
                     false
                 }
             } else {
+                info!(
+                    "No duplicate repairs for slot: {} because no valid target existed",
+                    slot
+                );
                 true
             }
         })

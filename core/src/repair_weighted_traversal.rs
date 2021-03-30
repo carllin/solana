@@ -85,7 +85,7 @@ pub fn get_best_repair_shreds<'a>(
     let mut visited_set = HashSet::new();
     let mut slot_meta_cache = HashMap::new();
     for next in weighted_iter {
-        println!("{} repair iterator next is {}", id, next.slot());
+        info!("{} repair iterator next is {}", id, next.slot());
         if repairs.len() > max_repairs {
             break;
         }
@@ -108,6 +108,7 @@ pub fn get_best_repair_shreds<'a>(
                                 &slot_meta,
                                 max_repairs - repairs.len(),
                             );
+                            info!("generated {} repairs for slot {}", new_repairs.len(), slot);
                             repairs.extend(new_repairs);
                         }
                         visited_set.insert(slot);
