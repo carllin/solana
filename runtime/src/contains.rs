@@ -1,3 +1,4 @@
+use dashmap::DashMap;
 use std::{
     borrow::Borrow,
     cmp::Eq,
@@ -21,6 +22,18 @@ impl<'a, T: 'a + Eq + Hash, U: 'a> Contains<'a, T> for HashMap<T, U> {
     }
     fn contains_iter(&'a self) -> Self::Iter {
         self.keys()
+    }
+}
+
+impl<'a, T: 'a + Eq + Hash, U: 'a> Contains<'a, T> for DashMap<T, U> {
+    type Item = &'a T;
+    type Iter = std::collections::hash_map::Keys<'a, T, U>;
+
+    fn contains(&self, key: &T) -> bool {
+        <DashMap<T, U>>::contains_key(self, key)
+    }
+    fn contains_iter(&'a self) -> Self::Iter {
+        unimplemented!("Unsupported!");
     }
 }
 

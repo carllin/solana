@@ -4359,6 +4359,7 @@ dependencies = [
  "chrono",
  "core_affinity",
  "crossbeam-channel 0.4.4",
+ "dashmap",
  "ed25519-dalek",
  "flate2",
  "fs_extra",

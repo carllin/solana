@@ -10,6 +10,7 @@ use crate::{
     serve_repair::{RepairType, ServeRepair, DEFAULT_NONCE},
 };
 use crossbeam_channel::{Receiver as CrossbeamReceiver, Sender as CrossbeamSender};
+use dashmap::DashMap;
 use solana_ledger::{
     blockstore::{Blockstore, SlotMeta},
     shred::Nonce,
@@ -77,6 +78,44 @@ pub struct RepairStats {
     pub get_best_shreds_us: u64,
 }
 
+impl RepairStats {
+    fn print_and_reset(&mut self, datapoint_name: &'static str) {
+        let repair_total = self.shred.count + self.highest_shred.count + self.orphan.count;
+
+        let slot_to_count: Vec<_> = self
+            .shred
+            .slot_pubkeys
+            .iter()
+            .chain(self.highest_shred.slot_pubkeys.iter())
+            .chain(self.orphan.slot_pubkeys.iter())
+            .map(|(slot, slot_repairs)| {
+                (
+                    slot,
+                    slot_repairs
+                        .pubkey_repairs
+                        .iter()
+                        .map(|(_key, count)| count)
+                        .sum::<u64>(),
+                )
+            })
+            .collect();
+        info!("{}: {:?}", datapoint_name, slot_to_count);
+        if repair_total > 0 {
+            datapoint_info!(
+                datapoint_name,
+                ("repair-total", repair_total, i64),
+                ("shred-count", self.shred.count, i64),
+                ("highest-shred-count", self.highest_shred.count, i64),
+                ("orphan-count", self.orphan.count, i64),
+                ("repair-highest-slot", self.highest_shred.max, i64),
+                ("repair-orphan", self.orphan.max, i64),
+            );
+        }
+
+        *self = RepairStats::default();
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct RepairTiming {
     pub set_root_elapsed: u64,
@@ -106,8 +145,10 @@ pub const MAX_REPAIR_LENGTH: usize = 512;
 pub const MAX_REPAIR_PER_DUPLICATE: usize = 20;
 pub const MAX_DUPLICATE_WAIT_MS: usize = 10_000;
 pub const REPAIR_MS: u64 = 100;
+pub const REPAIR_DUPLICATE_MS: u64 = 400;
 pub const MAX_ORPHANS: usize = 5;
 
+#[derive(Clone)]
 pub struct RepairInfo {
     pub bank_forks: Arc<RwLock<BankForks>>,
     pub epoch_schedule: EpochSchedule,
@@ -137,6 +178,19 @@ pub struct DuplicateSlotRepairStatus {
 
 pub struct RepairService {
     t_repair: JoinHandle<()>,
+    t_duplicate_repair: JoinHandle<()>,
+}
+
+#[derive(Clone)]
+pub struct CommonServiceArgs {
+    blockstore: Arc<Blockstore>,
+    exit: Arc<AtomicBool>,
+    repair_socket: Arc<UdpSocket>,
+    repair_info: RepairInfo,
+    cluster_info: Arc<ClusterInfo>,
+    cluster_slots: Arc<ClusterSlots>,
+    serve_repair: Arc<ServeRepair>,
+    duplicate_slot_repair_statuses: Arc<DashMap<Slot, DuplicateSlotRepairStatus>>,
 }
 
 impl RepairService {
@@ -150,46 +204,64 @@ impl RepairService {
         verified_vote_receiver: VerifiedVoteReceiver,
         duplicate_slot_repair_request_receiver: DuplicateSlotRepairRequestReceiver,
     ) -> Self {
+        let duplicate_slot_repair_statuses: Arc<DashMap<Slot, DuplicateSlotRepairStatus>> =
+            Arc::new(DashMap::new());
+        let serve_repair = Arc::new(ServeRepair::new(cluster_info.clone()));
+
+        let common_service_args = CommonServiceArgs {
+            blockstore,
+            exit,
+            repair_socket,
+            cluster_info,
+            repair_info,
+            cluster_slots,
+            serve_repair,
+            duplicate_slot_repair_statuses,
+        };
+
+        let common_service_args_clone_ = common_service_args.clone();
+
         let t_repair = Builder::new()
             .name("solana-repair-service".to_string())
+            .spawn(move || Self::run(common_service_args_clone_, verified_vote_receiver))
+            .unwrap();
+
+        let t_duplicate_repair = Builder::new()
+            .name("solana-duplicate-repair-service".to_string())
             .spawn(move || {
-                Self::run(
-                    &blockstore,
-                    &exit,
-                    &repair_socket,
-                    cluster_info,
-                    repair_info,
-                    &cluster_slots,
-                    verified_vote_receiver,
-                    duplicate_slot_repair_request_receiver,
+                Self::run_repair_duplicates(
+                    common_service_args,
+                    &duplicate_slot_repair_request_receiver,
                 )
             })
             .unwrap();
 
-        RepairService { t_repair }
+        RepairService {
+            t_repair,
+            t_duplicate_repair,
+        }
     }
 
-    fn run(
-        blockstore: &Blockstore,
-        exit: &AtomicBool,
-        repair_socket: &UdpSocket,
-        cluster_info: Arc<ClusterInfo>,
-        repair_info: RepairInfo,
-        cluster_slots: &ClusterSlots,
-        verified_vote_receiver: VerifiedVoteReceiver,
-        duplicate_slot_repair_request_receiver: DuplicateSlotRepairRequestReceiver,
-    ) {
+    fn run(common_service_args: CommonServiceArgs, verified_vote_receiver: VerifiedVoteReceiver) {
+        let CommonServiceArgs {
+            blockstore,
+            exit,
+            repair_socket,
+            repair_info,
+            cluster_info,
+            cluster_slots,
+            serve_repair,
+            duplicate_slot_repair_statuses,
+        } = common_service_args;
+
         let mut repair_weight = RepairWeight::new(
             repair_info.bank_forks.read().unwrap().root(),
             cluster_info.id(),
         );
-        let serve_repair = ServeRepair::new(cluster_info.clone());
         let id = cluster_info.id();
         let mut repair_stats = RepairStats::default();
         let mut repair_timing = RepairTiming::default();
-        let mut last_stats = Instant::now();
-        let mut duplicate_slot_repair_statuses: HashMap<Slot, DuplicateSlotRepairStatus> =
-            HashMap::new();
+        let mut last_stats_reported_time = Instant::now();
 
         loop {
             if exit.load(Ordering::Relaxed) {
@@ -231,48 +303,14 @@ impl RepairService {
                     root_bank.epoch_schedule(),
                 );
                 add_votes_elapsed.stop();
-                let repairable_dead_slots = Self::find_new_repairable_dead_slots(
-                    &duplicate_slot_repair_statuses,
-                    blockstore,
-                    cluster_slots,
-                    &root_bank,
-                );
-                for slot in repairable_dead_slots {
-                    warn!(
-                        "Cluster froze slot: {}, but we marked it as dead. RepairService sending signal to purge dead slot.",
-                        slot
-                    );
-
-                    // Signal ReplayStage to clear its progress map so that a different
-                    // version of this slot can be replayed
-                    let _ = repair_info.duplicate_slots_reset_sender.send(slot);
-                }
-
-                Self::process_new_duplicate_slot_repair_request_receiver_from_channel(
-                    &duplicate_slot_repair_request_receiver,
-                    &mut duplicate_slot_repair_statuses,
-                    cluster_slots,
-                    &serve_repair,
-                    &repair_info.repair_validators,
-                );
-
-                Self::generate_and_send_duplicate_repairs(
-                    &mut duplicate_slot_repair_statuses,
-                    cluster_slots,
-                    blockstore,
-                    &serve_repair,
-                    &mut repair_stats,
-                    &repair_socket,
-                    &repair_info.repair_validators,
-                );
 
                 repair_weight.get_best_weighted_repairs(
-                    blockstore,
+                    &blockstore,
                     root_bank.epoch_stakes_map(),
                     root_bank.epoch_schedule(),
                     MAX_ORPHANS,
                     MAX_REPAIR_LENGTH,
-                    &duplicate_slot_repair_statuses,
+                    &*duplicate_slot_repair_statuses,
                     Some(&mut repair_timing),
                 )
             };
@@ -301,39 +339,8 @@ impl RepairService {
                 send_repairs_elapsed.as_us(),
             );
 
-            if last_stats.elapsed().as_secs() > 2 {
-                let repair_total = repair_stats.shred.count
-                    + repair_stats.highest_shred.count
-                    + repair_stats.orphan.count;
-                let slot_to_count: Vec<_> = repair_stats
-                    .shred
-                    .slot_pubkeys
-                    .iter()
-                    .chain(repair_stats.highest_shred.slot_pubkeys.iter())
-                    .chain(repair_stats.orphan.slot_pubkeys.iter())
-                    .map(|(slot, slot_repairs)| {
-                        (
-                            slot,
-                            slot_repairs
-                                .pubkey_repairs
-                                .iter()
-                                .map(|(_key, count)| count)
-                                .sum::<u64>(),
-                        )
-                    })
-                    .collect();
-                info!("repair_stats: {:?}", slot_to_count);
-                if repair_total > 0 {
-                    datapoint_info!(
-                        "serve_repair-repair",
-                        ("repair-total", repair_total, i64),
-                        ("shred-count", repair_stats.shred.count, i64),
-                        ("highest-shred-count", repair_stats.highest_shred.count, i64),
-                        ("orphan-count", repair_stats.orphan.count, i64),
-                        ("repair-highest-slot", repair_stats.highest_shred.max, i64),
-                        ("repair-orphan", repair_stats.orphan.max, i64),
-                    );
-                }
+            if last_stats_reported_time.elapsed().as_secs() > 2 {
+                repair_stats.print_and_reset("serve_repair-repair");
                 datapoint_info!(
                     "serve_repair-repair-timing",
                     ("set-root-elapsed", repair_timing.set_root_elapsed, i64),
@@ -355,11 +362,76 @@ impl RepairService {
                         i64
                     ),
                 );
-                repair_stats = RepairStats::default();
                 repair_timing = RepairTiming::default();
-                last_stats = Instant::now();
+                last_stats_reported_time = Instant::now();
             }
             sleep(Duration::from_millis(REPAIR_MS));
+        }
+    }
+
+    fn run_repair_duplicates(
+        common_service_args: CommonServiceArgs,
+        duplicate_slot_repair_request_receiver: &DuplicateSlotRepairRequestReceiver,
+    ) {
+        let CommonServiceArgs {
+            blockstore,
+            exit,
+            repair_socket,
+            repair_info,
+            cluster_info,
+            cluster_slots,
+            serve_repair,
+            duplicate_slot_repair_statuses,
+        } = common_service_args;
+        let mut repair_stats = RepairStats::default();
+        let mut last_stats_reported_time = Instant::now();
+        loop {
+            if exit.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let root_bank = repair_info.bank_forks.read().unwrap().root_bank().clone();
+            let repairable_dead_slots = Self::find_new_repairable_dead_slots(
+                &duplicate_slot_repair_statuses,
+                &blockstore,
+                &cluster_slots,
+                &root_bank,
+            );
+            for slot in repairable_dead_slots {
+                warn!(
+                    "Cluster froze slot: {}, but we marked it as dead. RepairService sending signal to purge dead slot.",
+                    slot
+                );
+
+                // Signal ReplayStage to clear its progress map so that a different
+                // version of this slot can be replayed
+                let _ = repair_info.duplicate_slots_reset_sender.send(slot);
+            }
+
+            Self::process_new_duplicate_slot_repair_request_receiver_from_channel(
+                &duplicate_slot_repair_request_receiver,
+                &duplicate_slot_repair_statuses,
+                &cluster_slots,
+                &serve_repair,
+                &repair_info.repair_validators,
+            );
+
+            Self::generate_and_send_duplicate_repairs(
+                &duplicate_slot_repair_statuses,
+                &cluster_slots,
+                &blockstore,
+                &serve_repair,
+                &mut repair_stats,
+                &repair_socket,
+                &repair_info.repair_validators,
+            );
+
+            if last_stats_reported_time.elapsed().as_secs() > 2 {
+                repair_stats.print_and_reset("duplicate-repairs");
+                last_stats_reported_time = Instant::now();
+            }
+
+            sleep(Duration::from_millis(REPAIR_DUPLICATE_MS));
         }
     }
 
@@ -476,7 +548,7 @@ impl RepairService {
     }
 
     fn generate_and_send_duplicate_repairs(
-        duplicate_slot_repair_statuses: &mut HashMap<Slot, DuplicateSlotRepairStatus>,
+        duplicate_slot_repair_statuses: &DashMap<Slot, DuplicateSlotRepairStatus>,
         cluster_slots: &ClusterSlots,
         blockstore: &Blockstore,
         serve_repair: &ServeRepair,
@@ -569,7 +641,7 @@ impl RepairService {
 
     fn process_new_duplicate_slot_repair_request_receiver_from_channel(
         duplicate_slot_repair_request_receiver: &DuplicateSlotRepairRequestReceiver,
-        duplicate_slot_repair_statuses: &mut HashMap<Slot, DuplicateSlotRepairStatus>,
+        duplicate_slot_repair_statuses: &DashMap<Slot, DuplicateSlotRepairStatus>,
         cluster_slots: &ClusterSlots,
         serve_repair: &ServeRepair,
         repair_validators: &Option<HashSet<Pubkey>>,
@@ -587,7 +659,7 @@ impl RepairService {
 
     fn queue_repair_request_for_duplicate_slot(
         slot: Slot,
-        duplicate_slot_repair_statuses: &mut HashMap<Slot, DuplicateSlotRepairStatus>,
+        duplicate_slot_repair_statuses: &DashMap<Slot, DuplicateSlotRepairStatus>,
         cluster_slots: &ClusterSlots,
         serve_repair: &ServeRepair,
         repair_validators: &Option<HashSet<Pubkey>>,
@@ -608,7 +680,7 @@ impl RepairService {
     }
 
     fn find_new_repairable_dead_slots(
-        duplicate_slot_repair_statuses: &HashMap<Slot, DuplicateSlotRepairStatus>,
+        duplicate_slot_repair_statuses: &DashMap<Slot, DuplicateSlotRepairStatus>,
         blockstore: &Blockstore,
         cluster_slots: &ClusterSlots,
         root_bank: &Bank,
