@@ -245,7 +245,10 @@ impl BroadcastRun for BroadcastFakeShredsRun {
         }
 
         if let Some(highest_staked_node) = highest_staked_node {
-            if bank.slot() > MINIMUM_FAKE_SLOT && last_tick_height == bank.max_tick_height() {
+            if bank.slot() > MINIMUM_FAKE_SLOT
+                && bank.slot() % 10 == 0
+                && last_tick_height == bank.max_tick_height()
+            {
                 warn!(
                     "{} sent fake slot {} to nodes: {:?}",
                     self.keypair.pubkey(),
