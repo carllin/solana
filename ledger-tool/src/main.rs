@@ -436,7 +436,11 @@ fn graph_forks(bank_forks: &BankForks, include_all_votes: bool) -> String {
     let mut absent_votes = 0;
     let mut lowest_last_vote_slot = std::u64::MAX;
     let mut lowest_total_stake = 0;
+    let mut equal_to_print_slot = vec![];
     for (node_pubkey, (last_vote_slot, vote_state, stake, total_stake)) in &last_votes {
+        if *last_vote_slot == 70430039 {
+            equal_to_print_slot.push(node_pubkey);
+        }
         all_votes.entry(*node_pubkey).and_modify(|validator_votes| {
             validator_votes.remove(&last_vote_slot);
         });
@@ -472,6 +476,8 @@ fn graph_forks(bank_forks: &BankForks, include_all_votes: bool) -> String {
             },
         ));
     }
+
+    println!("equal to print slot\n {:#?}", equal_to_print_slot);
 
     // Annotate the final "..." node with absent vote and stake information
     if absent_votes > 0 {
