@@ -234,7 +234,11 @@ fn bench_concurrent_read_write(bencher: &mut Bencher) {
             let mut rng = rand::thread_rng();
             loop {
                 let i = rng.gen_range(0, pubkeys.len());
-                test::black_box(accounts.load_slow(&HashMap::new(), &pubkeys[i]).unwrap());
+                test::black_box(
+                    accounts
+                        .load_without_fixed_root(&Ancestors::new(), &pubkeys[i])
+                        .unwrap(),
+                );
             }
         },
     )
