@@ -4900,8 +4900,8 @@ impl AccountsDb {
         let mut last_log_update = Instant::now();
         for (index, slot) in slots.iter().enumerate() {
             let now = Instant::now();
-            if now.duration_since(last_log_update).as_secs() >= 2 {
-                info!("generating index: {}/{} slots...", index, slots.len());
+            if now.duration_since(last_log_update).as_secs() >= 30 {
+                info!("generating index: {}/{} slots...", index, slots.len(),);
                 last_log_update = now;
             }
             let storage_maps: Vec<Arc<AccountStorageEntry>> = self

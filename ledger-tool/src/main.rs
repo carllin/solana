@@ -24,6 +24,7 @@ use solana_ledger::{
     shred::Shred,
 };
 use solana_runtime::{
+    accounts_index::AccountIndex,
     bank::{Bank, RewardCalculationEvent},
     bank_forks::{ArchiveFormat, BankForks, SnapshotConfig},
     hardened_unpack::{open_genesis_config, MAX_GENESIS_ARCHIVE_UNPACKED_SIZE},
@@ -1701,6 +1702,7 @@ fn main() {
                 bpf_jit: !matches.is_present("no_bpf_jit"),
                 accounts_db_caching_enabled: !arg_matches.is_present("no_accounts_db_caching"),
                 allow_dead_slots: arg_matches.is_present("allow_dead_slots"),
+                account_indexes: vec![AccountIndex::ProgramId].into_iter().collect(),
                 ..ProcessOptions::default()
             };
             let print_accounts_stats = arg_matches.is_present("print_accounts_stats");
