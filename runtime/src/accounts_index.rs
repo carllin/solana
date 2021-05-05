@@ -619,11 +619,7 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
                         // is only safe because we have the lock for this key's entry
                         // in the AccountsIndex, so no other thread is also updating
                         // the index
-                        self.purge_secondary_indexes_by_inner_key(
-                            key,
-                            None::<&Slot>,
-                            account_indexes,
-                        );
+                        self.purge_secondary_indexes_by_inner_key(key, account_indexes);
                     }
                 }
             }
@@ -709,7 +705,6 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         pubkey: &Pubkey,
         slots_to_purge: &'a C,
         reclaims: &mut SlotList<T>,
-        account_indexes: &HashSet<AccountIndex>,
     ) -> bool
     where
         C: Contains<'a, Slot>,
@@ -727,7 +722,6 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
                 slot_list.is_empty()
             })
         };
-        self.purge_secondary_indexes_by_inner_key(pubkey, Some(slots_to_purge), account_indexes);
         res
     }
 
@@ -815,7 +809,6 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
     fn update_secondary_indexes(
         &self,
         pubkey: &Pubkey,
-        slot: Slot,
         account_owner: &Pubkey,
         account_data: &[u8],
         account_indexes: &HashSet<AccountIndex>,
@@ -825,7 +818,7 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         }
 
         if account_indexes.contains(&AccountIndex::ProgramId) {
-            self.program_id_index.insert(account_owner, pubkey, slot);
+            self.program_id_index.insert(account_owner, pubkey);
         }
         // Note because of the below check below on the account data length, when an
         // account hits zero lamports and is reset to Account::Default, then we skip
@@ -848,7 +841,7 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
                     &account_data[SPL_TOKEN_ACCOUNT_OWNER_OFFSET
                         ..SPL_TOKEN_ACCOUNT_OWNER_OFFSET + PUBKEY_BYTES],
                 );
-                self.spl_token_owner_index.insert(&owner_key, pubkey, slot);
+                self.spl_token_owner_index.insert(&owner_key, pubkey);
             }
 
             if account_indexes.contains(&AccountIndex::SplTokenMint) {
@@ -856,7 +849,7 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
                     &account_data[SPL_TOKEN_ACCOUNT_MINT_OFFSET
                         ..SPL_TOKEN_ACCOUNT_MINT_OFFSET + PUBKEY_BYTES],
                 );
-                self.spl_token_mint_index.insert(&mint_key, pubkey, slot);
+                self.spl_token_mint_index.insert(&mint_key, pubkey);
             }
         }
     }
@@ -881,7 +874,7 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
             }
             w_account_entry.update(slot, account_info, reclaims);
         }
-        self.update_secondary_indexes(pubkey, slot, account_owner, account_data, account_indexes);
+        self.update_secondary_indexes(pubkey, account_owner, account_data, account_indexes);
     }
 
     // Updates the given pubkey at the given slot with the new account information.
@@ -917,7 +910,7 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
             w_account_entry.update(slot, account_info, reclaims);
             is_newly_inserted
         };
-        self.update_secondary_indexes(pubkey, slot, account_owner, account_data, account_indexes);
+        self.update_secondary_indexes(pubkey, account_owner, account_data, account_indexes);
         is_newly_inserted
     }
 
@@ -943,27 +936,21 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         }
     }
 
-    fn purge_secondary_indexes_by_inner_key<'a, C>(
+    fn purge_secondary_indexes_by_inner_key<'a>(
         &'a self,
         inner_key: &Pubkey,
-        slots_to_remove: Option<&'a C>,
         account_indexes: &HashSet<AccountIndex>,
-    ) where
-        C: Contains<'a, Slot>,
-    {
+    ) {
         if account_indexes.contains(&AccountIndex::ProgramId) {
-            self.program_id_index
-                .remove_by_inner_key(inner_key, slots_to_remove);
+            self.program_id_index.remove_by_inner_key(inner_key);
         }
 
         if account_indexes.contains(&AccountIndex::SplTokenOwner) {
-            self.spl_token_owner_index
-                .remove_by_inner_key(inner_key, slots_to_remove);
+            self.spl_token_owner_index.remove_by_inner_key(inner_key);
         }
 
         if account_indexes.contains(&AccountIndex::SplTokenMint) {
-            self.spl_token_mint_index
-                .remove_by_inner_key(inner_key, slots_to_remove);
+            self.spl_token_mint_index.remove_by_inner_key(inner_key);
         }
     }
 
@@ -973,7 +960,6 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         list: &mut SlotList<T>,
         reclaims: &mut SlotList<T>,
         max_clean_root: Option<Slot>,
-        account_indexes: &HashSet<AccountIndex>,
     ) {
         let roots_traker = &self.roots_tracker.read().unwrap();
         let max_root = Self::get_max_root(&roots_traker.roots, &list, max_clean_root);
@@ -987,8 +973,6 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
             }
             !should_purge
         });
-
-        self.purge_secondary_indexes_by_inner_key(pubkey, Some(&purged_slots), account_indexes);
     }
 
     // `is_cached` closure is needed to work around the generic (`T`) indexed type.
@@ -997,7 +981,6 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         pubkey: &Pubkey,
         reclaims: &mut SlotList<T>,
         max_clean_root: Option<Slot>,
-        account_indexes: &HashSet<AccountIndex>,
     ) {
         if let Some(mut locked_entry) = self.get_account_write_entry(pubkey) {
             locked_entry.slot_list_mut(|slot_list| {
@@ -1006,7 +989,6 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
                     slot_list,
                     reclaims,
                     max_clean_root,
-                    account_indexes,
                 );
             });
         }
@@ -1810,7 +1792,6 @@ pub mod tests {
         secondary_index: &SecondaryIndex<SecondaryIndexEntryType>,
         key_start: usize,
         key_end: usize,
-        account_index: &HashSet<AccountIndex>,
     ) {
         // No roots, should be no reclaims
         let slots = vec![1, 2, 5, 9];
@@ -1855,7 +1836,6 @@ pub mod tests {
             &account_key,
             &slots.into_iter().collect::<HashSet<Slot>>(),
             &mut vec![],
-            account_index,
         );
 
         assert!(secondary_index.index.is_empty());
@@ -1864,27 +1844,25 @@ pub mod tests {
 
     #[test]
     fn test_purge_exact_dashmap_secondary_index() {
-        let (key_start, key_end, account_index) = create_dashmap_secondary_index_state();
+        let (key_start, key_end, _account_index) = create_dashmap_secondary_index_state();
         let index = AccountsIndex::<bool>::default();
         run_test_purge_exact_secondary_index(
             &index,
             &index.spl_token_mint_index,
             key_start,
             key_end,
-            &account_index,
         );
     }
 
     #[test]
     fn test_purge_exact_rwlock_secondary_index() {
-        let (key_start, key_end, account_index) = create_rwlock_secondary_index_state();
+        let (key_start, key_end, _account_index) = create_rwlock_secondary_index_state();
         let index = AccountsIndex::<bool>::default();
         run_test_purge_exact_secondary_index(
             &index,
             &index.spl_token_owner_index,
             key_start,
             key_end,
-            &account_index,
         );
     }
 
@@ -1894,13 +1872,7 @@ pub mod tests {
         let index = AccountsIndex::<bool>::default();
         let mut slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
         let mut reclaims = vec![];
-        index.purge_older_root_entries(
-            &Pubkey::default(),
-            &mut slot_list,
-            &mut reclaims,
-            None,
-            &HashSet::new(),
-        );
+        index.purge_older_root_entries(&mut slot_list, &mut reclaims, None);
         assert!(reclaims.is_empty());
         assert_eq!(slot_list, vec![(1, true), (2, true), (5, true), (9, true)]);
 
@@ -1910,13 +1882,7 @@ pub mod tests {
         // Note 2 is not a root
         index.add_root(5, false);
         reclaims = vec![];
-        index.purge_older_root_entries(
-            &Pubkey::default(),
-            &mut slot_list,
-            &mut reclaims,
-            None,
-            &HashSet::new(),
-        );
+        index.purge_older_root_entries(&mut slot_list, &mut reclaims, None);
         assert_eq!(reclaims, vec![(1, true), (2, true)]);
         assert_eq!(slot_list, vec![(5, true), (9, true)]);
 
@@ -1924,13 +1890,7 @@ pub mod tests {
         slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
         index.add_root(6, false);
         reclaims = vec![];
-        index.purge_older_root_entries(
-            &Pubkey::default(),
-            &mut slot_list,
-            &mut reclaims,
-            None,
-            &HashSet::new(),
-        );
+        index.purge_older_root_entries(&mut slot_list, &mut reclaims, None);
         assert_eq!(reclaims, vec![(1, true), (2, true)]);
         assert_eq!(slot_list, vec![(5, true), (9, true)]);
 
@@ -1938,26 +1898,14 @@ pub mod tests {
         // outcome
         slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
         reclaims = vec![];
-        index.purge_older_root_entries(
-            &Pubkey::default(),
-            &mut slot_list,
-            &mut reclaims,
-            Some(6),
-            &HashSet::new(),
-        );
+        index.purge_older_root_entries(&mut slot_list, &mut reclaims, Some(6));
         assert_eq!(reclaims, vec![(1, true), (2, true)]);
         assert_eq!(slot_list, vec![(5, true), (9, true)]);
 
         // Pass a max root, earlier slots should be reclaimed
         slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
         reclaims = vec![];
-        index.purge_older_root_entries(
-            &Pubkey::default(),
-            &mut slot_list,
-            &mut reclaims,
-            Some(5),
-            &HashSet::new(),
-        );
+        index.purge_older_root_entries(&mut slot_list, &mut reclaims, Some(5));
         assert_eq!(reclaims, vec![(1, true), (2, true)]);
         assert_eq!(slot_list, vec![(5, true), (9, true)]);
 
@@ -1965,13 +1913,7 @@ pub mod tests {
         // so nothing will be purged
         slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
         reclaims = vec![];
-        index.purge_older_root_entries(
-            &Pubkey::default(),
-            &mut slot_list,
-            &mut reclaims,
-            Some(2),
-            &HashSet::new(),
-        );
+        index.purge_older_root_entries(&mut slot_list, &mut reclaims, Some(2));
         assert!(reclaims.is_empty());
         assert_eq!(slot_list, vec![(1, true), (2, true), (5, true), (9, true)]);
 
@@ -1979,13 +1921,7 @@ pub mod tests {
         // so nothing will be purged
         slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
         reclaims = vec![];
-        index.purge_older_root_entries(
-            &Pubkey::default(),
-            &mut slot_list,
-            &mut reclaims,
-            Some(1),
-            &HashSet::new(),
-        );
+        index.purge_older_root_entries(&mut slot_list, &mut reclaims, Some(1));
         assert!(reclaims.is_empty());
         assert_eq!(slot_list, vec![(1, true), (2, true), (5, true), (9, true)]);
 
@@ -1993,13 +1929,7 @@ pub mod tests {
         // some of the roots in the list, shouldn't return those smaller roots
         slot_list = vec![(1, true), (2, true), (5, true), (9, true)];
         reclaims = vec![];
-        index.purge_older_root_entries(
-            &Pubkey::default(),
-            &mut slot_list,
-            &mut reclaims,
-            Some(7),
-            &HashSet::new(),
-        );
+        index.purge_older_root_entries(&mut slot_list, &mut reclaims, Some(7));
         assert_eq!(reclaims, vec![(1, true), (2, true)]);
         assert_eq!(slot_list, vec![(5, true), (9, true)]);
     }
@@ -2188,13 +2118,7 @@ pub mod tests {
             .get_account_write_entry(&account_key)
             .unwrap()
             .slot_list_mut(|slot_list| {
-                index.purge_older_root_entries(
-                    &account_key,
-                    slot_list,
-                    &mut vec![],
-                    None,
-                    account_index,
-                )
+                index.purge_older_root_entries(&account_key, slot_list, &mut vec![], None)
             });
         assert!(secondary_index.get(&secondary_key2).is_empty());
         assert_eq!(secondary_index.get(&secondary_key1), vec![account_key]);
