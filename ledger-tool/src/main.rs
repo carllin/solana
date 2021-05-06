@@ -1702,7 +1702,7 @@ fn main() {
                 bpf_jit: !matches.is_present("no_bpf_jit"),
                 accounts_db_caching_enabled: !arg_matches.is_present("no_accounts_db_caching"),
                 allow_dead_slots: arg_matches.is_present("allow_dead_slots"),
-                account_indexes: vec![AccountIndex::ProgramId].into_iter().collect(),
+                account_indexes: vec![AccountIndex::SplTokenMint].into_iter().collect(),
                 ..ProcessOptions::default()
             };
             let print_accounts_stats = arg_matches.is_present("print_accounts_stats");
