@@ -97,6 +97,17 @@ pub struct SecondaryIndex<SecondaryIndexEntryType: SecondaryIndexEntry + Default
 impl<SecondaryIndexEntryType: SecondaryIndexEntry + Default + Sync + Send>
     SecondaryIndex<SecondaryIndexEntryType>
 {
+    pub fn print_size(&self) {
+        let primary_index_num_keys = self.index.len();
+        let reverse_index_num_keys = self.reverse_index.len();
+
+        println!(
+            "Secondary Index size: primary_index_num_keys: {}
+            reverse_index_num_keys: {}",
+            primary_index_num_keys, reverse_index_num_keys,
+        );
+    }
+
     pub fn insert(&self, key: &Pubkey, inner_key: &Pubkey) {
         let (boxed_inner_key, should_insert_into_reverse_index): (Box<Pubkey>, bool) = {
             let locked_ref = self.reverse_index.get(inner_key).unwrap_or_else(|| {

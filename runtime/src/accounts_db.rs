@@ -4902,6 +4902,7 @@ impl AccountsDb {
             let now = Instant::now();
             if now.duration_since(last_log_update).as_secs() >= 30 {
                 info!("generating index: {}/{} slots...", index, slots.len(),);
+                self.accounts_index.spl_token_mint_index.print_size();
                 last_log_update = now;
             }
             let storage_maps: Vec<Arc<AccountStorageEntry>> = self
