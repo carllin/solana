@@ -269,6 +269,7 @@ impl Shred {
 
         let slot = common_header.slot;
         let expected_data_size = SHRED_PAYLOAD_SIZE;
+        payload.resize(std::cmp::max(payload.len(), SHRED_PAYLOAD_SIZE), 0);
         // Safe because any payload from the network must have passed through
         // window service,  which implies payload wll be of size
         // PACKET_DATA_SIZE, and `expected_data_size` <= PACKET_DATA_SIZE.
