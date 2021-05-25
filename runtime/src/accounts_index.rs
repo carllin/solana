@@ -10,7 +10,7 @@ use log::*;
 use ouroboros::self_referencing;
 use solana_measure::measure::Measure;
 use solana_sdk::{
-    clock::Slot,
+    clock::{Slot, SlotId},
     pubkey::{Pubkey, PUBKEY_BYTES},
 };
 use std::{
@@ -25,15 +25,16 @@ use std::{
     },
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
     },
 };
+use thiserror::Error;
 
 pub const ITER_BATCH_SIZE: usize = 1000;
 
+pub type ScanResult<T> = Result<T, ScanError>;
 pub type SlotList<T> = Vec<(Slot, T)>;
 pub type SlotSlice<'s, T> = &'s [(Slot, T)];
-
 pub type RefCount = u64;
 pub type AccountMap<K, V> = BTreeMap<K, V>;
 
@@ -53,6 +54,12 @@ impl IsCached for u64 {
     fn is_cached(&self) -> bool {
         false
     }
+}
+
+#[derive(Error, Debug, PartialEq)]
+pub enum ScanError {
+    #[error("Node detected it replayed bad version of slot {slot:?} with id {slot_id:?}, thus the scan on said slot was aborted")]
+    SlotRemoved { slot: Slot, slot_id: SlotId },
 }
 
 enum ScanTypes<R: RangeBounds<Pubkey>> {
@@ -440,6 +447,10 @@ impl RollingBitField {
         std::mem::swap(&mut n, self);
     }
 
+    pub fn max(&self) -> u64 {
+        self.max
+    }
+
     pub fn get_all(&self) -> Vec<u64> {
         let mut all = Vec::with_capacity(self.count);
         self.excess.iter().for_each(|slot| all.push(*slot));
@@ -562,6 +573,22 @@ type MapType<T> = AccountMap<Pubkey, AccountMapEntry<T>>;
 type AccountMapsWriteLock<'a, T> = RwLockWriteGuard<'a, AccountMap<Pubkey, AccountMapEntry<T>>>;
 type AccountMapsReadLock<'a, T> = RwLockReadGuard<'a, AccountMap<Pubkey, AccountMapEntry<T>>>;
 
+#[derive(Debug, Default)]
+pub struct ScanSlotTracker {
+    is_removed: bool,
+    ref_count: u64,
+}
+
+impl ScanSlotTracker {
+    pub fn is_removed(&self) -> bool {
+        self.is_removed
+    }
+
+    pub fn mark_removed(&mut self) {
+        self.is_removed = true;
+    }
+}
+
 #[derive(Debug)]
 pub struct AccountsIndex<T> {
     pub account_maps: RwLock<MapType<T>>,
@@ -570,6 +597,17 @@ pub struct AccountsIndex<T> {
     spl_token_owner_index: SecondaryIndex<RwLockSecondaryIndexEntry>,
     roots_tracker: RwLock<RootsTracker>,
     ongoing_scan_roots: RwLock<BTreeMap<Slot, u64>>,
+    // Each scan has some latest slot `S` that is the tip of the fork the scan
+    // is iterating over. The unique id of that slot `S` is recorded here (note we don't use
+    // `S` as the id because there can be more than one version of a slot `S`). If a fork
+    // is abandoned, all of the slots on that fork up to `S` will be removed via
+    // `AccountsDb::remove_unrooted_slots()`. When the scan finishes, it'll realize that the
+    // results of the scan may have been corrupted by `remove_unrooted_slots` and abort its results.
+    //
+    // `removed_slot_ids` tracks all the slot ids that were removed via `remove_unrooted_slots()` so any attempted scans
+    // on any of these slots fails. This is safe to purge once the associated Bank is dropped and
+    // scanning the fork with that Bank at the tip is no longer possible.
+    pub removed_slot_ids: Mutex<HashSet<SlotId>>,
     zero_lamport_pubkeys: DashSet<Pubkey>,
 }
 
@@ -588,6 +626,7 @@ impl<T> Default for AccountsIndex<T> {
             ),
             roots_tracker: RwLock::<RootsTracker>::default(),
             ongoing_scan_roots: RwLock::<BTreeMap<Slot, u64>>::default(),
+            removed_slot_ids: Mutex::<HashSet<SlotId>>::default(),
             zero_lamport_pubkeys: DashSet::<Pubkey>::default(),
         }
     }
@@ -605,12 +644,24 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         &self,
         metric_name: &'static str,
         ancestors: &Ancestors,
+        scan_slot_id: SlotId,
         func: F,
         scan_type: ScanTypes<R>,
-    ) where
+    ) -> Result<(), ScanError>
+    where
         F: FnMut(&Pubkey, (&T, Slot)),
         R: RangeBounds<Pubkey>,
     {
+        {
+            let locked_removed_slot_ids = self.removed_slot_ids.lock().unwrap();
+            if locked_removed_slot_ids.contains(&scan_slot_id) {
+                return Err(ScanError::SlotRemoved {
+                    slot: ancestors.max_slot(),
+                    slot_id: scan_slot_id,
+                });
+            }
+        }
+
         let max_root = {
             let mut w_ongoing_scan_roots = self
                 // This lock is also grabbed by clean_accounts(), so clean
@@ -786,6 +837,23 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
             if *count == 0 {
                 ongoing_scan_roots.remove(&max_root);
             }
+        }
+
+        // If the fork with tip at bank `scan_slot_id` was removed durin our scan, then the scan
+        // may have been corrupted, so abort the results.
+        let was_scan_corrupted = self
+            .removed_slot_ids
+            .lock()
+            .unwrap()
+            .contains(&scan_slot_id);
+
+        if was_scan_corrupted {
+            Err(ScanError::SlotRemoved {
+                slot: ancestors.max_slot(),
+                slot_id: scan_slot_id,
+            })
+        } else {
+            Ok(())
         }
     }
 
@@ -986,7 +1054,12 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
     }
 
     /// call func with every pubkey and index visible from a given set of ancestors
-    pub(crate) fn scan_accounts<F>(&self, ancestors: &Ancestors, func: F)
+    pub(crate) fn scan_accounts<F>(
+        &self,
+        ancestors: &Ancestors,
+        scan_slot_id: SlotId,
+        func: F,
+    ) -> Result<(), ScanError>
     where
         F: FnMut(&Pubkey, (&T, Slot)),
     {
@@ -994,9 +1067,10 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         self.do_checked_scan_accounts(
             "",
             ancestors,
+            scan_slot_id,
             func,
             ScanTypes::Unindexed(None::<Range<Pubkey>>),
-        );
+        )
     }
 
     pub(crate) fn unchecked_scan_accounts<F>(
@@ -1026,7 +1100,13 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
     }
 
     /// call func with every pubkey and index visible from a given set of ancestors
-    pub(crate) fn index_scan_accounts<F>(&self, ancestors: &Ancestors, index_key: IndexKey, func: F)
+    pub(crate) fn index_scan_accounts<F>(
+        &self,
+        ancestors: &Ancestors,
+        scan_slot_id: SlotId,
+        index_key: IndexKey,
+        func: F,
+    ) -> Result<(), ScanError>
     where
         F: FnMut(&Pubkey, (&T, Slot)),
     {
@@ -1034,9 +1114,10 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         self.do_checked_scan_accounts(
             "",
             ancestors,
+            scan_slot_id,
             func,
             ScanTypes::<Range<Pubkey>>::Indexed(index_key),
-        );
+        )
     }
 
     pub fn get_rooted_entries(&self, slice: SlotSlice<T>, max: Option<Slot>) -> SlotList<T> {

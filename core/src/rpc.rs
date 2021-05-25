@@ -91,6 +91,8 @@ use std::{
 };
 use tokio::runtime::Runtime;
 
+type RpcCustomResult<T> = std::result::Result<T, RpcCustomError>;
+
 pub const MAX_REQUEST_PAYLOAD_SIZE: usize = 50 * (1 << 10); // 50kB
 pub const PERFORMANCE_SAMPLES_LIMIT: usize = 720;
 
@@ -704,18 +706,18 @@ impl JsonRpcRequestProcessor {
     fn get_largest_accounts(
         &self,
         config: Option<RpcLargestAccountsConfig>,
-    ) -> RpcResponse<Vec<RpcAccountBalance>> {
+    ) -> RpcCustomResult<RpcResponse<Vec<RpcAccountBalance>>> {
         let config = config.unwrap_or_default();
         let bank = self.bank(config.commitment);
 
         if let Some((slot, accounts)) = self.get_cached_largest_accounts(&config.filter) {
-            Response {
+            Ok(Response {
                 context: RpcResponseContext { slot },
                 value: accounts,
-            }
+            })
         } else {
             let (addresses, address_filter) = if let Some(filter) = config.clone().filter {
-                let non_circulating_supply = calculate_non_circulating_supply(&bank);
+                let non_circulating_supply = calculate_non_circulating_supply(&bank)?;
                 let addresses = non_circulating_supply.accounts.into_iter().collect();
                 let address_filter = match filter {
                     RpcLargestAccountsFilter::Circulating => AccountAddressFilter::Exclude,
@@ -726,7 +728,7 @@ impl JsonRpcRequestProcessor {
                 (HashSet::new(), AccountAddressFilter::Exclude)
             };
             let accounts = bank
-                .get_largest_accounts(NUM_LARGEST_ACCOUNTS, &addresses, address_filter)
+                .get_largest_accounts(NUM_LARGEST_ACCOUNTS, &addresses, address_filter)?
                 .into_iter()
                 .map(|(address, lamports)| RpcAccountBalance {
                     address: address.to_string(),
@@ -735,15 +737,18 @@ impl JsonRpcRequestProcessor {
                 .collect::<Vec<RpcAccountBalance>>();
 
             self.set_cached_largest_accounts(&config.filter, bank.slot(), &accounts);
-            new_response(&bank, accounts)
+            Ok(new_response(&bank, accounts))
         }
     }
 
-    fn get_supply(&self, commitment: Option<CommitmentConfig>) -> RpcResponse<RpcSupply> {
+    fn get_supply(
+        &self,
+        commitment: Option<CommitmentConfig>,
+    ) -> RpcCustomResult<RpcResponse<RpcSupply>> {
         let bank = self.bank(commitment);
-        let non_circulating_supply = calculate_non_circulating_supply(&bank);
+        let non_circulating_supply = calculate_non_circulating_supply(&bank)?;
         let total_supply = bank.capitalization();
-        new_response(
+        Ok(new_response(
             &bank,
             RpcSupply {
                 total: total_supply,
@@ -755,7 +760,7 @@ impl JsonRpcRequestProcessor {
                     .map(|pubkey| pubkey.to_string())
                     .collect(),
             },
-        )
+        ))
     }
 
     fn get_vote_accounts(
@@ -1737,7 +1742,7 @@ impl JsonRpcRequestProcessor {
         bank: &Arc<Bank>,
         program_id: &Pubkey,
         filters: Vec<RpcFilterType>,
-    ) -> Result<Vec<(Pubkey, AccountSharedData)>> {
+    ) -> RpcCustomResult<Vec<(Pubkey, AccountSharedData)>> {
         let filter_closure = |account: &AccountSharedData| {
             filters.iter().all(|filter_type| match filter_type {
                 RpcFilterType::DataSize(size) => account.data().len() as u64 == *size,
@@ -1752,21 +1757,21 @@ impl JsonRpcRequestProcessor {
             if !self.config.account_indexes.include_key(program_id) {
                 return Err(RpcCustomError::KeyExcludedFromSecondaryIndex {
                     index_key: program_id.to_string(),
-                }
-                .into());
+                });
             }
-            Ok(
-                bank.get_filtered_indexed_accounts(&IndexKey::ProgramId(*program_id), |account| {
+            Ok(bank.get_filtered_indexed_accounts(
+                &IndexKey::ProgramId(*program_id),
+                |account| {
                     // The program-id account index checks for Account owner on inclusion. However, due
                     // to the current AccountsDb implementation, an account may remain in storage as a
                     // zero-lamport AccountSharedData::Default() after being wiped and reinitialized in later
                     // updates. We include the redundant filters here to avoid returning these
                     // accounts.
                     account.owner() == program_id && filter_closure(account)
-                }),
-            )
+                },
+            )?)
         } else {
-            Ok(bank.get_filtered_program_accounts(program_id, filter_closure))
+            Ok(bank.get_filtered_program_accounts(program_id, filter_closure)?)
         }
     }
 
@@ -1776,7 +1781,7 @@ impl JsonRpcRequestProcessor {
         bank: &Arc<Bank>,
         owner_key: &Pubkey,
         mut filters: Vec<RpcFilterType>,
-    ) -> Result<Vec<(Pubkey, AccountSharedData)>> {
+    ) -> RpcCustomResult<Vec<(Pubkey, AccountSharedData)>> {
         // The by-owner accounts index checks for Token Account state and Owner address on
         // inclusion. However, due to the current AccountsDb implementation, an account may remain
         // in storage as a zero-lamport AccountSharedData::Default() after being wiped and reinitialized in
@@ -1801,8 +1806,7 @@ impl JsonRpcRequestProcessor {
             if !self.config.account_indexes.include_key(owner_key) {
                 return Err(RpcCustomError::KeyExcludedFromSecondaryIndex {
                     index_key: owner_key.to_string(),
-                }
-                .into());
+                });
             }
             Ok(bank.get_filtered_indexed_accounts(
                 &IndexKey::SplTokenOwner(*owner_key),
@@ -1813,7 +1817,7 @@ impl JsonRpcRequestProcessor {
                             RpcFilterType::Memcmp(compare) => compare.bytes_match(&account.data()),
                         })
                 },
-            ))
+            )?)
         } else {
             self.get_filtered_program_accounts(bank, &spl_token_id_v2_0(), filters)
         }
@@ -1825,7 +1829,7 @@ impl JsonRpcRequestProcessor {
         bank: &Arc<Bank>,
         mint_key: &Pubkey,
         mut filters: Vec<RpcFilterType>,
-    ) -> Result<Vec<(Pubkey, AccountSharedData)>> {
+    ) -> RpcCustomResult<Vec<(Pubkey, AccountSharedData)>> {
         // The by-mint accounts index checks for Token Account state and Mint address on inclusion.
         // However, due to the current AccountsDb implementation, an account may remain in storage
         // as be zero-lamport AccountSharedData::Default() after being wiped and reinitialized in later
@@ -1849,18 +1853,18 @@ impl JsonRpcRequestProcessor {
             if !self.config.account_indexes.include_key(mint_key) {
                 return Err(RpcCustomError::KeyExcludedFromSecondaryIndex {
                     index_key: mint_key.to_string(),
-                }
-                .into());
+                });
             }
-            Ok(
-                bank.get_filtered_indexed_accounts(&IndexKey::SplTokenMint(*mint_key), |account| {
+            Ok(bank.get_filtered_indexed_accounts(
+                &IndexKey::SplTokenMint(*mint_key),
+                |account| {
                     account.owner() == &spl_token_id_v2_0()
                         && filters.iter().all(|filter_type| match filter_type {
                             RpcFilterType::DataSize(size) => account.data().len() as u64 == *size,
                             RpcFilterType::Memcmp(compare) => compare.bytes_match(&account.data()),
                         })
-                }),
-            )
+                },
+            )?)
         } else {
             self.get_filtered_program_accounts(bank, &spl_token_id_v2_0(), filters)
         }
@@ -2871,7 +2875,7 @@ pub mod rpc_full {
             config: Option<RpcLargestAccountsConfig>,
         ) -> Result<RpcResponse<Vec<RpcAccountBalance>>> {
             debug!("get_largest_accounts rpc request received");
-            Ok(meta.get_largest_accounts(config))
+            Ok(meta.get_largest_accounts(config)?)
         }
 
         fn get_supply(
@@ -2880,7 +2884,7 @@ pub mod rpc_full {
             commitment: Option<CommitmentConfig>,
         ) -> Result<RpcResponse<RpcSupply>> {
             debug!("get_supply rpc request received");
-            Ok(meta.get_supply(commitment))
+            Ok(meta.get_supply(commitment)?)
         }
 
         fn request_airdrop(

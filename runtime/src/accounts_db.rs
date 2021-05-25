@@ -24,7 +24,7 @@ use crate::{
     accounts_hash::{AccountsHash, CalculateHashIntermediate, HashStats, PreviousPass},
     accounts_index::{
         AccountIndexGetResult, AccountSecondaryIndexes, AccountsIndex, AccountsIndexRootsStats,
-        IndexKey, IsCached, SlotList, SlotSlice, ZeroLamport,
+        IndexKey, IsCached, ScanResult, SlotList, SlotSlice, ZeroLamport,
     },
     ancestors::Ancestors,
     append_vec::{AppendVec, StoredAccountMeta, StoredMeta, StoredMetaWriteVersion},
@@ -47,7 +47,7 @@ use solana_measure::measure::Measure;
 use solana_rayon_threadlimit::get_thread_count;
 use solana_sdk::{
     account::{AccountSharedData, ReadableAccount},
-    clock::{Epoch, Slot},
+    clock::{Epoch, Slot, SlotId},
     genesis_config::ClusterType,
     hash::{Hash, Hasher},
     pubkey::Pubkey,
@@ -2296,21 +2296,29 @@ impl AccountsDb {
         }
     }
 
-    pub fn scan_accounts<F, A>(&self, ancestors: &Ancestors, scan_func: F) -> A
+    pub fn scan_accounts<F, A>(
+        &self,
+        ancestors: &Ancestors,
+        slot_id: SlotId,
+        scan_func: F,
+    ) -> ScanResult<A>
     where
         F: Fn(&mut A, Option<(&Pubkey, AccountSharedData, Slot)>),
         A: Default,
     {
         let mut collector = A::default();
+
+        // This can error out if the slots being scanned over are aborted
         self.accounts_index
-            .scan_accounts(ancestors, |pubkey, (account_info, slot)| {
+            .scan_accounts(ancestors, slot_id, |pubkey, (account_info, slot)| {
                 let account_slot = self
                     .get_account_accessor(slot, pubkey, account_info.store_id, account_info.offset)
                     .get_loaded_account()
                     .map(|loaded_account| (pubkey, loaded_account.take_account(), slot));
                 scan_func(&mut collector, account_slot)
-            });
-        collector
+            })?;
+
+        Ok(collector)
     }
 
     pub fn unchecked_scan_accounts<F, A>(
@@ -2380,9 +2388,10 @@ impl AccountsDb {
     pub fn index_scan_accounts<F, A>(
         &self,
         ancestors: &Ancestors,
+        slot_id: SlotId,
         index_key: IndexKey,
         scan_func: F,
-    ) -> (A, bool)
+    ) -> ScanResult<(A, bool)>
     where
         F: Fn(&mut A, Option<(&Pubkey, AccountSharedData, Slot)>),
         A: Default,
@@ -2395,12 +2404,14 @@ impl AccountsDb {
         if !self.account_indexes.include_key(key) {
             // the requested key was not indexed in the secondary index, so do a normal scan
             let used_index = false;
-            return (self.scan_accounts(ancestors, scan_func), used_index);
+            let scan_result = self.scan_accounts(ancestors, slot_id, scan_func)?;
+            return Ok((scan_result, used_index));
         }
 
         let mut collector = A::default();
         self.accounts_index.index_scan_accounts(
             ancestors,
+            slot_id,
             index_key,
             |pubkey, (account_info, slot)| {
                 let account_slot = self
@@ -2409,9 +2420,9 @@ impl AccountsDb {
                     .map(|loaded_account| (pubkey, loaded_account.take_account(), slot));
                 scan_func(&mut collector, account_slot)
             },
-        );
+        )?;
         let used_index = true;
-        (collector, used_index)
+        Ok((collector, used_index))
     }
 
     /// Scan a specific slot through all the account storage in parallel
@@ -3160,14 +3171,29 @@ impl AccountsDb {
         SendDroppedBankCallback::new(pruned_banks_sender)
     }
 
+    /// This should only be called after the `Bank::drop()` runs in bank.rs, See BANK_DROP_SAFETY
+    /// comment below for more explanation.
     /// `is_from_abs` is true if the caller is the AccountsBackgroundService
-    pub fn purge_slot(&self, slot: Slot, is_from_abs: bool) {
+    pub fn purge_slot(&self, slot: Slot, slot_id: SlotId, is_from_abs: bool) {
         if self.is_bank_drop_callback_enabled.load(Ordering::SeqCst) && !is_from_abs {
             panic!("bad drop callpath detected; Bank::drop() must run serially with other logic in ABS like clean_accounts()")
         }
-        let mut slots = HashSet::new();
-        slots.insert(slot);
-        self.purge_slots(&slots);
+        // BANK_DROP_SAFETY: Because this function only runs once the bank is dropped,
+        // we know that there are no longer any ongoing scans on this bank, because scans require
+        // and hold a reference to the bank at the tip of the fork they're scanning. Hence it's
+        // safe to remove this slot_id from the `removed_slot_ids` list at this point.
+        if self
+            .accounts_index
+            .removed_slot_ids
+            .lock()
+            .unwrap()
+            .remove(&slot_id)
+        {
+            // If this slot was already cleaned up, no need to do any further cleans
+            return;
+        }
+
+        self.purge_slots(std::iter::once(&slot));
     }
 
     fn recycle_slot_stores(
@@ -3201,7 +3227,7 @@ impl AccountsDb {
     /// Purges every slot in `removed_slots` from both the cache and storage. This includes
     /// entries in the accounts index, cache entries, and any backing storage entries.
     fn purge_slots_from_cache_and_store<'a>(
-        &'a self,
+        &self,
         removed_slots: impl Iterator<Item = &'a Slot>,
         purge_stats: &PurgeStats,
     ) {
@@ -3212,7 +3238,11 @@ impl AccountsDb {
             // This function is only currently safe with respect to `flush_slot_cache()` because
             // both functions run serially in AccountsBackgroundService.
             let mut remove_cache_elapsed = Measure::start("remove_cache_elapsed");
-            if let Some(slot_cache) = self.accounts_cache.remove_slot(*remove_slot) {
+            // Note: we cannot remove this slot from the slot cache until we've removed its
+            // entries from the accounts index first. This is because `scan_accounts()` relies on
+            // holding the index lock, finding the index entry, and then looking up the entry
+            // in the cache. If it fails to find that entry, it will panic in `get_loaded_account()`
+            if let Some(slot_cache) = self.accounts_cache.slot_cache(*remove_slot) {
                 // If the slot is still in the cache, remove the backing storages for
                 // the slot and from the Accounts Index
                 num_cached_slots_removed += 1;
@@ -3220,6 +3250,8 @@ impl AccountsDb {
                 self.purge_slot_cache(*remove_slot, slot_cache);
                 remove_cache_elapsed.stop();
                 remove_cache_elapsed_across_slots += remove_cache_elapsed.as_us();
+                // Nobody else shoud have removed the slot cache entry yet
+                assert!(self.accounts_cache.remove_slot(*remove_slot).is_some());
             } else {
                 self.purge_slot_storage(*remove_slot, purge_stats);
             }
@@ -3407,39 +3439,33 @@ impl AccountsDb {
     }
 
     #[allow(clippy::needless_collect)]
-    fn purge_slots(&self, slots: &HashSet<Slot>) {
+    fn purge_slots<'a>(&self, slots: impl Iterator<Item = &'a Slot>) {
         // `add_root()` should be called first
         let mut safety_checks_elapsed = Measure::start("safety_checks_elapsed");
-        let non_roots: Vec<&Slot> = slots
-            .iter()
-            .filter(|slot| !self.accounts_index.is_root(**slot))
-            .collect();
+        let non_roots = slots
+            // Only safe to check when there are  duplciate versions of a slot
+            // because ReplayStage will not make new roots before dumping the
+            // duplicate slots first. Thus we will not be in a case where we
+            // root slot `S`, then try to dump some other version of slot `S`, the
+            // dumping has to finish first
+            //
+            // Also note roots are never removed via `remove_unrooted_slot()`, so
+            // it's safe to filter them out here as they won't need deletion from
+            // self.accounts_index.removed_slot_ids in `purge_slots_from_cache_and_store()`.
+            .filter(|slot| !self.accounts_index.is_root(**slot));
         safety_checks_elapsed.stop();
         self.external_purge_slots_stats
             .safety_checks_elapsed
             .fetch_add(safety_checks_elapsed.as_us(), Ordering::Relaxed);
-        self.purge_slots_from_cache_and_store(
-            non_roots.into_iter(),
-            &self.external_purge_slots_stats,
-        );
+        self.purge_slots_from_cache_and_store(non_roots, &self.external_purge_slots_stats);
         self.external_purge_slots_stats
             .report("external_purge_slots_stats", Some(1000));
     }
 
-    // TODO: This is currently unsafe with scan because it can remove a slot in the middle
-    /// Remove the set of slots in `remove_slots` from both the cache and storage. This requires
-    /// we know the contents of the slot are either:
-    ///
-    /// 1) Completely in the cache
-    /// 2) Have been completely flushed from the cache
-    ///
-    /// in order to guarantee that when this function returns, the contents of the slot have
-    /// been completely and not only partially removed. Thus synchronization with `flush_slot_cache()`
-    /// through `self.remove_unrooted_slots_synchronization` is necessary.
-    pub fn remove_unrooted_slots(&self, remove_slots: &[Slot]) {
+    pub fn remove_unrooted_slots(&self, remove_slots: &[(Slot, SlotId)]) {
         let rooted_slots = self
             .accounts_index
-            .get_rooted_from_list(remove_slots.iter());
+            .get_rooted_from_list(remove_slots.iter().map(|(slot, _)| slot));
         assert!(
             rooted_slots.is_empty(),
             "Trying to remove accounts for rooted slots {:?}",
@@ -3459,7 +3485,7 @@ impl AccountsDb {
             // we want to remove in this function
             let mut remaining_contended_flush_slots: Vec<Slot> = remove_slots
                 .iter()
-                .filter(|remove_slot| {
+                .filter_map(|(remove_slot, _)| {
                     let is_being_flushed = currently_contended_slots.contains(remove_slot);
                     if !is_being_flushed {
                         // Reserve the slots that we want to purge that aren't currently
@@ -3470,10 +3496,10 @@ impl AccountsDb {
                         // before another version of the same slot can be replayed. This means
                         // multiple threads should not call `remove_unrooted_slots()` simultaneously
                         // with the same slot.
-                        currently_contended_slots.insert(**remove_slot);
+                        currently_contended_slots.insert(*remove_slot);
                     }
                     // If the cache is currently flushing this slot, add it to the list
-                    is_being_flushed
+                    Some(remove_slot).filter(|_| is_being_flushed)
                 })
                 .cloned()
                 .collect();
@@ -3506,13 +3532,26 @@ impl AccountsDb {
             }
         }
 
+        // Mark down these slots are about to be purged so that new attempts to scan these
+        // banks fail, and any ongoing scans over these slots will detect that they should abort
+        // their results
+        {
+            let mut locked_removed_slot_ids = self.accounts_index.removed_slot_ids.lock().unwrap();
+            for (_slot, remove_slot_id) in remove_slots.iter() {
+                locked_removed_slot_ids.insert(*remove_slot_id);
+            }
+        }
+
         let remove_unrooted_purge_stats = PurgeStats::default();
-        self.purge_slots_from_cache_and_store(remove_slots.iter(), &remove_unrooted_purge_stats);
+        self.purge_slots_from_cache_and_store(
+            remove_slots.iter().map(|(slot, _)| slot),
+            &remove_unrooted_purge_stats,
+        );
         remove_unrooted_purge_stats.report("remove_unrooted_slots_purge_slots_stats", Some(0));
 
         let mut currently_contended_slots = slots_under_contention.lock().unwrap();
-        for slot in remove_slots {
-            assert!(currently_contended_slots.remove(slot));
+        for (remove_slot, _) in remove_slots {
+            assert!(currently_contended_slots.remove(remove_slot));
         }
     }
 
@@ -6569,6 +6608,7 @@ pub mod tests {
 
     fn run_test_remove_unrooted_slot(is_cached: bool) {
         let unrooted_slot = 9;
+        let unrooted_slot_id = 9;
         let mut db = AccountsDb::new(Vec::new(), &ClusterType::Development);
         db.caching_enabled = true;
         let key = Pubkey::default();
@@ -6590,7 +6630,7 @@ pub mod tests {
         assert_load_account(&db, unrooted_slot, key, 1);
 
         // Purge the slot
-        db.remove_unrooted_slots(&[unrooted_slot]);
+        db.remove_unrooted_slots(&[(unrooted_slot, unrooted_slot_id)]);
         assert!(db.load_without_fixed_root(&ancestors, &key).is_none());
         assert!(db.bank_hashes.read().unwrap().get(&unrooted_slot).is_none());
         assert!(db.accounts_cache.slot_cache(unrooted_slot).is_none());
@@ -6621,13 +6661,14 @@ pub mod tests {
     fn test_remove_unrooted_slot_snapshot() {
         solana_logger::setup();
         let unrooted_slot = 9;
+        let unrooted_slot_id = 9;
         let db = AccountsDb::new(Vec::new(), &ClusterType::Development);
         let key = solana_sdk::pubkey::new_rand();
         let account0 = AccountSharedData::new(1, 0, &key);
         db.store_uncached(unrooted_slot, &[(&key, &account0)]);
 
         // Purge the slot
-        db.remove_unrooted_slots(&[unrooted_slot]);
+        db.remove_unrooted_slots(&[(unrooted_slot, unrooted_slot_id)]);
 
         // Add a new root
         let key2 = solana_sdk::pubkey::new_rand();
@@ -7251,11 +7292,13 @@ pub mod tests {
         // Secondary index should still find both pubkeys
         let mut found_accounts = HashSet::new();
         let index_key = IndexKey::SplTokenMint(mint_key);
+        let slot_id = 0;
         accounts
             .accounts_index
-            .index_scan_accounts(&Ancestors::default(), index_key, |key, _| {
+            .index_scan_accounts(&Ancestors::default(), slot_id, index_key, |key, _| {
                 found_accounts.insert(*key);
-            });
+            })
+            .unwrap();
         assert_eq!(found_accounts.len(), 2);
         assert!(found_accounts.contains(&pubkey1));
         assert!(found_accounts.contains(&pubkey2));
@@ -7266,13 +7309,16 @@ pub mod tests {
                 keys: [mint_key].iter().cloned().collect::<HashSet<Pubkey>>(),
             });
             // Secondary index can't be used - do normal scan: should still find both pubkeys
-            let found_accounts = accounts.index_scan_accounts(
-                &Ancestors::default(),
-                index_key,
-                |collection: &mut HashSet<Pubkey>, account| {
-                    collection.insert(*account.unwrap().0);
-                },
-            );
+            let found_accounts = accounts
+                .index_scan_accounts(
+                    &Ancestors::default(),
+                    slot_id,
+                    index_key,
+                    |collection: &mut HashSet<Pubkey>, account| {
+                        collection.insert(*account.unwrap().0);
+                    },
+                )
+                .unwrap();
             assert!(!found_accounts.1);
             assert_eq!(found_accounts.0.len(), 2);
             assert!(found_accounts.0.contains(&pubkey1));
@@ -7281,13 +7327,16 @@ pub mod tests {
             accounts.account_indexes.keys = None;
 
             // Secondary index can now be used since it isn't marked as excluded
-            let found_accounts = accounts.index_scan_accounts(
-                &Ancestors::default(),
-                index_key,
-                |collection: &mut HashSet<Pubkey>, account| {
-                    collection.insert(*account.unwrap().0);
-                },
-            );
+            let found_accounts = accounts
+                .index_scan_accounts(
+                    &Ancestors::default(),
+                    slot_id,
+                    index_key,
+                    |collection: &mut HashSet<Pubkey>, account| {
+                        collection.insert(*account.unwrap().0);
+                    },
+                )
+                .unwrap();
             assert!(found_accounts.1);
             assert_eq!(found_accounts.0.len(), 2);
             assert!(found_accounts.0.contains(&pubkey1));
@@ -7312,11 +7361,15 @@ pub mod tests {
 
         // Secondary index should have purged `pubkey1` as well
         let mut found_accounts = vec![];
-        accounts.accounts_index.index_scan_accounts(
-            &Ancestors::default(),
-            IndexKey::SplTokenMint(mint_key),
-            |key, _| found_accounts.push(*key),
-        );
+        accounts
+            .accounts_index
+            .index_scan_accounts(
+                &Ancestors::default(),
+                slot_id,
+                IndexKey::SplTokenMint(mint_key),
+                |key, _| found_accounts.push(*key),
+            )
+            .unwrap();
         assert_eq!(found_accounts, vec![pubkey2]);
     }
 
@@ -9694,6 +9747,7 @@ pub mod tests {
     fn setup_scan(
         db: Arc<AccountsDb>,
         scan_ancestors: Arc<Ancestors>,
+        slot_id: SlotId,
         stall_key: Pubkey,
     ) -> ScanTracker {
         let exit = Arc::new(AtomicBool::new(false));
@@ -9706,6 +9760,7 @@ pub mod tests {
             .spawn(move || {
                 db.scan_accounts(
                     &scan_ancestors,
+                    slot_id,
                     |_collector: &mut Vec<(Pubkey, AccountSharedData)>, maybe_account| {
                         ready_.store(true, Ordering::Relaxed);
                         if let Some((pubkey, _, _)) = maybe_account {
@@ -9720,7 +9775,8 @@ pub mod tests {
                             }
                         }
                     },
-                );
+                )
+                .unwrap();
             })
             .unwrap();
 
@@ -9765,7 +9821,8 @@ pub mod tests {
         let max_scan_root = 0;
         db.add_root(max_scan_root);
         let scan_ancestors: Arc<Ancestors> = Arc::new(vec![(0, 1), (1, 1)].into_iter().collect());
-        let scan_tracker = setup_scan(db.clone(), scan_ancestors.clone(), account_key2);
+        let slot_id = 0;
+        let scan_tracker = setup_scan(db.clone(), scan_ancestors.clone(), slot_id, account_key2);
 
         // Add a new root 2
         let new_root = 2;
@@ -9825,7 +9882,8 @@ pub mod tests {
         assert_eq!(account.0.lamports(), slot1_account.lamports());
 
         // Simulate dropping the bank, which finally removes the slot from the cache
-        db.purge_slot(1, false);
+        let slot_id = 1;
+        db.purge_slot(1, slot_id, false);
         assert!(db
             .do_load(
                 &scan_ancestors,
@@ -9928,7 +9986,13 @@ pub mod tests {
             accounts_db.add_root(*slot as Slot);
             if Some(*slot) == scan_slot {
                 let ancestors = Arc::new(vec![(stall_slot, 1), (*slot, 1)].into_iter().collect());
-                scan_tracker = Some(setup_scan(accounts_db.clone(), ancestors, scan_stall_key));
+                let slot_id = 0;
+                scan_tracker = Some(setup_scan(
+                    accounts_db.clone(),
+                    ancestors,
+                    slot_id,
+                    scan_stall_key,
+                ));
                 assert_eq!(
                     accounts_db.accounts_index.min_ongoing_scan_root().unwrap(),
                     *slot
@@ -10757,7 +10821,12 @@ pub mod tests {
             account.set_lamports(lamports);
 
             // Pick random 50% of the slots to pass to `remove_unrooted_slots()`
-            let mut all_slots: Vec<Slot> = (0..num_cached_slots).collect();
+            let mut all_slots: Vec<(Slot, SlotId)> = (0..num_cached_slots)
+                .map(|slot| {
+                    let slot_id = slot + 1;
+                    (slot, slot_id)
+                })
+                .collect();
             all_slots.shuffle(&mut rand::thread_rng());
             let slots_to_dump = &all_slots[0..num_cached_slots as usize / 2];
             let slots_to_keep = &all_slots[num_cached_slots as usize / 2..];
@@ -10790,7 +10859,7 @@ pub mod tests {
 
             // Check that all the slots in `slots_to_dump` were completely removed from the
             // cache, storage, and index
-            for slot in slots_to_dump {
+            for (slot, _) in slots_to_dump {
                 assert!(db.storage.get_slot_storage_entries(*slot).is_none());
                 assert!(db.accounts_cache.slot_cache(*slot).is_none());
                 let account_in_slot = slot_to_pubkey_map[slot];
@@ -10803,7 +10872,7 @@ pub mod tests {
             // Wait for flush to finish before starting next trial
             flush_done_receiver.recv().unwrap();
 
-            for slot in slots_to_keep {
+            for (slot, slot_id) in slots_to_keep {
                 let account_in_slot = slot_to_pubkey_map[slot];
                 assert!(db
                     .load(
@@ -10814,7 +10883,7 @@ pub mod tests {
                     .is_some());
                 // Clear for next iteration so that `assert!(self.storage.get_slot_stores(purged_slot).is_none());`
                 // in `purge_slot_pubkeys()` doesn't trigger
-                db.remove_unrooted_slots(&[*slot]);
+                db.remove_unrooted_slots(&[(*slot, *slot_id)]);
             }
         }
 
