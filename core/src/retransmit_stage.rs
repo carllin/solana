@@ -10,7 +10,9 @@ use {
         cluster_slots_service::{ClusterSlotsService, ClusterSlotsUpdateReceiver},
         completed_data_sets_service::CompletedDataSetsSender,
         packet_hasher::PacketHasher,
-        repair_service::{DuplicateSlotsResetSender, RepairInfo},
+        repair_service::{
+            DuplicateSlotRepairRequestReceiver, DuplicateSlotsResetSender, RepairInfo,
+        },
         result::{Error, Result},
         window_service::{should_retransmit_and_persist, WindowService},
     },
@@ -564,6 +566,7 @@ impl RetransmitStage {
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         duplicate_slots_sender: Sender<Slot>,
         ancestor_hashes_replay_update_receiver: AncestorHashesReplayUpdateReceiver,
+        duplicate_slot_repair_request_receiver: DuplicateSlotRepairRequestReceiver,
     ) -> Self {
         let (retransmit_sender, retransmit_receiver) = channel();
 
@@ -623,6 +626,7 @@ impl RetransmitStage {
             completed_data_sets_sender,
             duplicate_slots_sender,
             ancestor_hashes_replay_update_receiver,
+            duplicate_slot_repair_request_receiver,
         );
 
         Self {
