@@ -7,7 +7,7 @@ use crate::{
     cluster_slots::ClusterSlots,
     cluster_slots_service::{ClusterSlotsService, ClusterSlotsUpdateReceiver},
     completed_data_sets_service::CompletedDataSetsSender,
-    repair_service::{DuplicateSlotsResetSender, RepairInfo},
+    repair_service::{DuplicateSlotRepairRequestReceiver, DuplicateSlotsResetSender, RepairInfo},
     result::{Error, Result},
     window_service::{should_retransmit_and_persist, WindowService},
 };
@@ -542,6 +542,7 @@ impl RetransmitStage {
         max_slots: &Arc<MaxSlots>,
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         duplicate_slots_sender: Sender<Slot>,
+        duplicate_slot_repair_request_receiver: DuplicateSlotRepairRequestReceiver,
     ) -> Self {
         let (retransmit_sender, retransmit_receiver) = channel();
 
@@ -600,6 +601,7 @@ impl RetransmitStage {
             verified_vote_receiver,
             completed_data_sets_sender,
             duplicate_slots_sender,
+            duplicate_slot_repair_request_receiver,
         );
 
         Self {

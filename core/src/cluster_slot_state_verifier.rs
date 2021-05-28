@@ -4,28 +4,54 @@ use crate::{
 };
 use solana_ledger::blockstore::Blockstore;
 use solana_sdk::{clock::Slot, hash::Hash};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub(crate) type DuplicateSlotsTracker = BTreeSet<Slot>;
-pub(crate) type DuplicateSlotsToRepair = HashSet<(Slot, Hash)>;
+pub(crate) type DuplicateSlotsToRepair = HashMap<Slot, Hash>;
 pub(crate) type GossipDuplicateConfirmedSlots = BTreeMap<Slot, Hash>;
+pub(crate) type EpochSlotsFrozenSlots = BTreeMap<Slot, Hash>;
 type SlotStateHandler = fn(SlotStateHandlerArgs) -> Vec<ResultingStateChange>;
 
+#[derive(Clone)]
 struct SlotStateHandlerArgs<'a> {
     slot: Slot,
     bank_frozen_hash: Hash,
     cluster_duplicate_confirmed_hash: Option<&'a Hash>,
     is_slot_duplicate: bool,
     is_dead: bool,
+    epoch_slots_frozen_hash: Option<&'a Hash>,
     slot_state_update: SlotStateUpdate,
 }
 
-#[derive(PartialEq, Debug)]
+impl<'a> SlotStateHandlerArgs<'a> {
+    #[cfg(test)]
+    fn new_dead_slot_args(
+        slot: Slot,
+        cluster_duplicate_confirmed_hash: Option<&'a Hash>,
+        is_slot_duplicate: bool,
+        epoch_slots_frozen_hash: Option<&'a Hash>,
+    ) -> Self {
+        Self {
+            slot,
+            // Dead slot cannot have a non-default frozen hash because
+            // it was never frozen
+            bank_frozen_hash: Hash::default(),
+            cluster_duplicate_confirmed_hash,
+            is_slot_duplicate,
+            is_dead: true,
+            epoch_slots_frozen_hash,
+            slot_state_update: SlotStateUpdate::Dead,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
 pub enum SlotStateUpdate {
     BankFrozen,
     DuplicateConfirmed,
     Dead,
     Duplicate,
+    EpochSlotsFrozen(Hash),
 }
 
 #[derive(PartialEq, Debug)]
@@ -34,11 +60,16 @@ pub enum ResultingStateChange {
     BankFrozen(Hash),
     // Hash of our current frozen version of the slot
     MarkSlotDuplicate(Hash),
-    // Hash of the cluster confirmed slot that is not equivalent
-    // to our frozen version of the slot
-    RepairDuplicateConfirmedVersion(Hash),
+    // Hash of the either:
+    // 1) Cluster duplicate confirmed slot
+    // 2) Epoch Slots frozen sampled slot
+    // that is not equivalent to our frozen version of the slot
+    RepairClusterVersion(Hash),
     // Hash of our current frozen version of the slot
     DuplicateConfirmedSlotMatchesCluster(Hash),
+    // Hash returned from EpochSlots does not match the duplicate
+    // confirmed hash detected from replay or gossip.
+    EpochSlotsMismatchedHash,
 }
 
 impl SlotStateUpdate {
@@ -48,6 +79,7 @@ impl SlotStateUpdate {
             SlotStateUpdate::BankFrozen => on_frozen_slot,
             SlotStateUpdate::DuplicateConfirmed => on_cluster_update,
             SlotStateUpdate::Duplicate => on_cluster_update,
+            SlotStateUpdate::EpochSlotsFrozen(_) => on_cluster_update,
         }
     }
 }
@@ -58,18 +90,27 @@ fn on_dead_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
         bank_frozen_hash,
         cluster_duplicate_confirmed_hash,
         is_dead,
+        epoch_slots_frozen_hash,
         slot_state_update,
         ..
     } = args;
+
+    match slot_state_update {
+        SlotStateUpdate::DuplicateConfirmed
+        | SlotStateUpdate::Dead
+        | SlotStateUpdate::EpochSlotsFrozen(_)
+        | SlotStateUpdate::Duplicate => (),
+        SlotStateUpdate::BankFrozen => panic!("Invalid transition!"),
+    }
 
     assert!(is_dead);
     // Bank should not have been frozen if the slot was marked dead
     assert_eq!(bank_frozen_hash, Hash::default());
     if let Some(cluster_duplicate_confirmed_hash) = cluster_duplicate_confirmed_hash {
-        return match slot_state_update {
+        match slot_state_update {
             SlotStateUpdate::DuplicateConfirmed | SlotStateUpdate::Dead => {
-                // If the cluster duplicate_confirmed some version of this slot, then
-                // there's another version
+                // If the cluster duplicate confirmed some version of this slot, then
+                // we know there's another version, and our version is incorrect.
                 warn!(
                     "Cluster duplicate_confirmed slot {} with hash {}, but we marked slot dead",
                     slot, cluster_duplicate_confirmed_hash
@@ -80,17 +121,30 @@ fn on_dead_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
                 // in the fork choice tree, so is equivalent to a no-op
                 vec![
                     ResultingStateChange::MarkSlotDuplicate(Hash::default()),
-                    ResultingStateChange::RepairDuplicateConfirmedVersion(
-                        *cluster_duplicate_confirmed_hash,
-                    ),
+                    ResultingStateChange::RepairClusterVersion(*cluster_duplicate_confirmed_hash),
                 ]
             }
-
-            _ => vec![],
-        };
+            SlotStateUpdate::EpochSlotsFrozen(_) | SlotStateUpdate::Duplicate => vec![],
+            SlotStateUpdate::BankFrozen => panic!("Invalid transition!"),
+        }
+    } else if let Some(epoch_slots_frozen_hash) = epoch_slots_frozen_hash {
+        match slot_state_update {
+            SlotStateUpdate::Dead | SlotStateUpdate::EpochSlotsFrozen(_) => {
+                // Lower priority than having seen an actual confirmed hash in the `if` case above
+                warn!(
+                    "EpochSlots sample returned slot {} with hash {}, but we marked slot dead",
+                    slot, epoch_slots_frozen_hash
+                );
+                vec![ResultingStateChange::RepairClusterVersion(
+                    *epoch_slots_frozen_hash,
+                )]
+            }
+            SlotStateUpdate::DuplicateConfirmed | SlotStateUpdate::Duplicate => vec![],
+            SlotStateUpdate::BankFrozen => panic!("Invalid transition!"),
+        }
+    } else {
+        vec![]
     }
-
-    vec![]
 }
 
 fn on_frozen_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
@@ -100,12 +154,21 @@ fn on_frozen_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
         cluster_duplicate_confirmed_hash,
         is_slot_duplicate,
         is_dead,
+        epoch_slots_frozen_hash,
         slot_state_update,
     } = args;
     // If a slot is marked frozen, the bank hash should not be default,
     // and the slot should not be dead
     assert!(bank_frozen_hash != Hash::default());
     assert!(!is_dead);
+
+    match slot_state_update {
+        SlotStateUpdate::DuplicateConfirmed
+        | SlotStateUpdate::BankFrozen
+        | SlotStateUpdate::EpochSlotsFrozen(_)
+        | SlotStateUpdate::Duplicate => (),
+        SlotStateUpdate::Dead => panic!("Invalid transition!"),
+    }
 
     let mut state_changes = if slot_state_update == SlotStateUpdate::BankFrozen {
         vec![ResultingStateChange::BankFrozen(bank_frozen_hash)]
@@ -115,26 +178,50 @@ fn on_frozen_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
 
     if let Some(cluster_duplicate_confirmed_hash) = cluster_duplicate_confirmed_hash {
         // If the cluster duplicate_confirmed some version of this slot, then
-        // confirm our version agrees with the cluster,
-        if *cluster_duplicate_confirmed_hash != bank_frozen_hash {
-            // If the versions do not match, modify fork choice rule
-            // to exclude our version from being voted on and also
-            // repair correct version
-            warn!(
-                "Cluster duplicate_confirmed slot {} with hash {}, but we froze slot with hash {}",
-                slot, cluster_duplicate_confirmed_hash, bank_frozen_hash
-            );
-            state_changes.push(ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash));
-            state_changes.push(ResultingStateChange::RepairDuplicateConfirmedVersion(
-                *cluster_duplicate_confirmed_hash,
-            ));
-        } else {
-            // If the versions match, then add the slot to the candidate
-            // set to account for the case where it was removed earlier
-            // by the `on_duplicate_slot()` handler
-            state_changes.push(ResultingStateChange::DuplicateConfirmedSlotMatchesCluster(
-                bank_frozen_hash,
-            ));
+        // confirm our version agrees with the cluster
+        match slot_state_update {
+            SlotStateUpdate::BankFrozen | SlotStateUpdate::DuplicateConfirmed => {
+                if *cluster_duplicate_confirmed_hash != bank_frozen_hash {
+                    // If the versions do not match, modify fork choice rule
+                    // to exclude our version from being voted on and also
+                    // repair correct version
+                    warn!(
+                        "Cluster duplicate_confirmed slot {} with hash {}, but we froze slot with hash {}",
+                        slot, cluster_duplicate_confirmed_hash, bank_frozen_hash
+                    );
+                    state_changes.push(ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash));
+                    state_changes.push(ResultingStateChange::RepairClusterVersion(
+                        *cluster_duplicate_confirmed_hash,
+                    ));
+                } else {
+                    // If the versions match, then add the slot to the candidate
+                    // set to account for the case where it was removed earlier
+                    // by the `on_duplicate_slot()` handler
+                    state_changes.push(ResultingStateChange::DuplicateConfirmedSlotMatchesCluster(
+                        bank_frozen_hash,
+                    ));
+                }
+            }
+            SlotStateUpdate::EpochSlotsFrozen(_) | SlotStateUpdate::Duplicate => {}
+            SlotStateUpdate::Dead => panic!("Invalid transition!"),
+        }
+    } else if let Some(epoch_slots_frozen_hash) = epoch_slots_frozen_hash {
+        match slot_state_update {
+            SlotStateUpdate::BankFrozen | SlotStateUpdate::EpochSlotsFrozen(_) => {
+                if *epoch_slots_frozen_hash != bank_frozen_hash {
+                    warn!(
+                        "EpochSlots sample returned slot {} with hash {}, but we froze slot
+                        with hash {}",
+                        slot, epoch_slots_frozen_hash, bank_frozen_hash
+                    );
+                    state_changes.push(ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash));
+                    state_changes.push(ResultingStateChange::RepairClusterVersion(
+                        *epoch_slots_frozen_hash,
+                    ));
+                }
+            }
+            SlotStateUpdate::DuplicateConfirmed | SlotStateUpdate::Duplicate => (),
+            SlotStateUpdate::Dead => panic!("Invalid transition!"),
         }
     } else if is_slot_duplicate {
         // If we detected a duplicate, but have not yet seen any version
@@ -158,8 +245,18 @@ fn on_frozen_slot(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
 //
 // This signals external information about this slot, which affects
 // this validator's understanding of the validity of this slot
-fn on_cluster_update(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
-    if args.is_dead {
+fn on_cluster_update(mut args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
+    let mut state_changes = vec![];
+    if !check_epoch_slots_hash_matches_duplicate_confirmed_hash(
+        args.slot,
+        args.epoch_slots_frozen_hash,
+        args.cluster_duplicate_confirmed_hash,
+    ) {
+        args.epoch_slots_frozen_hash = None;
+        state_changes.push(ResultingStateChange::EpochSlotsMismatchedHash);
+    }
+
+    state_changes.extend(if args.is_dead {
         on_dead_slot(args)
     } else if args.bank_frozen_hash != Hash::default() {
         // This case is mutually exclusive with is_dead case above because if a slot is dead,
@@ -167,7 +264,9 @@ fn on_cluster_update(args: SlotStateHandlerArgs) -> Vec<ResultingStateChange> {
         on_frozen_slot(args)
     } else {
         vec![]
-    }
+    });
+
+    state_changes
 }
 
 fn get_cluster_duplicate_confirmed_hash<'a>(
@@ -210,6 +309,7 @@ fn apply_state_changes(
     fork_choice: &mut HeaviestSubtreeForkChoice,
     duplicate_slots_to_repair: &mut DuplicateSlotsToRepair,
     blockstore: &Blockstore,
+    epoch_slots_frozen_slots: &mut EpochSlotsFrozenSlots,
     state_changes: Vec<ResultingStateChange>,
 ) {
     // Handle cases where the bank is frozen, but not duplicate confirmed
@@ -228,10 +328,8 @@ fn apply_state_changes(
             ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash) => {
                 fork_choice.mark_fork_invalid_candidate(&(slot, bank_frozen_hash));
             }
-            ResultingStateChange::RepairDuplicateConfirmedVersion(
-                cluster_duplicate_confirmed_hash,
-            ) => {
-                duplicate_slots_to_repair.insert((slot, cluster_duplicate_confirmed_hash));
+            ResultingStateChange::RepairClusterVersion(cluster_duplicate_confirmed_hash) => {
+                duplicate_slots_to_repair.insert(slot, cluster_duplicate_confirmed_hash);
             }
             ResultingStateChange::DuplicateConfirmedSlotMatchesCluster(bank_frozen_hash) => {
                 not_duplicate_confirmed_frozen_hash = None;
@@ -245,12 +343,51 @@ fn apply_state_changes(
                         new_duplicate_confirmed_slot_hashes.into_iter(),
                     )
                     .unwrap();
+                duplicate_slots_to_repair.remove(&slot);
+            }
+            ResultingStateChange::EpochSlotsMismatchedHash => {
+                // Even if the order of events is:
+                // 1) DuplicateConfirmed(hash1), mismatched deteced, add hash1 to
+                //    `duplicate_slots_to_repair`
+                // 2) Dump + Repair in Replay based on `duplicate_slots_to_repair`
+                // 3) EpochSlotsFrozen(hash2) before replay of new version of the
+                //    slot finishes replaying
+                // 4) Ran the `state_handler`.
+                // We won't re-add `hash1` to `duplicate_slots_to_repair` and
+                // trigger another dump + repair because the unfrozen bank hash is still
+                // default, and all the state handlers take no action when the bank
+                // hash is still default.
+                epoch_slots_frozen_slots
+                    .remove(&slot)
+                    .expect("epoch_slots_frozen_slots must be some at this point");
             }
         }
     }
 
     if let Some(frozen_hash) = not_duplicate_confirmed_frozen_hash {
         blockstore.insert_bank_hash(slot, frozen_hash, false);
+    }
+}
+
+fn check_epoch_slots_hash_matches_duplicate_confirmed_hash(
+    slot: Slot,
+    epoch_slots_frozen_hash: Option<&Hash>,
+    gossip_duplicate_confirmed_hash: Option<&Hash>,
+) -> bool {
+    match (epoch_slots_frozen_hash, gossip_duplicate_confirmed_hash) {
+        (Some(epoch_slots_frozen_hash), Some(gossip_duplicate_confirmed_hash))
+            if epoch_slots_frozen_hash != gossip_duplicate_confirmed_hash =>
+        {
+            warn!(
+                "EpochSlots sample for slot {} returned hash {}, 
+                  but hash {} was duplicate confirmed. Removing bad hash 
+                  from EpochSlots sample!",
+                slot, epoch_slots_frozen_hash, gossip_duplicate_confirmed_hash
+            );
+            false
+        }
+
+        _ => true,
     }
 }
 
@@ -262,9 +399,10 @@ pub(crate) fn check_slot_agrees_with_cluster(
     bank_frozen_hash: Option<Hash>,
     duplicate_slots_tracker: &mut DuplicateSlotsTracker,
     gossip_duplicate_confirmed_slots: &GossipDuplicateConfirmedSlots,
+    epoch_slots_frozen_slots: &mut EpochSlotsFrozenSlots,
     progress: &ProgressMap,
     fork_choice: &mut HeaviestSubtreeForkChoice,
-    duplicate_slots_to_repair: &mut HashSet<(Slot, Hash)>,
+    duplicate_slots_to_repair: &mut DuplicateSlotsToRepair,
     slot_state_update: SlotStateUpdate,
 ) {
     info!(
@@ -286,6 +424,17 @@ pub(crate) fn check_slot_agrees_with_cluster(
         // If this slot has already been processed before, return
         if !duplicate_slots_tracker.insert(slot) {
             return;
+        }
+    }
+
+    if let SlotStateUpdate::EpochSlotsFrozen(new_epoch_slots_frozen_hash) = slot_state_update {
+        if let Some(old_epoch_slots_frozen_hash) =
+            epoch_slots_frozen_slots.insert(slot, new_epoch_slots_frozen_hash)
+        {
+            if old_epoch_slots_frozen_hash == new_epoch_slots_frozen_hash {
+                // If EpochSlots has already told us this same hash was frozen, return
+                return;
+            }
         }
     }
 
@@ -312,17 +461,20 @@ pub(crate) fn check_slot_agrees_with_cluster(
     );
     let is_slot_duplicate = duplicate_slots_tracker.contains(&slot);
     let is_dead = progress.is_dead(slot).expect("If the frozen hash exists, then the slot must exist in bank forks and thus in progress map");
+    let epoch_slots_frozen_hash: Option<&Hash> = epoch_slots_frozen_slots.get(&slot);
 
     info!(
         "check_slot_agrees_with_cluster() state
         is_local_replay_duplicate_confirmed: {:?},
         cluster_duplicate_confirmed_hash: {:?},
         is_slot_duplicate: {:?},
-        is_dead: {:?}",
+        is_dead: {:?},
+        epoch_slots_frozen_hash: {:?}",
         is_local_replay_duplicate_confirmed,
         cluster_duplicate_confirmed_hash,
         is_slot_duplicate,
         is_dead,
+        epoch_slots_frozen_hash,
     );
 
     let state_handler = slot_state_update.to_handler();
@@ -332,6 +484,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
         cluster_duplicate_confirmed_hash,
         is_slot_duplicate,
         is_dead,
+        epoch_slots_frozen_hash,
         slot_state_update,
     };
     let state_changes = state_handler(args);
@@ -340,6 +493,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
         fork_choice,
         duplicate_slots_to_repair,
         blockstore,
+        epoch_slots_frozen_slots,
         state_changes,
     );
 }
@@ -389,6 +543,7 @@ mod test {
         // Common state
         let slot = 0;
         let cluster_duplicate_confirmed_hash = None;
+        let epoch_slots_frozen_hash = None;
         let is_dead = false;
 
         // Slot is not detected as duplicate yet
@@ -405,6 +560,7 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
+                epoch_slots_frozen_hash,
                 slot_state_update: SlotStateUpdate::BankFrozen
             }),
             vec![ResultingStateChange::BankFrozen(bank_frozen_hash)]
@@ -420,6 +576,7 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
+                epoch_slots_frozen_hash,
                 slot_state_update: SlotStateUpdate::Duplicate
             }),
             vec![ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash)]
@@ -433,8 +590,10 @@ mod test {
         let is_slot_duplicate = false;
         let is_dead = false;
 
-        // No cluster duplicate_confirmed hash yet
+        // No cluster duplicate_confirmed hash or EpochSlots
+        // sampled slot yet
         let mut cluster_duplicate_confirmed_hash = None;
+        let epoch_slots_frozen_hash = None;
 
         // Simulate freezing the bank, add a
         // new non-default hash, should return
@@ -447,6 +606,7 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
+                epoch_slots_frozen_hash,
                 slot_state_update: SlotStateUpdate::BankFrozen
             }),
             vec![ResultingStateChange::BankFrozen(bank_frozen_hash)]
@@ -462,6 +622,7 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
+                epoch_slots_frozen_hash,
                 slot_state_update: SlotStateUpdate::DuplicateConfirmed,
             }),
             vec![ResultingStateChange::DuplicateConfirmedSlotMatchesCluster(
@@ -480,6 +641,7 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
+                epoch_slots_frozen_hash,
                 slot_state_update: SlotStateUpdate::BankFrozen,
             }),
             vec![
@@ -500,11 +662,12 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
+                epoch_slots_frozen_hash,
                 slot_state_update: SlotStateUpdate::DuplicateConfirmed,
             }),
             vec![
                 ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash),
-                ResultingStateChange::RepairDuplicateConfirmedVersion(mismatched_hash),
+                ResultingStateChange::RepairClusterVersion(mismatched_hash),
             ]
         );
     }
@@ -518,6 +681,7 @@ mod test {
 
         // Bank is not frozen yet
         let mut cluster_duplicate_confirmed_hash = None;
+        let epoch_slots_frozen_hash = None;
         let mut bank_frozen_hash = Hash::default();
 
         // Mark the slot as duplicate. Because our version of the slot is not
@@ -529,6 +693,7 @@ mod test {
             cluster_duplicate_confirmed_hash,
             is_slot_duplicate,
             is_dead,
+            epoch_slots_frozen_hash,
             slot_state_update: SlotStateUpdate::Duplicate,
         })
         .is_empty());
@@ -543,6 +708,7 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
+                epoch_slots_frozen_hash,
                 slot_state_update: SlotStateUpdate::BankFrozen,
             }),
             vec![
@@ -561,6 +727,7 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
+                epoch_slots_frozen_hash,
                 slot_state_update: SlotStateUpdate::DuplicateConfirmed,
             }),
             vec![ResultingStateChange::DuplicateConfirmedSlotMatchesCluster(
@@ -580,11 +747,12 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
+                epoch_slots_frozen_hash,
                 slot_state_update: SlotStateUpdate::DuplicateConfirmed,
             }),
             vec![
                 ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash),
-                ResultingStateChange::RepairDuplicateConfirmedVersion(mismatched_hash),
+                ResultingStateChange::RepairClusterVersion(mismatched_hash),
             ]
         );
     }
@@ -594,6 +762,7 @@ mod test {
         let slot = 0;
         let correct_hash = Hash::new_unique();
         let cluster_duplicate_confirmed_hash = Some(&correct_hash);
+        let epoch_slots_frozen_hash = None;
         let is_dead = false;
         // Bank is not frozen yet
         let bank_frozen_hash = Hash::default();
@@ -608,6 +777,7 @@ mod test {
             cluster_duplicate_confirmed_hash,
             is_slot_duplicate,
             is_dead,
+            epoch_slots_frozen_hash,
             slot_state_update: SlotStateUpdate::DuplicateConfirmed,
         })
         .is_empty());
@@ -621,6 +791,7 @@ mod test {
         let bank_frozen_hash = Hash::default();
 
         // Simulate marking slot dead
+        let mut epoch_slots_frozen_hash = None;
         let mut is_slot_duplicate = false;
         let is_dead = true;
         assert!(on_cluster_update(SlotStateHandlerArgs {
@@ -629,6 +800,7 @@ mod test {
             cluster_duplicate_confirmed_hash,
             is_slot_duplicate,
             is_dead,
+            epoch_slots_frozen_hash,
             slot_state_update: SlotStateUpdate::Dead,
         })
         .is_empty());
@@ -644,39 +816,15 @@ mod test {
             cluster_duplicate_confirmed_hash,
             is_slot_duplicate,
             is_dead,
+            epoch_slots_frozen_hash,
             slot_state_update: SlotStateUpdate::Duplicate,
         })
         .is_empty());
-    }
 
-    #[test]
-    fn test_duplicate_confirmed_dead_before_duplicate() {
-        let slot = 0;
+        // If the EpochSlots tell us a version of the slot has been frozen,
+        // we should try to repair that slot
         let correct_hash = Hash::new_unique();
-
-        // 1) Simulate marking our version of the slot as dead,
-        // cluster has not duplicate confirmed a slot yet.
-        let bank_frozen_hash = Hash::default();
-        let mut is_slot_duplicate = false;
-        let mut is_dead = true;
-        let cluster_duplicate_confirmed_hash = None;
-        assert!(on_cluster_update(SlotStateHandlerArgs {
-            slot,
-            bank_frozen_hash,
-            cluster_duplicate_confirmed_hash,
-            is_slot_duplicate,
-            is_dead,
-            slot_state_update: SlotStateUpdate::Dead
-        })
-        .is_empty());
-
-        // 2) Now simulate that the cluster has duplicate confirmed some version of the slot
-        let cluster_duplicate_confirmed_hash = Some(&correct_hash);
-
-        // Even if the duplicate signal hasn't come in yet,
-        // we can deduce the slot is duplicate AND we have,
-        // the wrong version, so should mark the slot as duplicate,
-        // and repair the correct version
+        epoch_slots_frozen_hash = Some(&correct_hash);
         assert_eq!(
             on_cluster_update(SlotStateHandlerArgs {
                 slot,
@@ -684,46 +832,226 @@ mod test {
                 cluster_duplicate_confirmed_hash,
                 is_slot_duplicate,
                 is_dead,
-                slot_state_update: SlotStateUpdate::DuplicateConfirmed
+                epoch_slots_frozen_hash,
+                slot_state_update: SlotStateUpdate::EpochSlotsFrozen(correct_hash),
             }),
+            vec![ResultingStateChange::RepairClusterVersion(correct_hash)]
+        );
+    }
+
+    fn create_default_dead_slot_args<'a>(slot: Slot) -> SlotStateHandlerArgs<'a> {
+        let cluster_duplicate_confirmed_hash = None;
+        let is_slot_duplicate = false;
+        let epoch_slots_frozen_hash = None;
+        let dead_slot_args = SlotStateHandlerArgs::new_dead_slot_args(
+            slot,
+            cluster_duplicate_confirmed_hash,
+            is_slot_duplicate,
+            epoch_slots_frozen_hash,
+        );
+        assert!(on_cluster_update(dead_slot_args.clone()).is_empty());
+        dead_slot_args
+    }
+
+    fn simulate_duplicate_confirmed_on_args<'a>(
+        args: &mut SlotStateHandlerArgs<'a>,
+        cluster_duplicate_confirmed_hash: &'a Hash,
+    ) {
+        args.cluster_duplicate_confirmed_hash = Some(cluster_duplicate_confirmed_hash);
+        args.slot_state_update = SlotStateUpdate::DuplicateConfirmed;
+    }
+
+    fn simulate_duplicate_on_args(args: &mut SlotStateHandlerArgs) {
+        args.is_slot_duplicate = true;
+        args.slot_state_update = SlotStateUpdate::Duplicate;
+    }
+
+    fn simulate_bank_frozen_on_args(args: &mut SlotStateHandlerArgs, bank_frozen_hash: Hash) {
+        args.bank_frozen_hash = bank_frozen_hash;
+        args.is_dead = false;
+        args.slot_state_update = SlotStateUpdate::BankFrozen;
+    }
+
+    fn simulate_unreplayed_bank_on_args(args: &mut SlotStateHandlerArgs) {
+        args.bank_frozen_hash = Hash::default();
+        args.is_dead = false;
+    }
+
+    fn simulate_epoch_slots_frozen_on_args<'a>(
+        args: &mut SlotStateHandlerArgs<'a>,
+        epoch_slots_frozen_hash: &'a Hash,
+    ) {
+        args.epoch_slots_frozen_hash = Some(epoch_slots_frozen_hash);
+        args.slot_state_update = SlotStateUpdate::EpochSlotsFrozen(*epoch_slots_frozen_hash);
+    }
+
+    #[test]
+    fn test_dead_duplicate_confirmed_before_duplicate() {
+        let slot = 0;
+
+        // 1) Simulate marking our version of the slot as dead,
+        // cluster has not duplicate confirmed a slot yet.
+        let mut args = create_default_dead_slot_args(slot);
+
+        // 2) Now simulate that the cluster has duplicate confirmed some version of the slot
+        // Even if the duplicate signal hasn't come in yet,
+        // we can deduce the slot is duplicate AND we have,
+        // the wrong version, so should mark the slot as duplicate,
+        // and repair the correct version
+        let cluster_duplicate_confirmed_hash = Hash::new_unique();
+        simulate_duplicate_confirmed_on_args(&mut args, &cluster_duplicate_confirmed_hash);
+        assert_eq!(
+            on_cluster_update(args.clone()),
             vec![
-                ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash),
-                ResultingStateChange::RepairDuplicateConfirmedVersion(correct_hash),
+                ResultingStateChange::MarkSlotDuplicate(args.bank_frozen_hash),
+                ResultingStateChange::RepairClusterVersion(cluster_duplicate_confirmed_hash),
             ]
         );
 
         // 3) When the SlotStateUpdate::Duplicate signal comes in, it should not trigger
         // another series of repair requests, even if the `cluster_duplicate_confirmed_hash`
         // is known.
-        is_slot_duplicate = true;
-        assert!(on_cluster_update(SlotStateHandlerArgs {
-            slot,
-            bank_frozen_hash,
-            cluster_duplicate_confirmed_hash,
-            is_slot_duplicate,
-            is_dead,
-            slot_state_update: SlotStateUpdate::Duplicate
-        })
-        .is_empty());
+        simulate_duplicate_on_args(&mut args);
+        assert!(on_cluster_update(args.clone()).is_empty());
 
         // 4) After we dump and repair and replay another version of the slot, if that version
         // still mismatches, we should trigger another repair
         let new_bad_bank_frozen_hash = Hash::new_unique();
-        is_dead = false;
+        simulate_bank_frozen_on_args(&mut args, new_bad_bank_frozen_hash);
         assert_eq!(
-            on_frozen_slot(SlotStateHandlerArgs {
-                slot,
-                bank_frozen_hash: new_bad_bank_frozen_hash,
-                cluster_duplicate_confirmed_hash,
-                is_slot_duplicate,
-                is_dead,
-                slot_state_update: SlotStateUpdate::BankFrozen,
-            }),
+            on_frozen_slot(args),
             vec![
                 ResultingStateChange::BankFrozen(new_bad_bank_frozen_hash),
                 ResultingStateChange::MarkSlotDuplicate(new_bad_bank_frozen_hash),
-                ResultingStateChange::RepairDuplicateConfirmedVersion(correct_hash),
+                ResultingStateChange::RepairClusterVersion(cluster_duplicate_confirmed_hash),
             ]
+        );
+    }
+
+    #[test]
+    fn test_dead_then_epoch_slots_frozen() {
+        let slot = 0;
+
+        // Simulate marking our version of the slot as dead,
+        // cluster has not duplicate confirmed a slot yet.
+        let mut args = create_default_dead_slot_args(slot);
+
+        // If there is no cluster_duplicate_confirmed_hash yet, but we do have
+        // a version of the slot from EpochSlots sampling, then we should also
+        // should trigger marking the slot as a duplicate, and also try to repair
+        // the correct version
+        assert!(args.cluster_duplicate_confirmed_hash.is_none());
+        let epoch_slots_frozen_hash = Hash::new_unique();
+        simulate_epoch_slots_frozen_on_args(&mut args, &epoch_slots_frozen_hash);
+        assert_eq!(
+            on_cluster_update(args.clone()),
+            vec![ResultingStateChange::RepairClusterVersion(
+                epoch_slots_frozen_hash
+            ),]
+        );
+    }
+
+    #[test]
+    fn test_mismatched_bank_frozen_then_epoch_slots_frozen() {
+        let slot = 0;
+
+        // Simulate marking our version of the slot as dead,
+        // cluster has not duplicate confirmed a slot yet.
+        let mut args = create_default_dead_slot_args(slot);
+
+        // If there is no cluster_duplicate_confirmed_hash yet, and our
+        // bank frozen hash does not match the version of the slot from EpochSlots
+        // sampling, then we should also should trigger marking the slot as a duplicate,
+        // and also try to repair the correct version.
+        assert!(args.cluster_duplicate_confirmed_hash.is_none());
+        let bank_frozen_hash = Hash::new_unique();
+        let epoch_slots_frozen_hash = Hash::new_unique();
+        simulate_bank_frozen_on_args(&mut args, bank_frozen_hash);
+        simulate_epoch_slots_frozen_on_args(&mut args, &epoch_slots_frozen_hash);
+        assert_eq!(
+            on_cluster_update(args.clone()),
+            vec![
+                ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash),
+                ResultingStateChange::RepairClusterVersion(epoch_slots_frozen_hash),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_matching_bank_frozen_then_epoch_slots_frozen() {
+        let slot = 0;
+
+        // Simulate marking our version of the slot as dead,
+        // cluster has not duplicate confirmed a slot yet.
+        let mut args = create_default_dead_slot_args(slot);
+
+        // If there is no cluster_duplicate_confirmed_hash yet, and our
+        // bank frozen hash does not match the version of the slot from EpochSlots
+        // sampling, then we should also should trigger marking the slot as a duplicate,
+        // and also try to repair the correct version.
+        assert!(args.cluster_duplicate_confirmed_hash.is_none());
+        let epoch_slots_frozen_hash = Hash::new_unique();
+        simulate_bank_frozen_on_args(&mut args, epoch_slots_frozen_hash);
+        simulate_epoch_slots_frozen_on_args(&mut args, &epoch_slots_frozen_hash);
+        assert!(on_cluster_update(args.clone()).is_empty());
+    }
+
+    #[test]
+    fn test_unreplayed_bank_then_epoch_slots_frozen() {
+        let slot = 0;
+
+        // Simulate marking our version of the slot as dead,
+        // cluster has not duplicate confirmed a slot yet.
+        let mut args = create_default_dead_slot_args(slot);
+
+        // If there is no cluster_duplicate_confirmed_hash yet, and our
+        // bank frozen hash does not match the version of the slot from EpochSlots
+        // sampling, then we should also should trigger marking the slot as a duplicate,
+        // and also try to repair the correct version.
+        assert!(args.cluster_duplicate_confirmed_hash.is_none());
+        let epoch_slots_frozen_hash = Hash::new_unique();
+        simulate_unreplayed_bank_on_args(&mut args);
+        simulate_epoch_slots_frozen_on_args(&mut args, &epoch_slots_frozen_hash);
+    }
+
+    #[test]
+    fn test_duplicate_confirmed_before_epoch_slots_frozen() {
+        let slot = 0;
+
+        // 1) Simulate marking our version of the slot as dead,
+        // cluster has not duplicate confirmed a slot yet.
+        let mut args = create_default_dead_slot_args(slot);
+
+        // 2) Now simulate that the cluster has duplicate confirmed some version of the slot
+        let cluster_duplicate_confirmed_hash = Hash::new_unique();
+        simulate_duplicate_confirmed_on_args(&mut args, &cluster_duplicate_confirmed_hash);
+
+        // 3) Simulate an EpochSlots frozen signal. Since we know the duplicate
+        // confirmed hash, we should not send a repair signal even if EpochSlots
+        // signals the matching hash has been frozen, since the duplicate confirmed
+        // signal or bank frozen signal should have already triggered that repair.
+        let epoch_slots_frozen_hash = cluster_duplicate_confirmed_hash;
+        simulate_epoch_slots_frozen_on_args(&mut args, &epoch_slots_frozen_hash);
+        assert!(on_cluster_update(args.clone()).is_empty());
+
+        // 4) If EpochSlots gives a different result than the duplicate confirmed hash, result
+        // should prioritize the duplicate confirmed version, and not send another repair
+        // request.
+        let epoch_slots_frozen_hash = Hash::new_unique();
+        simulate_epoch_slots_frozen_on_args(&mut args, &epoch_slots_frozen_hash);
+        assert_eq!(
+            on_cluster_update(args.clone()),
+            vec![ResultingStateChange::EpochSlotsMismatchedHash]
+        );
+
+        // 5) If we have already sent a repair request to the network after duplicate confirmation
+        // was detected (i.e. SlotStateUpdate::DuplicateConfirmed above), the `bank_frozen_hash`
+        // would be default after Replay dumps the slot, so we should not generate another
+        // repair request here when we get the SlotStateUpdate::Duplicate update.
+        simulate_unreplayed_bank_on_args(&mut args);
+        assert_eq!(
+            on_cluster_update(args.clone()),
+            vec![ResultingStateChange::EpochSlotsMismatchedHash]
         );
     }
 
@@ -739,6 +1067,7 @@ mod test {
         } = setup();
 
         let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
+        let mut epoch_slots_frozen_slots = EpochSlotsFrozenSlots::default();
 
         // MarkSlotDuplicate should mark progress map and remove
         // the slot from fork choice
@@ -754,6 +1083,7 @@ mod test {
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             &blockstore,
+            &mut epoch_slots_frozen_slots,
             vec![ResultingStateChange::MarkSlotDuplicate(duplicate_slot_hash)],
         );
         assert!(!heaviest_subtree_fork_choice
@@ -777,7 +1107,7 @@ mod test {
         }
 
         // Simulate detecting another hash that is the correct version,
-        // RepairDuplicateConfirmedVersion should add the slot to repair
+        // RepairClusterVersion should add the slot to repair
         // to `duplicate_slots_to_repair`
         assert!(duplicate_slots_to_repair.is_empty());
         let correct_hash = Hash::new_unique();
@@ -786,12 +1116,31 @@ mod test {
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             &blockstore,
-            vec![ResultingStateChange::RepairDuplicateConfirmedVersion(
-                correct_hash,
-            )],
+            &mut epoch_slots_frozen_slots,
+            vec![ResultingStateChange::RepairClusterVersion(correct_hash)],
         );
         assert_eq!(duplicate_slots_to_repair.len(), 1);
-        assert!(duplicate_slots_to_repair.contains(&(duplicate_slot, correct_hash)));
+        assert_eq!(
+            *duplicate_slots_to_repair.get(&duplicate_slot).unwrap(),
+            correct_hash
+        );
+
+        // Simulate EpochSlots giving us a frozen hash that doesn't match
+        // the cluster duplicate confirmed hash.
+        //
+        // EpochSlotsMismatchedHash should remove the mismatched
+        // hash from `epoch_slots_frozen_slots`
+        let mismatched_hash = Hash::new_unique();
+        epoch_slots_frozen_slots.insert(duplicate_slot, mismatched_hash);
+        apply_state_changes(
+            duplicate_slot,
+            &mut heaviest_subtree_fork_choice,
+            &mut duplicate_slots_to_repair,
+            &blockstore,
+            &mut epoch_slots_frozen_slots,
+            vec![ResultingStateChange::EpochSlotsMismatchedHash],
+        );
+        assert!(epoch_slots_frozen_slots.is_empty());
     }
 
     #[test]
@@ -804,6 +1153,9 @@ mod test {
             ..
         } = setup();
 
+        let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
+        let mut epoch_slots_frozen_slots = EpochSlotsFrozenSlots::default();
+
         let duplicate_slot = bank_forks.read().unwrap().root() + 1;
         let duplicate_slot_hash = bank_forks
             .read()
@@ -811,7 +1163,6 @@ mod test {
             .get(duplicate_slot)
             .unwrap()
             .hash();
-        let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
 
         // Simulate ReplayStage freezing a Bank with the given hash.
         // BankFrozen should mark it down in Blockstore.
@@ -821,6 +1172,7 @@ mod test {
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             &blockstore,
+            &mut epoch_slots_frozen_slots,
             vec![ResultingStateChange::BankFrozen(duplicate_slot_hash)],
         );
         assert_eq!(
@@ -843,6 +1195,7 @@ mod test {
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             &blockstore,
+            &mut epoch_slots_frozen_slots,
             vec![ResultingStateChange::BankFrozen(new_bank_hash)],
         );
         assert_eq!(
@@ -864,6 +1217,9 @@ mod test {
             ..
         } = setup();
 
+        let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
+        let mut epoch_slots_frozen_slots = EpochSlotsFrozenSlots::default();
+
         let duplicate_slot = bank_forks.read().unwrap().root() + 1;
         let our_duplicate_slot_hash = bank_forks
             .read()
@@ -871,15 +1227,17 @@ mod test {
             .get(duplicate_slot)
             .unwrap()
             .hash();
-        let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
 
         // Setup and check the state that is about to change.
+        duplicate_slots_to_repair.insert(duplicate_slot, Hash::new_unique());
         assert!(blockstore.get_bank_hash(duplicate_slot).is_none());
         assert!(!blockstore.is_duplicate_confirmed(duplicate_slot));
 
         // DuplicateConfirmedSlotMatchesCluster should:
         // 1) Re-enable fork choice
-        // 2) Set the status to duplicate confirmed in Blockstore
+        // 2) Clear any pending repairs from `duplicate_slots_to_repair` since we have the
+        //    right version now
+        // 3) Set the status to duplicate confirmed in Blockstore
         let mut state_changes = vec![ResultingStateChange::DuplicateConfirmedSlotMatchesCluster(
             our_duplicate_slot_hash,
         )];
@@ -889,6 +1247,7 @@ mod test {
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             &blockstore,
+            &mut epoch_slots_frozen_slots,
             state_changes,
         );
         for child_slot in descendants
@@ -907,6 +1266,7 @@ mod test {
         assert!(heaviest_subtree_fork_choice
             .is_candidate(&(duplicate_slot, our_duplicate_slot_hash))
             .unwrap());
+        assert!(duplicate_slots_to_repair.is_empty());
         assert_eq!(
             blockstore.get_bank_hash(duplicate_slot).unwrap(),
             our_duplicate_slot_hash
@@ -947,6 +1307,7 @@ mod test {
         let root = 0;
         let mut duplicate_slots_tracker = DuplicateSlotsTracker::default();
         let gossip_duplicate_confirmed_slots = GossipDuplicateConfirmedSlots::default();
+        let mut epoch_slots_frozen_slots = EpochSlotsFrozenSlots::default();
         let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
         let duplicate_slot = 2;
         check_slot_agrees_with_cluster(
@@ -956,6 +1317,7 @@ mod test {
             initial_bank_hash,
             &mut duplicate_slots_tracker,
             &gossip_duplicate_confirmed_slots,
+            &mut epoch_slots_frozen_slots,
             &progress,
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
@@ -984,6 +1346,7 @@ mod test {
             Some(frozen_duplicate_slot_hash),
             &mut duplicate_slots_tracker,
             &gossip_duplicate_confirmed_slots,
+            &mut epoch_slots_frozen_slots,
             &progress,
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
@@ -1048,6 +1411,7 @@ mod test {
             Some(slot2_hash),
             &mut duplicate_slots_tracker,
             &gossip_duplicate_confirmed_slots,
+            &mut EpochSlotsFrozenSlots::default(),
             &progress,
             &mut heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
@@ -1079,6 +1443,7 @@ mod test {
             Some(slot3_hash),
             &mut duplicate_slots_tracker,
             &gossip_duplicate_confirmed_slots,
+            &mut EpochSlotsFrozenSlots::default(),
             &progress,
             &mut heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
@@ -1140,6 +1505,7 @@ mod test {
             Some(bank_forks.read().unwrap().get(2).unwrap().hash()),
             &mut duplicate_slots_tracker,
             &gossip_duplicate_confirmed_slots,
+            &mut EpochSlotsFrozenSlots::default(),
             &progress,
             &mut heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
@@ -1171,6 +1537,7 @@ mod test {
             Some(slot3_hash),
             &mut duplicate_slots_tracker,
             &gossip_duplicate_confirmed_slots,
+            &mut EpochSlotsFrozenSlots::default(),
             &progress,
             &mut heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
@@ -1189,6 +1556,29 @@ mod test {
             heaviest_subtree_fork_choice.best_overall_slot(),
             (3, slot3_hash)
         );
+    }
+
+    fn verify_all_slots_duplicate_confirmed(
+        bank_forks: &RwLock<BankForks>,
+        heaviest_subtree_fork_choice: &HeaviestSubtreeForkChoice,
+        upper_bound: Slot,
+        expected_is_duplicate_confirmed: bool,
+    ) {
+        for slot in 0..upper_bound {
+            let slot_hash = bank_forks.read().unwrap().get(slot).unwrap().hash();
+            let expected_is_duplicate_confirmed = expected_is_duplicate_confirmed ||
+            // root is always duplicate confirmed
+            slot == 0;
+            assert_eq!(
+                heaviest_subtree_fork_choice
+                    .is_duplicate_confirmed(&(slot, slot_hash))
+                    .unwrap(),
+                expected_is_duplicate_confirmed
+            );
+            assert!(heaviest_subtree_fork_choice
+                .latest_invalid_ancestor(&(slot, slot_hash))
+                .is_none());
+        }
     }
 
     #[test]
@@ -1210,6 +1600,7 @@ mod test {
         let root = 0;
         let mut duplicate_slots_tracker = DuplicateSlotsTracker::default();
         let mut gossip_duplicate_confirmed_slots = GossipDuplicateConfirmedSlots::default();
+        let mut epoch_slots_frozen_slots = EpochSlotsFrozenSlots::default();
         let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
 
         // Mark 3 as duplicate confirmed
@@ -1221,25 +1612,13 @@ mod test {
             Some(slot3_hash),
             &mut duplicate_slots_tracker,
             &gossip_duplicate_confirmed_slots,
+            &mut epoch_slots_frozen_slots,
             &progress,
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             SlotStateUpdate::DuplicateConfirmed,
         );
-        let verify_all_slots_duplicate_confirmed =
-            |bank_forks: &RwLock<BankForks>,
-             heaviest_subtree_fork_choice: &HeaviestSubtreeForkChoice| {
-                for slot in 0..=3 {
-                    let slot_hash = bank_forks.read().unwrap().get(slot).unwrap().hash();
-                    assert!(heaviest_subtree_fork_choice
-                        .is_duplicate_confirmed(&(slot, slot_hash))
-                        .unwrap());
-                    assert!(heaviest_subtree_fork_choice
-                        .latest_invalid_ancestor(&(slot, slot_hash))
-                        .is_none());
-                }
-            };
-        verify_all_slots_duplicate_confirmed(&bank_forks, &heaviest_subtree_fork_choice);
+        verify_all_slots_duplicate_confirmed(&bank_forks, &heaviest_subtree_fork_choice, 3, true);
         assert_eq!(
             heaviest_subtree_fork_choice.best_overall_slot(),
             (3, slot3_hash)
@@ -1256,13 +1635,190 @@ mod test {
             Some(slot1_hash),
             &mut duplicate_slots_tracker,
             &gossip_duplicate_confirmed_slots,
+            &mut epoch_slots_frozen_slots,
             &progress,
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             SlotStateUpdate::Duplicate,
         );
         assert!(duplicate_slots_tracker.contains(&1));
-        verify_all_slots_duplicate_confirmed(&bank_forks, &heaviest_subtree_fork_choice);
+        verify_all_slots_duplicate_confirmed(&bank_forks, &heaviest_subtree_fork_choice, 3, true);
+        assert_eq!(
+            heaviest_subtree_fork_choice.best_overall_slot(),
+            (3, slot3_hash)
+        );
+    }
+
+    #[test]
+    fn test_duplicate_confirmed_and_epoch_slots_frozen() {
+        // Common state
+        let InitialState {
+            mut heaviest_subtree_fork_choice,
+            progress,
+            bank_forks,
+            blockstore,
+            ..
+        } = setup();
+
+        let slot3_hash = bank_forks.read().unwrap().get(3).unwrap().hash();
+        assert_eq!(
+            heaviest_subtree_fork_choice.best_overall_slot(),
+            (3, slot3_hash)
+        );
+        let root = 0;
+        let mut duplicate_slots_tracker = DuplicateSlotsTracker::default();
+        let mut gossip_duplicate_confirmed_slots = GossipDuplicateConfirmedSlots::default();
+        let mut epoch_slots_frozen_slots = EpochSlotsFrozenSlots::default();
+        let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
+
+        // Mark 3 as only epoch slots frozen, matching our `slot3_hash`, should not duplicate
+        // confirm the slot
+        let mut expected_is_duplicate_confirmed = false;
+        check_slot_agrees_with_cluster(
+            3,
+            root,
+            &blockstore,
+            Some(slot3_hash),
+            &mut duplicate_slots_tracker,
+            &gossip_duplicate_confirmed_slots,
+            &mut epoch_slots_frozen_slots,
+            &progress,
+            &mut heaviest_subtree_fork_choice,
+            &mut duplicate_slots_to_repair,
+            SlotStateUpdate::EpochSlotsFrozen(slot3_hash),
+        );
+        verify_all_slots_duplicate_confirmed(
+            &bank_forks,
+            &heaviest_subtree_fork_choice,
+            3,
+            expected_is_duplicate_confirmed,
+        );
+        check_slot_agrees_with_cluster(
+            3,
+            root,
+            &blockstore,
+            Some(slot3_hash),
+            &mut duplicate_slots_tracker,
+            &gossip_duplicate_confirmed_slots,
+            &mut epoch_slots_frozen_slots,
+            &progress,
+            &mut heaviest_subtree_fork_choice,
+            &mut duplicate_slots_to_repair,
+            SlotStateUpdate::DuplicateConfirmed,
+        );
+        verify_all_slots_duplicate_confirmed(
+            &bank_forks,
+            &heaviest_subtree_fork_choice,
+            3,
+            expected_is_duplicate_confirmed,
+        );
+
+        // Mark 3 as duplicate confirmed and epoch slots frozen with the same hash. Should
+        // duplicate confirm all descendants of 3
+        gossip_duplicate_confirmed_slots.insert(3, slot3_hash);
+        epoch_slots_frozen_slots.insert(3, slot3_hash);
+        expected_is_duplicate_confirmed = true;
+        check_slot_agrees_with_cluster(
+            3,
+            root,
+            &blockstore,
+            Some(slot3_hash),
+            &mut duplicate_slots_tracker,
+            &gossip_duplicate_confirmed_slots,
+            &mut epoch_slots_frozen_slots,
+            &progress,
+            &mut heaviest_subtree_fork_choice,
+            &mut duplicate_slots_to_repair,
+            SlotStateUpdate::DuplicateConfirmed,
+        );
+        verify_all_slots_duplicate_confirmed(
+            &bank_forks,
+            &heaviest_subtree_fork_choice,
+            3,
+            expected_is_duplicate_confirmed,
+        );
+        assert_eq!(
+            heaviest_subtree_fork_choice.best_overall_slot(),
+            (3, slot3_hash)
+        );
+    }
+
+    #[test]
+    fn test_duplicate_confirmed_and_epoch_slots_frozen_mismatched() {
+        // Common state
+        let InitialState {
+            mut heaviest_subtree_fork_choice,
+            progress,
+            bank_forks,
+            blockstore,
+            ..
+        } = setup();
+
+        let slot3_hash = bank_forks.read().unwrap().get(3).unwrap().hash();
+        assert_eq!(
+            heaviest_subtree_fork_choice.best_overall_slot(),
+            (3, slot3_hash)
+        );
+        let root = 0;
+        let mut duplicate_slots_tracker = DuplicateSlotsTracker::default();
+        let mut gossip_duplicate_confirmed_slots = GossipDuplicateConfirmedSlots::default();
+        let mut epoch_slots_frozen_slots = EpochSlotsFrozenSlots::default();
+        let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
+
+        // Mark 3 as only epoch slots frozen with different hash than the our
+        // locally replayed `slot3_hash`. This should not duplicate confirm the slot,
+        // but should add the epoch slots frozen hash to the repair set
+        let mismatched_hash = Hash::new_unique();
+        let mut expected_is_duplicate_confirmed = false;
+        check_slot_agrees_with_cluster(
+            3,
+            root,
+            &blockstore,
+            Some(slot3_hash),
+            &mut duplicate_slots_tracker,
+            &gossip_duplicate_confirmed_slots,
+            &mut epoch_slots_frozen_slots,
+            &progress,
+            &mut heaviest_subtree_fork_choice,
+            &mut duplicate_slots_to_repair,
+            SlotStateUpdate::EpochSlotsFrozen(mismatched_hash),
+        );
+        assert_eq!(*duplicate_slots_to_repair.get(&3).unwrap(), mismatched_hash);
+        verify_all_slots_duplicate_confirmed(
+            &bank_forks,
+            &heaviest_subtree_fork_choice,
+            3,
+            expected_is_duplicate_confirmed,
+        );
+
+        // Mark our version of slot 3 as duplicate confirmed with a hash different than
+        // the epoch slots frozen hash above. Should duplicate confirm all descendants of
+        // 3 and remove the mismatched hash from both:
+        // 1) epoch_slots_frozen_slots
+        // 2) duplicate_slots_to_repair, since we have the right version now, no need to repair
+        gossip_duplicate_confirmed_slots.insert(3, slot3_hash);
+        expected_is_duplicate_confirmed = true;
+        check_slot_agrees_with_cluster(
+            3,
+            root,
+            &blockstore,
+            Some(slot3_hash),
+            &mut duplicate_slots_tracker,
+            &gossip_duplicate_confirmed_slots,
+            &mut epoch_slots_frozen_slots,
+            &progress,
+            &mut heaviest_subtree_fork_choice,
+            &mut duplicate_slots_to_repair,
+            SlotStateUpdate::DuplicateConfirmed,
+        );
+        assert!(duplicate_slots_to_repair.is_empty());
+        assert!(epoch_slots_frozen_slots.is_empty());
+        verify_all_slots_duplicate_confirmed(
+            &bank_forks,
+            &heaviest_subtree_fork_choice,
+            3,
+            expected_is_duplicate_confirmed,
+        );
         assert_eq!(
             heaviest_subtree_fork_choice.best_overall_slot(),
             (3, slot3_hash)

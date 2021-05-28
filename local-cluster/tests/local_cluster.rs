@@ -15,6 +15,7 @@ use solana_core::{
     broadcast_stage::{BroadcastDuplicatesConfig, BroadcastStageType},
     consensus::{Tower, SWITCH_FORK_THRESHOLD, VOTE_THRESHOLD_DEPTH},
     optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
+    replay_stage::DUPLICATE_THRESHOLD,
     validator::ValidatorConfig,
 };
 use solana_download_utils::download_snapshot;
@@ -1964,9 +1965,14 @@ fn test_snapshots_restart_validity() {
 #[test]
 #[serial]
 #[allow(unused_attributes)]
-#[ignore]
 fn test_fail_entry_verification_leader() {
-    test_faulty_node(BroadcastStageType::FailEntryVerification);
+    let leader_stake = (DUPLICATE_THRESHOLD * 100.0) as u64 + 1;
+    let validator_stake1 = (100 - leader_stake) / 2;
+    let validator_stake2 = 100 - leader_stake - validator_stake1;
+    test_faulty_node(
+        BroadcastStageType::FailEntryVerification,
+        vec![leader_stake, validator_stake1, validator_stake2],
+    );
 }
 
 #[test]
@@ -1974,22 +1980,25 @@ fn test_fail_entry_verification_leader() {
 #[ignore]
 #[allow(unused_attributes)]
 fn test_fake_shreds_broadcast_leader() {
-    test_faulty_node(BroadcastStageType::BroadcastFakeShreds);
+    let node_stakes = vec![300, 100];
+    test_faulty_node(BroadcastStageType::BroadcastFakeShreds, node_stakes);
 }
 
 #[test]
 #[serial]
 #[allow(unused_attributes)]
 fn test_duplicate_shreds_broadcast_leader() {
-    test_faulty_node(BroadcastStageType::BroadcastDuplicates(
-        BroadcastDuplicatesConfig {
+    let node_stakes = vec![60, 50, 60];
+    test_faulty_node(
+        BroadcastStageType::BroadcastDuplicates(BroadcastDuplicatesConfig {
             stake_partition: 50,
             duplicate_send_delay: 1,
-        },
-    ));
+        }),
+        node_stakes,
+    );
 }
 
-fn test_faulty_node(faulty_node_type: BroadcastStageType) {
+fn test_faulty_node(faulty_node_type: BroadcastStageType, node_stakes: Vec<u64>) {
     solana_logger::setup_with_default("solana_local_cluster=info");
     let num_nodes = 3;
 
@@ -1998,16 +2007,16 @@ fn test_faulty_node(faulty_node_type: BroadcastStageType) {
         ..ValidatorConfig::default()
     };
     let mut validator_configs = Vec::with_capacity(num_nodes);
-    validator_configs.resize_with(num_nodes - 1, ValidatorConfig::default);
-    validator_configs.push(error_validator_config);
 
+    // First validator is the bootstrap leader with the malicious broadcast logic.
+    validator_configs.push(error_validator_config);
+    validator_configs.resize_with(num_nodes, ValidatorConfig::default);
     let mut validator_keys = Vec::with_capacity(num_nodes);
     validator_keys.resize_with(num_nodes, || (Arc::new(Keypair::new()), true));
-
-    let node_stakes = vec![60, 50, 60];
     assert_eq!(node_stakes.len(), num_nodes);
     assert_eq!(validator_keys.len(), num_nodes);
 
+    let ticks_per_slot = 8;
     let mut cluster_config = ClusterConfig {
         cluster_lamports: 10_000,
         node_stakes,
