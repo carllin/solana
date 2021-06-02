@@ -937,6 +937,7 @@ mod tests {
         );
 
         let accounts_background_service = AccountsBackgroundService::new(
+            Pubkey::default(),
             bank_forks.clone(),
             &exit,
             abs_request_handler,

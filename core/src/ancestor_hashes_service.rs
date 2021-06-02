@@ -1371,6 +1371,7 @@ mod test {
         let (duplicate_slot_repair_request_sender, _duplicate_slot_repair_request_receiver) =
             unbounded();
         ReplayStage::dump_then_repair_correct_slots(
+            &Pubkey::default(),
             &mut duplicate_slots_to_repair,
             &mut bank_forks.read().unwrap().ancestors(),
             &mut bank_forks.read().unwrap().descendants().clone(),

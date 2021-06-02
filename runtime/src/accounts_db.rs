@@ -3120,6 +3120,10 @@ impl AccountsDb {
             // Notice the subtle `?` at previous line, we bail out pretty early if missing.
 
             if new_slot == slot && new_store_id == store_id {
+                info!(
+                    "Failed to get slot {}, pubkey {}, store_id: {}",
+                    slot, pubkey, store_id
+                );
                 // Considering that we're failed to get accessor above and further that
                 // the index still returned the same (slot, store_id) tuple, offset must be same
                 // too.
@@ -3491,7 +3495,8 @@ impl AccountsDb {
     /// This should only be called after the `Bank::drop()` runs in bank.rs, See BANK_DROP_SAFETY
     /// comment below for more explanation.
     /// `is_from_abs` is true if the caller is the AccountsBackgroundService
-    pub fn purge_slot(&self, slot: Slot, bank_id: BankId, is_from_abs: bool) {
+    pub fn purge_slot(&self, pubkey: &Pubkey, slot: Slot, bank_id: BankId, is_from_abs: bool) {
+        info!("{} purging slot {} id {}", pubkey, slot, bank_id);
         if self.is_bank_drop_callback_enabled.load(Ordering::SeqCst) && !is_from_abs {
             panic!("bad drop callpath detected; Bank::drop() must run serially with other logic in ABS like clean_accounts()")
         }
@@ -3779,7 +3784,8 @@ impl AccountsDb {
             .report("external_purge_slots_stats", Some(1000));
     }
 
-    pub fn remove_unrooted_slots(&self, remove_slots: &[(Slot, BankId)]) {
+    pub fn remove_unrooted_slots(&self, pubkey: &Pubkey, remove_slots: &[(Slot, BankId)]) {
+        info!("{} removing unrooted slots {:?}", pubkey, remove_slots);
         let rooted_slots = self
             .accounts_index
             .get_rooted_from_list(remove_slots.iter().map(|(slot, _)| slot));
@@ -3856,6 +3862,7 @@ impl AccountsDb {
         {
             let mut locked_removed_bank_ids = self.accounts_index.removed_bank_ids.lock().unwrap();
             for (_slot, remove_bank_id) in remove_slots.iter() {
+                info!("{} inserting remove_slot_id {}", pubkey, remove_bank_id);
                 locked_removed_bank_ids.insert(*remove_bank_id);
             }
         }
@@ -3871,6 +3878,7 @@ impl AccountsDb {
         for (remove_slot, _) in remove_slots {
             assert!(currently_contended_slots.remove(remove_slot));
         }
+        info!("{} removing unrooted slots {:?} done", pubkey, remove_slots);
     }
 
     pub fn hash_stored_account(slot: Slot, account: &StoredAccountMeta) -> Hash {
@@ -7386,7 +7394,7 @@ pub mod tests {
         assert_load_account(&db, unrooted_slot, key, 1);
 
         // Purge the slot
-        db.remove_unrooted_slots(&[(unrooted_slot, unrooted_bank_id)]);
+        db.remove_unrooted_slots(&Pubkey::default(), &[(unrooted_slot, unrooted_bank_id)]);
         assert!(db.load_without_fixed_root(&ancestors, &key).is_none());
         assert!(db.bank_hashes.read().unwrap().get(&unrooted_slot).is_none());
         assert!(db.accounts_cache.slot_cache(unrooted_slot).is_none());
@@ -7424,7 +7432,7 @@ pub mod tests {
         db.store_uncached(unrooted_slot, &[(&key, &account0)]);
 
         // Purge the slot
-        db.remove_unrooted_slots(&[(unrooted_slot, unrooted_bank_id)]);
+        db.remove_unrooted_slots(&Pubkey::default(), &[(unrooted_slot, unrooted_bank_id)]);
 
         // Add a new root
         let key2 = solana_sdk::pubkey::new_rand();
@@ -10796,7 +10804,7 @@ pub mod tests {
 
         // Simulate dropping the bank, which finally removes the slot from the cache
         let bank_id = 1;
-        db.purge_slot(1, bank_id, false);
+        db.purge_slot(&Pubkey::default(), 1, bank_id, false);
         assert!(db
             .do_load(
                 &scan_ancestors,
@@ -11721,7 +11729,7 @@ pub mod tests {
                     if remove_trial_start_receiver.recv().is_err() {
                         return;
                     }
-                    db.remove_unrooted_slots(&[(slot, bank_id)]);
+                    db.remove_unrooted_slots(&Pubkey::default(), &[(slot, bank_id)]);
                     remove_done_sender.send(()).unwrap();
                 })
                 .unwrap()
@@ -11840,7 +11848,7 @@ pub mod tests {
             // to dump immediately.
 
             for chunks in slots_to_dump.chunks(slots_to_dump.len() / 2) {
-                db.remove_unrooted_slots(chunks);
+                db.remove_unrooted_slots(&Pubkey::default(), chunks);
             }
 
             // Check that all the slots in `slots_to_dump` were completely removed from the
@@ -11871,7 +11879,7 @@ pub mod tests {
                     .is_some());
                 // Clear for next iteration so that `assert!(self.storage.get_slot_stores(purged_slot).is_none());`
                 // in `purge_slot_pubkeys()` doesn't trigger
-                db.remove_unrooted_slots(&[(*slot, *bank_id)]);
+                db.remove_unrooted_slots(&Pubkey::default(), &[(*slot, *bank_id)]);
             }
         }
 
@@ -12214,7 +12222,7 @@ pub mod tests {
 
         // Simulate purge_slot() all from AccountsBackgroundService
         let is_from_abs = true;
-        accounts.purge_slot(slot0, 0, is_from_abs);
+        accounts.purge_slot(&Pubkey::default(), slot0, 0, is_from_abs);
 
         // Now clean should clean up the remaining key
         accounts.clean_accounts(None, false, None);
