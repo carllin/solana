@@ -45,21 +45,25 @@ impl<'a> SortedStorages<'a> {
                 storage.slot() // this must be unique. Will be enforced in new_with_slots
             })
             .collect::<Vec<_>>();
-        Self::new_with_slots(source, &slots)
+        Self::new_with_slots(source, &slots, None)
     }
 
     // source[i] is in slot slots[i]
     // assumptions:
     // 1. slots vector contains unique slot #s.
     // 2. slots and source are the same len
-    pub fn new_with_slots(source: &'a [SnapshotStorage], slots: &[Slot]) -> Self {
+    pub fn new_with_slots(
+        source: &'a [SnapshotStorage],
+        slots: &[Slot],
+        slot: Option<Slot>,
+    ) -> Self {
         assert_eq!(
             source.len(),
             slots.len(),
             "source and slots are different lengths"
         );
-        let mut min = Slot::MAX;
-        let mut max = Slot::MIN;
+        let mut min = slot.unwrap_or(Slot::MAX);
+        let mut max = slot.map(|slot| slot + 1).unwrap_or(Slot::MIN);
         let slot_count = source.len();
         let mut time = Measure::start("get slot");
         slots.iter().for_each(|slot| {
@@ -132,18 +136,18 @@ pub mod tests {
     #[test]
     #[should_panic(expected = "slots are not unique")]
     fn test_sorted_storages_duplicate_slots() {
-        SortedStorages::new_with_slots(&[Vec::new(), Vec::new()], &[0, 0]);
+        SortedStorages::new_with_slots(&[Vec::new(), Vec::new()], &[0, 0], None);
     }
 
     #[test]
     #[should_panic(expected = "source and slots are different lengths")]
     fn test_sorted_storages_mismatched_lengths() {
-        SortedStorages::new_with_slots(&[Vec::new()], &[0, 0]);
+        SortedStorages::new_with_slots(&[Vec::new()], &[0, 0], None);
     }
 
     #[test]
     fn test_sorted_storages_none() {
-        let result = SortedStorages::new_with_slots(&[], &[]);
+        let result = SortedStorages::new_with_slots(&[], &[], None);
         assert_eq!(result.range, Range::default());
         assert_eq!(result.slot_count, 0);
         assert_eq!(result.storages.len(), 0);
@@ -156,7 +160,7 @@ pub mod tests {
         let vec_check = vec.clone();
         let slot = 4;
         let vecs = [vec];
-        let result = SortedStorages::new_with_slots(&vecs, &[slot]);
+        let result = SortedStorages::new_with_slots(&vecs, &[slot], None);
         assert_eq!(
             result.range,
             Range {
@@ -175,7 +179,7 @@ pub mod tests {
         let vec_check = vec.clone();
         let slots = [4, 7];
         let vecs = [vec.clone(), vec];
-        let result = SortedStorages::new_with_slots(&vecs, &slots);
+        let result = SortedStorages::new_with_slots(&vecs, &slots, None);
         assert_eq!(
             result.range,
             Range {

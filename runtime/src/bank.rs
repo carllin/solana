@@ -4563,7 +4563,9 @@ impl Bank {
     }
 
     pub fn calculate_capitalization(&self) -> u64 {
-        self.rc.accounts.calculate_capitalization(&self.ancestors)
+        self.rc
+            .accounts
+            .calculate_capitalization(&self.ancestors, self.slot())
     }
 
     pub fn calculate_and_verify_capitalization(&self) -> bool {
@@ -4612,6 +4614,7 @@ impl Bank {
                 self.slot(),
                 &self.ancestors,
                 Some(self.capitalization()),
+                false,
             );
         assert_eq!(total_lamports, self.capitalization());
         hash

@@ -619,8 +619,13 @@ impl Accounts {
             .collect()
     }
 
-    pub fn calculate_capitalization(&self, ancestors: &Ancestors) -> u64 {
-        self.accounts_db.unchecked_scan_accounts(
+    pub fn calculate_capitalization(&self, ancestors: &Ancestors, slot: Slot) -> u64 {
+        let cap = self
+            .accounts_db
+            .update_accounts_hash_with_index_option(false, false, slot, ancestors, None, true)
+            .1;
+        // debug code for the moment
+        let cap2 = self.accounts_db.unchecked_scan_accounts(
             "calculate_capitalization_scan_elapsed",
             ancestors,
             |total_capitalization: &mut u64, (_pubkey, loaded_account, _slot)| {
@@ -632,7 +637,9 @@ impl Accounts {
                     );
                 }
             },
-        )
+        );
+        assert_eq!(cap, cap2);
+        cap2
     }
 
     #[must_use]
