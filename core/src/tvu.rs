@@ -320,6 +320,7 @@ impl Tvu {
         });
 
         let accounts_background_service = AccountsBackgroundService::new(
+            cluster_info.id(),
             bank_forks.clone(),
             exit,
             accounts_background_request_handler,

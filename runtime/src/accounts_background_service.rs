@@ -16,6 +16,7 @@ use solana_measure::measure::Measure;
 use solana_sdk::{
     clock::{BankId, Slot},
     hash::Hash,
+    pubkey::Pubkey,
 };
 use std::{
     boxed::Box,
@@ -275,13 +276,13 @@ impl AbsRequestHandler {
     }
 
     /// `is_from_abs` is true if the caller is the AccountsBackgroundService
-    pub fn handle_pruned_banks(&self, bank: &Bank, is_from_abs: bool) -> usize {
+    pub fn handle_pruned_banks(&self, pubkey: &Pubkey, bank: &Bank, is_from_abs: bool) -> usize {
         let mut count = 0;
         for (pruned_slot, pruned_bank_id) in self.pruned_banks_receiver.try_iter() {
             count += 1;
             bank.rc
                 .accounts
-                .purge_slot(pruned_slot, pruned_bank_id, is_from_abs);
+                .purge_slot(pubkey, pruned_slot, pruned_bank_id, is_from_abs);
         }
 
         count
@@ -294,6 +295,7 @@ pub struct AccountsBackgroundService {
 
 impl AccountsBackgroundService {
     pub fn new(
+        pubkey: Pubkey,
         bank_forks: Arc<RwLock<BankForks>>,
         exit: &Arc<AtomicBool>,
         request_handler: AbsRequestHandler,
@@ -322,6 +324,7 @@ impl AccountsBackgroundService {
 
                     // Purge accounts of any dead slots
                     Self::remove_dead_slots(
+                        &pubkey,
                         &bank,
                         &request_handler,
                         &mut removed_slots_count,
@@ -415,13 +418,14 @@ impl AccountsBackgroundService {
     }
 
     fn remove_dead_slots(
+        pubkey: &Pubkey,
         bank: &Bank,
         request_handler: &AbsRequestHandler,
         removed_slots_count: &mut usize,
         total_remove_slots_time: &mut u64,
     ) {
         let mut remove_slots_time = Measure::start("remove_slots_time");
-        *removed_slots_count += request_handler.handle_pruned_banks(bank, true);
+        *removed_slots_count += request_handler.handle_pruned_banks(pubkey, bank, true);
         remove_slots_time.stop();
         *total_remove_slots_time += remove_slots_time.as_us();
 
@@ -475,7 +479,13 @@ mod test {
 
         assert!(!bank0.rc.accounts.scan_slot(0, |_| Some(())).is_empty());
 
-        AccountsBackgroundService::remove_dead_slots(&bank0, &request_handler, &mut 0, &mut 0);
+        AccountsBackgroundService::remove_dead_slots(
+            &Pubkey::default(),
+            &bank0,
+            &request_handler,
+            &mut 0,
+            &mut 0,
+        );
 
         assert!(bank0.rc.accounts.scan_slot(0, |_| Some(())).is_empty());
     }

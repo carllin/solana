@@ -2695,8 +2695,11 @@ impl Bank {
         }
     }
 
-    pub fn remove_unrooted_slots(&self, slots: &[(Slot, BankId)]) {
-        self.rc.accounts.accounts_db.remove_unrooted_slots(slots)
+    pub fn remove_unrooted_slots(&self, pubkey: &Pubkey, slots: &[(Slot, BankId)]) {
+        self.rc
+            .accounts
+            .accounts_db
+            .remove_unrooted_slots(pubkey, slots)
     }
 
     pub fn set_shrink_paths(&self, paths: Vec<PathBuf>) {
@@ -5297,7 +5300,7 @@ impl Drop for Bank {
             // AccountsBackgroundService to perform cleanups yet.
             self.rc
                 .accounts
-                .purge_slot(self.slot(), self.bank_id(), false);
+                .purge_slot(&Pubkey::default(), self.slot(), self.bank_id(), false);
         }
     }
 }
@@ -12199,8 +12202,11 @@ pub(crate) mod tests {
                         // Move purge here so that Bank::drop()->purge_slots() doesn't race
                         // with clean. Simulates the call from AccountsBackgroundService
                         let is_abs_service = true;
-                        abs_request_handler
-                            .handle_pruned_banks(&current_major_fork_bank, is_abs_service);
+                        abs_request_handler.handle_pruned_banks(
+                            &Pubkey::default(),
+                            &current_major_fork_bank,
+                            is_abs_service,
+                        );
                     }
                 },
                 Some(Box::new(SendDroppedBankCallback::new(
@@ -12343,7 +12349,7 @@ pub(crate) mod tests {
                         for k in pubkeys_to_modify.iter() {
                             assert!(bank_at_fork_tip.load_slow(&ancestors, k).is_some());
                         }
-                        bank_at_fork_tip.remove_unrooted_slots(&slots_on_fork);
+                        bank_at_fork_tip.remove_unrooted_slots(&Pubkey::default(), &slots_on_fork);
 
                         // Accounts on this fork should not be found after removal
                         for k in pubkeys_to_modify.iter() {
@@ -12423,7 +12429,7 @@ pub(crate) mod tests {
                             // Wait for scan to finish before starting next iteration
                             assert_eq!(finished_scan_bank_id.unwrap(), prev_bank.bank_id());
                         }
-                        bank_at_fork_tip.remove_unrooted_slots(&slots_on_fork);
+                        bank_at_fork_tip.remove_unrooted_slots(&Pubkey::default(), &slots_on_fork);
                         prev_bank = bank_at_fork_tip;
                     }
                 },
@@ -12474,7 +12480,8 @@ pub(crate) mod tests {
                         // This should create inconsistency between the account balances of accounts
                         // stored in that slot, and the accounts stored in earlier slots
                         let slot_to_remove = *slots_on_fork.last().unwrap();
-                        bank_at_fork_tip.remove_unrooted_slots(&[slot_to_remove]);
+                        bank_at_fork_tip
+                            .remove_unrooted_slots(&Pubkey::default(), &[slot_to_remove]);
 
                         // Wait for scan to finish before starting next iteration
                         let finished_scan_bank_id = scan_finished_receiver.recv();
@@ -12485,7 +12492,8 @@ pub(crate) mod tests {
 
                         // Remove the rest of the slots before the next iteration
                         for (slot, bank_id) in slots_on_fork {
-                            bank_at_fork_tip.remove_unrooted_slots(&[(slot, bank_id)]);
+                            bank_at_fork_tip
+                                .remove_unrooted_slots(&Pubkey::default(), &[(slot, bank_id)]);
                         }
                     }
                 },

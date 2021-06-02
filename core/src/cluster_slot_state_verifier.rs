@@ -469,12 +469,13 @@ pub(crate) fn check_slot_agrees_with_cluster(
     let epoch_slots_frozen_hash: Option<&Hash> = epoch_slots_frozen_slots.get(&slot);
 
     info!(
-        "check_slot_agrees_with_cluster() state
+        "{} check_slot_agrees_with_cluster() state
         is_local_replay_duplicate_confirmed: {:?},
         cluster_duplicate_confirmed_hash: {:?},
         is_slot_duplicate: {:?},
         is_dead: {:?},
         epoch_slots_frozen_hash: {:?}",
+        pubkey,
         is_local_replay_duplicate_confirmed,
         cluster_duplicate_confirmed_hash,
         is_slot_duplicate,
@@ -494,6 +495,8 @@ pub(crate) fn check_slot_agrees_with_cluster(
         slot_state_update,
     };
     let state_changes = state_handler(args);
+
+    info!("{} state changes {:?}", pubkey, state_changes);
     apply_state_changes(
         slot,
         fork_choice,

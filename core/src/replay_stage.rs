@@ -574,7 +574,8 @@ impl ReplayStage {
                     let mut heaviest_fork_failures_time = Measure::start("heaviest_fork_failures_time");
                     if tower.is_recent(heaviest_bank.slot()) && !heaviest_fork_failures.is_empty() {
                         info!(
-                            "Couldn't vote on heaviest fork: {:?}, heaviest_fork_failures: {:?}",
+                            "{} Couldn't vote on heaviest fork: {:?}, heaviest_fork_failures: {:?}",
+                            my_pubkey,
                             heaviest_bank.slot(),
                             heaviest_fork_failures
                         );
@@ -725,7 +726,7 @@ impl ReplayStage {
                     //
                     // Has to be before `maybe_start_leader()`. Otherwise, `ancestors` and `descendants`
                     // will be outdated, and we cannot assume `poh_bank` will be in either of these maps.
-                    Self::dump_then_repair_correct_slots(&mut duplicate_slots_to_repair, &mut ancestors, &mut descendants, &mut progress, &bank_forks, &blockstore, poh_bank.map(|bank| bank.slot()), &duplicate_slot_repair_request_sender);
+                    Self::dump_then_repair_correct_slots(&my_pubkey, &mut duplicate_slots_to_repair, &mut ancestors, &mut descendants, &mut progress, &bank_forks, &blockstore, poh_bank.map(|bank| bank.slot()), &duplicate_slot_repair_request_sender);
                     dump_then_repair_correct_slots_time.stop();
 
                     // From this point on, its not safe to use ancestors/descendants since maybe_start_leader
@@ -856,6 +857,7 @@ impl ReplayStage {
     }
 
     fn dump_then_repair_correct_slots(
+        pubkey: &Pubkey,
         duplicate_slots_to_repair: &mut DuplicateSlotsToRepair,
         ancestors: &mut HashMap<Slot, HashSet<Slot>>,
         descendants: &mut HashMap<Slot, HashSet<Slot>>,
@@ -924,6 +926,7 @@ impl ReplayStage {
                     }
 
                     Self::purge_unconfirmed_duplicate_slot(
+                        pubkey,
                         *duplicate_slot,
                         ancestors,
                         descendants,
@@ -933,8 +936,8 @@ impl ReplayStage {
                         blockstore,
                     );
                     warn!(
-                        "Notifying repair service to repair duplicate slot: {}",
-                        *duplicate_slot,
+                        "{} Notifying repair service to repair duplicate slot: {}",
+                        pubkey, *duplicate_slot,
                     );
                     let _ = duplicate_slot_repair_request_sender.send(*duplicate_slot);
                     true
@@ -942,7 +945,8 @@ impl ReplayStage {
                 // `duplicate_slot` with hash == `correct_hash`
                 } else {
                     warn!(
-                        "PoH bank for slot {} is building on duplicate slot {}",
+                        "{} PoH bank for slot {} is building on duplicate slot {}",
+                        pubkey,
                         poh_bank_slot.unwrap(),
                         duplicate_slot
                     );
@@ -1002,6 +1006,7 @@ impl ReplayStage {
     }
 
     fn purge_unconfirmed_duplicate_slot(
+        pubkey: &Pubkey,
         duplicate_slot: Slot,
         ancestors: &mut HashMap<Slot, HashSet<Slot>>,
         descendants: &mut HashMap<Slot, HashSet<Slot>>,
@@ -1054,7 +1059,7 @@ impl ReplayStage {
         // Clear the accounts for these slots so that any ongoing RPC scans fail.
         // These have to be atomically cleared together in the same batch, in order
         // to prevent RPC from seeing inconsistent results in scans.
-        root_bank.remove_unrooted_slots(&slots_to_purge);
+        root_bank.remove_unrooted_slots(pubkey, &slots_to_purge);
 
         // Once the slots above have been purged, now it's safe to remove the banks from
         // BankForks, allowing the Bank::drop() purging to run and not race with the
@@ -1490,6 +1495,7 @@ impl ReplayStage {
             BlockstoreProcessorError::InvalidBlock(BlockError::TooFewTicks)
         );
         let slot = bank.slot();
+        info!("{} marking slot {} dead", my_pubkey, slot);
         if is_serious {
             datapoint_error!(
                 "replay-stage-mark_dead_slot",
@@ -2256,6 +2262,7 @@ impl ReplayStage {
         latest_validator_votes_for_frozen_banks: &LatestValidatorVotesForFrozenBanks,
         fork_choice: &HeaviestSubtreeForkChoice,
     ) -> SelectVoteAndResetForkResult {
+        info!("{} heaviest bank: {}", my_pubkey, heaviest_bank.slot());
         // Try to vote on the actual heaviest fork. If the heaviest bank is
         // locked out or fails the threshold check, the validator will:
         // 1) Not continue to vote on current fork, waiting for lockouts to expire/
@@ -2309,7 +2316,8 @@ impl ReplayStage {
                     // then there will be no blocks to include the votes for slot 4, and the network halts
                     // because 90% of validators can't vote
                     info!(
-                        "Waiting to switch vote to {}, resetting to slot {:?} for now",
+                        "{} Waiting to switch vote to {}, resetting to slot {:?} for now",
+                        my_pubkey,
                         heaviest_bank.slot(),
                         reset_bank.as_ref().map(|b| b.slot()),
                     );
@@ -2356,7 +2364,8 @@ impl ReplayStage {
                     // thus it's safe to use as the reset bank.
                     let reset_bank = Some(heaviest_bank);
                     info!(
-                        "Waiting to switch vote to {}, resetting to slot {:?} for now, latest duplicate ancestor: {:?}",
+                        "{} Waiting to switch vote to {}, resetting to slot {:?} for now, latest duplicate ancestor: {:?}",
+                        my_pubkey,
                         heaviest_bank.slot(),
                         reset_bank.as_ref().map(|b| b.slot()),
                         latest_duplicate_ancestor,
@@ -4665,6 +4674,7 @@ pub mod tests {
 
         // Purging slot 5 should purge only slots 5 and its descendants 6,7
         ReplayStage::purge_unconfirmed_duplicate_slot(
+            &Pubkey::default(),
             5,
             &mut ancestors,
             &mut descendants,
@@ -4702,6 +4712,7 @@ pub mod tests {
         let mut descendants = bank_forks.read().unwrap().descendants().clone();
         let mut ancestors = bank_forks.read().unwrap().ancestors();
         ReplayStage::purge_unconfirmed_duplicate_slot(
+            &Pubkey::default(),
             4,
             &mut ancestors,
             &mut descendants,
@@ -4725,6 +4736,7 @@ pub mod tests {
         let mut descendants = bank_forks.read().unwrap().descendants().clone();
         let mut ancestors = bank_forks.read().unwrap().ancestors();
         ReplayStage::purge_unconfirmed_duplicate_slot(
+            &Pubkey::default(),
             1,
             &mut ancestors,
             &mut descendants,
@@ -5003,6 +5015,7 @@ pub mod tests {
                 unbounded();
             let mut descendants = bank_forks.read().unwrap().descendants().clone();
             ReplayStage::dump_then_repair_correct_slots(
+                &Pubkey::default(),
                 &mut duplicate_slots_to_repair,
                 &mut ancestors,
                 &mut descendants,
