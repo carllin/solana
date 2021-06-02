@@ -2825,6 +2825,7 @@ impl Blockstore {
     ) -> Result<Vec<Entry>> {
         let data_shred_cf = self.db.column::<cf::ShredData>();
 
+        println!("getting entries for slot: {}, start: {}, end: {}", slot, start_index, end_index);
         // Short circuit on first error
         let data_shreds: Result<Vec<Shred>> = (start_index..=end_index)
             .map(|i| {
