@@ -2014,8 +2014,7 @@ fn test_faulty_node(faulty_node_type: BroadcastStageType) {
         node_stakes,
         validator_configs,
         validator_keys: Some(validator_keys),
-        slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH * 2u64,
-        stakers_slot_offset: MINIMUM_SLOTS_PER_EPOCH * 2u64,
+        skip_warmup_slots: true,
         ..ClusterConfig::default()
     };
 
