@@ -848,7 +848,15 @@ impl ClusterInfo {
             (0..crds_value::MAX_EPOCH_SLOTS)
                 .filter_map(|ix| {
                     let label = CrdsValueLabel::EpochSlots(ix, self_pubkey);
-                    let epoch_slots = gossip_crds.get::<&CrdsValue>(&label)?.epoch_slots()?;
+                    let epoch_slots = gossip_crds.get::<&CrdsValue>(&label)?;
+                    info!(
+                        "{} epoch slots update {:?}, index: {:?} signature {}",
+                        self.id(),
+                        update,
+                        ix,
+                        epoch_slots.signature
+                    );
+                    let epoch_slots = epoch_slots.epoch_slots()?;
                     let first_slot = epoch_slots.first_slot()?;
                     Some((epoch_slots.wallclock, first_slot, ix))
                 })
@@ -892,6 +900,13 @@ impl ClusterInfo {
             if n > 0 {
                 let epoch_slots = CrdsData::EpochSlots(ix, slots);
                 let entry = CrdsValue::new_signed(epoch_slots, &keypair);
+                info!(
+                    "{} Pushing new epoch slots update {:?} ix {} with signature {:?}",
+                    keypair.pubkey(),
+                    update,
+                    ix,
+                    entry.signature
+                );
                 entries.push(entry);
             }
             epoch_slot_index += 1;
@@ -1115,7 +1130,14 @@ impl ClusterInfo {
                 gossip_crds.get_shred_version(&origin) == self_shred_version
             })
             .map(|entry| match &entry.value.data {
-                CrdsData::EpochSlots(_, slots) => slots.clone(),
+                CrdsData::EpochSlots(_, slots) => {
+                    info!(
+                        "{} lookup of epoch slots found entry with signature {:?}",
+                        self.id(),
+                        entry.value.signature
+                    );
+                    slots.clone()
+                }
                 _ => panic!("this should not happen!"),
             })
             .collect()

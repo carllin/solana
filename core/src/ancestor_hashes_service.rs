@@ -479,6 +479,7 @@ impl AncestorHashesService {
         );
 
         Self::find_epoch_slots_frozen_dead_slots(
+            &repair_info.cluster_info.id(),
             &repair_info.cluster_slots,
             dead_slot_pool,
             repairable_dead_slot_pool,
@@ -542,6 +543,7 @@ impl AncestorHashesService {
     /// Find if any dead slots in `dead_slot_pool` have been frozen by sufficient
     /// number of nodes in the cluster to justify adding to the `repairable_dead_slot_pool`.
     fn find_epoch_slots_frozen_dead_slots(
+        id: &Pubkey,
         cluster_slots: &ClusterSlots,
         dead_slot_pool: &mut HashSet<Slot>,
         repairable_dead_slot_pool: &mut HashSet<Slot>,
@@ -565,9 +567,24 @@ impl AncestorHashesService {
                                 .unwrap_or(0)
                         })
                         .sum();
+
                     // If sufficient number of validators froze this slot, then there's a chance
                     // this dead slot was duplicate confirmed and will make it into in the main fork.
                     // This means it's worth asking the cluster to get the correct version.
+                    info!(
+                        "{} Looking up status of dead slot {}, 
+                        completed_nodes: {:?}
+                        stake: {}, 
+                        total_stake: {}, 
+                        pct: {}",
+                        id,
+                        dead_slot,
+                        completed_dead_slot_pubkeys,
+                        total_completed_slot_stake,
+                        total_stake,
+                        total_completed_slot_stake as f64 / total_stake as f64
+                    );
+
                     if total_completed_slot_stake as f64 / total_stake as f64 > DUPLICATE_THRESHOLD
                     {
                         repairable_dead_slot_pool.insert(*dead_slot);
@@ -774,6 +791,7 @@ mod test {
         // ClusterSlots doesn't have an entry for this slot yet, shouldn't move the slot
         // from the dead slot pool.
         AncestorHashesService::find_epoch_slots_frozen_dead_slots(
+            &Pubkey::default(),
             &cluster_slots,
             &mut dead_slot_pool,
             &mut repairable_dead_slot_pool,
@@ -792,6 +810,7 @@ mod test {
 
         // Should remove `slot_outside_known_epochs`
         AncestorHashesService::find_epoch_slots_frozen_dead_slots(
+            &Pubkey::default(),
             &cluster_slots,
             &mut dead_slot_pool,
             &mut repairable_dead_slot_pool,
@@ -805,6 +824,7 @@ mod test {
         for (i, key) in (0..2).zip(vote_simulator.node_pubkeys.iter()) {
             cluster_slots.insert_node_id(dead_slot, *key);
             AncestorHashesService::find_epoch_slots_frozen_dead_slots(
+                &Pubkey::default(),
                 &cluster_slots,
                 &mut dead_slot_pool,
                 &mut repairable_dead_slot_pool,

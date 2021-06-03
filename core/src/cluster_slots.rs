@@ -36,10 +36,11 @@ impl ClusterSlots {
             let mut cursor = self.cursor.lock().unwrap();
             cluster_info.get_epoch_slots(&mut cursor)
         };
-        self.update_internal(root_bank.slot(), epoch_slots);
+        let id = cluster_info.id();
+        self.update_internal(&id, root, epoch_slots);
     }
 
-    fn update_internal(&self, root: Slot, epoch_slots_list: Vec<EpochSlots>) {
+    fn update_internal(&self, pubkey: &Pubkey, root: Slot, epoch_slots_list: Vec<EpochSlots>) {
         // Attach validator's total stake.
         let epoch_slots_list: Vec<_> = {
             let validator_stakes = self.validator_stakes.read().unwrap();
@@ -54,11 +55,16 @@ impl ClusterSlots {
                 })
                 .collect()
         };
+
         let slot_nodes_stakes = epoch_slots_list
             .into_iter()
             .flat_map(|(epoch_slots, stake)| {
-                epoch_slots
-                    .to_slots(root)
+                let slots = epoch_slots.to_slots(root);
+                info!(
+                    "{} updating cluster slots root: {} slots: {:?}",
+                    pubkey, root, slots
+                );
+                slots
                     .into_iter()
                     .filter(|slot| *slot > root)
                     .zip(std::iter::repeat((epoch_slots.from, stake)))
@@ -187,7 +193,7 @@ mod tests {
     #[test]
     fn test_update_noop() {
         let cs = ClusterSlots::default();
-        cs.update_internal(0, vec![]);
+        cs.update_internal(&Pubkey::default(), 0, vec![]);
         assert!(cs.cluster_slots.read().unwrap().is_empty());
     }
 
@@ -195,7 +201,7 @@ mod tests {
     fn test_update_empty() {
         let cs = ClusterSlots::default();
         let epoch_slot = EpochSlots::default();
-        cs.update_internal(0, vec![epoch_slot]);
+        cs.update_internal(&Pubkey::default(), 0, vec![epoch_slot]);
         assert!(cs.lookup(0).is_none());
     }
 
@@ -205,7 +211,7 @@ mod tests {
         let cs = ClusterSlots::default();
         let mut epoch_slot = EpochSlots::default();
         epoch_slot.fill(&[0], 0);
-        cs.update_internal(0, vec![epoch_slot]);
+        cs.update_internal(&Pubkey::default(), 0, vec![epoch_slot]);
         assert!(cs.lookup(0).is_none());
     }
 
@@ -214,7 +220,7 @@ mod tests {
         let cs = ClusterSlots::default();
         let mut epoch_slot = EpochSlots::default();
         epoch_slot.fill(&[1], 0);
-        cs.update_internal(0, vec![epoch_slot]);
+        cs.update_internal(&Pubkey::default(), 0, vec![epoch_slot]);
         assert!(cs.lookup(0).is_none());
         assert!(cs.lookup(1).is_some());
         assert_eq!(
@@ -344,7 +350,7 @@ mod tests {
         );
 
         *cs.validator_stakes.write().unwrap() = map;
-        cs.update_internal(0, vec![epoch_slot]);
+        cs.update_internal(&Pubkey::default(), 0, vec![epoch_slot]);
         assert!(cs.lookup(1).is_some());
         assert_eq!(
             cs.lookup(1)

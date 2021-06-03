@@ -152,6 +152,17 @@ impl Uncompressed {
             self.slots.set(*s - self.first_slot, true);
             self.num = std::cmp::max(self.num, 1 + (*s - self.first_slot) as usize);
         }
+        info!(
+            "Adding slots {:?}, first slot: {:?}, slot len: {:?}, slots: {:?}",
+            slots,
+            self.first_slot,
+            self.slots.len(),
+            {
+                let mut slots = self.to_slots(0);
+                slots.truncate(20);
+                slots
+            },
+        );
         slots.len()
     }
 }
