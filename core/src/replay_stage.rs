@@ -2279,6 +2279,7 @@ impl ReplayStage {
         let mut failure_reasons = vec![];
         let selected_fork = {
             let switch_fork_decision = tower.check_switch_threshold(
+                my_pubkey,
                 heaviest_bank.slot(),
                 ancestors,
                 descendants,

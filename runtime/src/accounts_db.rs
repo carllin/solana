@@ -11775,7 +11775,7 @@ pub mod tests {
 
         // Simulate purge_slot() all from AccountsBackgroundService
         let is_from_abs = true;
-        accounts.purge_slot(slot0, 0, is_from_abs);
+        accounts.purge_slot(&Pubkey::default(), slot0, 0, is_from_abs);
 
         // Now clean should clean up the remaining key
         accounts.clean_accounts(None, false);

@@ -570,6 +570,7 @@ impl Tower {
     #[allow(clippy::too_many_arguments)]
     fn make_check_switch_threshold_decision(
         &self,
+        pubkey: &Pubkey,
         switch_slot: Slot,
         ancestors: &HashMap<Slot, HashSet<u64>>,
         descendants: &HashMap<Slot, HashSet<u64>>,
@@ -756,6 +757,7 @@ impl Tower {
                     // Find any locked out intervals for vote accounts in this bank with
                     // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
                     // `last_vote` on another fork.
+                    println!("{} check switch threshold, last_vote: {}, last_vote_ancestors {:?}, lockout_intervals {:?}", pubkey, last_voted_slot, last_vote_ancestors, lockout_intervals);
                     for (_lockout_interval_end, intervals_keyed_by_end) in lockout_intervals.range((Included(last_voted_slot), Unbounded)) {
                         for (lockout_interval_start, vote_account_pubkey) in intervals_keyed_by_end {
                             if locked_out_vote_accounts.contains(vote_account_pubkey) {
@@ -840,6 +842,7 @@ impl Tower {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn check_switch_threshold(
         &mut self,
+        pubkey: &Pubkey,
         switch_slot: Slot,
         ancestors: &HashMap<Slot, HashSet<u64>>,
         descendants: &HashMap<Slot, HashSet<u64>>,
@@ -850,6 +853,7 @@ impl Tower {
         heaviest_subtree_fork_choice: &HeaviestSubtreeForkChoice,
     ) -> SwitchForkDecision {
         let decision = self.make_check_switch_threshold_decision(
+            pubkey,
             switch_slot,
             ancestors,
             descendants,
@@ -1592,6 +1596,7 @@ pub mod test {
             ));
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 ancestor_of_voted_slot,
                 &ancestors,
                 &descendants,
@@ -1625,6 +1630,7 @@ pub mod test {
                         .hash(),
                 ));
             let res = tower.check_switch_threshold(
+                &Pubkey::default(),
                 ancestor_of_voted_slot,
                 &ancestors,
                 &descendants,
@@ -1662,6 +1668,7 @@ pub mod test {
         // Trying to switch to a descendant of last vote should always work
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 48,
                 &ancestors,
                 &descendants,
@@ -1677,6 +1684,7 @@ pub mod test {
         // Trying to switch to another fork at 110 should fail
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1694,6 +1702,7 @@ pub mod test {
         vote_simulator.simulate_lockout_interval(50, (49, 100), &other_vote_account);
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1711,6 +1720,7 @@ pub mod test {
         vote_simulator.simulate_lockout_interval(50, (45, 100), &other_vote_account);
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1728,6 +1738,7 @@ pub mod test {
         vote_simulator.simulate_lockout_interval(14, (12, 46), &other_vote_account);
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1747,6 +1758,7 @@ pub mod test {
         vote_simulator.simulate_lockout_interval(13, (12, 47), &other_vote_account);
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1764,6 +1776,7 @@ pub mod test {
         vote_simulator.simulate_lockout_interval(14, (12, 47), &other_vote_account);
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1782,6 +1795,7 @@ pub mod test {
         descendants.get_mut(&14).unwrap().insert(10000);
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1809,6 +1823,7 @@ pub mod test {
 
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1842,6 +1857,7 @@ pub mod test {
         // Trying to switch to another fork at 110 should fail
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1858,6 +1874,7 @@ pub mod test {
         vote_simulator.simulate_lockout_interval(50, (49, 100), &other_vote_account);
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1891,6 +1908,7 @@ pub mod test {
 
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -1916,6 +1934,7 @@ pub mod test {
             .clone();
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -2596,6 +2615,7 @@ pub mod test {
         // Trying to switch to a descendant of last vote should always work
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 50,
                 &ancestors,
                 &descendants,
@@ -2611,6 +2631,7 @@ pub mod test {
         // Trying to switch to another fork at 110 should fail
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -2627,6 +2648,7 @@ pub mod test {
 
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -2698,6 +2720,7 @@ pub mod test {
         // Trying to switch to another fork at 110 should fail
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -2714,6 +2737,7 @@ pub mod test {
         vote_simulator.simulate_lockout_interval(111, (45, 50), &other_vote_account);
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
@@ -2730,6 +2754,7 @@ pub mod test {
         vote_simulator.simulate_lockout_interval(111, (110, 200), &other_vote_account);
         assert_eq!(
             tower.check_switch_threshold(
+                &Pubkey::default(),
                 110,
                 &ancestors,
                 &descendants,
