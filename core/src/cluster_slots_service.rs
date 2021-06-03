@@ -147,6 +147,11 @@ impl ClusterSlotsService {
         slots.sort();
 
         if !slots.is_empty() {
+            info!(
+                "{} updating my own epoch slots with slots {:?}",
+                cluster_info.id(),
+                slots
+            );
             cluster_info.push_epoch_slots(&slots);
         }
     }

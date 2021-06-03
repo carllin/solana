@@ -404,6 +404,7 @@ impl AncestorHashesService {
                     request_throttle.retain(|request_time| *request_time > (timestamp() - 1000));
 
                     let repairable_dead_slots = Self::find_new_repairable_dead_slots(
+                        &repair_info.cluster_info.id(),
                         &ancestor_hashes_request_statuses,
                         &blockstore,
                         &repair_info.cluster_slots,
@@ -448,6 +449,7 @@ impl AncestorHashesService {
     }
 
     fn find_new_repairable_dead_slots(
+        id: &Pubkey,
         ancestor_hashes_request_statuses: &DashMap<Slot, DeadSlotAncestorRequestStatus>,
         blockstore: &Blockstore,
         cluster_slots: &ClusterSlots,
@@ -480,6 +482,21 @@ impl AncestorHashesService {
                                 .unwrap_or(0)
                         })
                         .sum();
+
+                    info!(
+                        "{} Looking up status of dead slot {}, 
+                        completed_nodes: {:?}
+                        stake: {}, 
+                        total_stake: {}, 
+                        pct: {}",
+                        id,
+                        dead_slot,
+                        completed_dead_slot_pubkeys,
+                        total_completed_slot_stake,
+                        total_stake,
+                        total_completed_slot_stake as f64 / total_stake as f64
+                    );
+
                     if total_completed_slot_stake as f64 / total_stake as f64 > DUPLICATE_THRESHOLD
                     {
                         // Begin the AncestorHashes repair procedure to figure out
@@ -579,6 +596,7 @@ mod test {
 
         // Empty blockstore should have no duplicates
         assert!(AncestorHashesService::find_new_repairable_dead_slots(
+            &Pubkey::default(),
             &ancestor_hashes_request_statuses,
             &blockstore,
             &cluster_slots,
@@ -592,6 +610,7 @@ mod test {
         let dead_slot = 9;
         blockstore.set_dead_slot(dead_slot).unwrap();
         assert!(AncestorHashesService::find_new_repairable_dead_slots(
+            &Pubkey::default(),
             &ancestor_hashes_request_statuses,
             &blockstore,
             &cluster_slots,
@@ -605,6 +624,7 @@ mod test {
         cluster_slots.insert_node_id(dead_slot, only_node_id);
         assert_eq!(
             AncestorHashesService::find_new_repairable_dead_slots(
+                &Pubkey::default(),
                 &ancestor_hashes_request_statuses,
                 &blockstore,
                 &cluster_slots,

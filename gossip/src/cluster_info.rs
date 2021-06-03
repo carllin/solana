@@ -924,8 +924,16 @@ impl ClusterInfo {
                 self.time_gossip_read_lock("lookup_epoch_slots", &self.stats.epoch_slots_lookup);
             (0..crds_value::MAX_EPOCH_SLOTS)
                 .filter_map(|ix| {
-                    let label = CrdsValueLabel::EpochSlots(ix, self_pubkey);
-                    let epoch_slots = gossip.crds.get(&label)?.value.epoch_slots()?;
+                    let label = CrdsValueLabel::EpochSlots(ix, self.id());
+                    let epoch_slots = gossip.crds.get(&label)?;
+                    info!(
+                        "{} epoch slots update {:?}, index: {:?} signature {}",
+                        self.id(),
+                        update,
+                        ix,
+                        epoch_slots.value.signature
+                    );
+                    let epoch_slots = epoch_slots.value.epoch_slots()?;
                     let first_slot = epoch_slots.first_slot()?;
                     Some((epoch_slots.wallclock, first_slot, ix))
                 })
@@ -969,6 +977,13 @@ impl ClusterInfo {
             if n > 0 {
                 let epoch_slots = CrdsData::EpochSlots(ix, slots);
                 let entry = CrdsValue::new_signed(epoch_slots, &keypair);
+                info!(
+                    "{} Pushing new epoch slots update {:?} ix {} with signature {:?}",
+                    keypair.pubkey(),
+                    update,
+                    ix,
+                    entry.signature
+                );
                 entries.push(entry);
             }
             epoch_slot_index += 1;
@@ -1205,7 +1220,14 @@ impl ClusterInfo {
                 gossip.crds.get_shred_version(&entry.value.pubkey()) == self_shred_version
             })
             .map(|entry| match &entry.value.data {
-                CrdsData::EpochSlots(_, slots) => slots.clone(),
+                CrdsData::EpochSlots(_, slots) => {
+                    info!(
+                        "{} lookup of epoch slots found entry with signature {:?}",
+                        self.id(),
+                        entry.value.signature
+                    );
+                    slots.clone()
+                }
                 _ => panic!("this should not happen!"),
             })
             .collect()

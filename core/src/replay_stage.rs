@@ -5344,6 +5344,7 @@ pub mod tests {
             unbounded();
 
         ReplayStage::dump_then_repair_correct_slots(
+            &Pubkey::default(),
             &mut duplicate_slots_to_repair,
             &mut ancestors,
             &mut descendants,
