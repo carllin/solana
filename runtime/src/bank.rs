@@ -12052,6 +12052,7 @@ pub(crate) mod tests {
         exit.store(true, Relaxed);
         let min_expected_number_of_scans = 5;
         let num_banks_scanned = scan_thread.join().unwrap();
+        println!("num banks scanned: {}", num_banks_scanned);
         assert!(num_banks_scanned > min_expected_number_of_scans);
         update_thread.join().unwrap();
     }
