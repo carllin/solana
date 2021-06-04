@@ -45,28 +45,24 @@ impl<'a> SortedStorages<'a> {
                 storage.slot() // this must be unique. Will be enforced in new_with_slots
             })
             .collect::<Vec<_>>();
-        Self::new_with_slots(source, &slots, None)
+        Self::new_with_slots(source.iter().zip(slots.iter()), None)
     }
 
     // source[i] is in slot slots[i]
     // assumptions:
     // 1. slots vector contains unique slot #s.
     // 2. slots and source are the same len
-    pub fn new_with_slots(
-        source: &'a [SnapshotStorage],
-        slots: &[Slot],
+    pub fn new_with_slots<'b>(
+        source: impl Iterator<Item = (&'a SnapshotStorage, &'b Slot)> + Clone,
         slot: Option<Slot>,
     ) -> Self {
-        assert_eq!(
-            source.len(),
-            slots.len(),
-            "source and slots are different lengths"
-        );
         let mut min = slot.unwrap_or(Slot::MAX);
         let mut max = slot.map(|slot| slot + 1).unwrap_or(Slot::MIN);
-        let slot_count = source.len();
+        let mut slot_count = 0;
         let mut time = Measure::start("get slot");
-        slots.iter().for_each(|slot| {
+        let source_ = source.clone();
+        source_.for_each(|(_, slot)| {
+            slot_count += 1;
             let slot = *slot;
             min = std::cmp::min(slot, min);
             max = std::cmp::max(slot + 1, max);
@@ -85,14 +81,11 @@ impl<'a> SortedStorages<'a> {
             };
             let len = max - min;
             storages = vec![None; len as usize];
-            source
-                .iter()
-                .zip(slots)
-                .for_each(|(original_storages, slot)| {
-                    let index = (slot - min) as usize;
-                    assert!(storages[index].is_none(), "slots are not unique"); // we should not encounter the same slot twice
-                    storages[index] = Some(original_storages);
-                });
+            source.for_each(|(original_storages, slot)| {
+                let index = (slot - min) as usize;
+                assert!(storages[index].is_none(), "slots are not unique"); // we should not encounter the same slot twice
+                storages[index] = Some(original_storages);
+            });
         }
         time2.stop();
         debug!("SortedStorages, times: {}, {}", time.as_us(), time2.as_us());

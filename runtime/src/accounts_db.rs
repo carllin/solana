@@ -4402,7 +4402,8 @@ impl AccountsDb {
             collect_time.stop();
 
             let mut sort_time = Measure::start("sort_storages");
-            let storages = SortedStorages::new_with_slots(&combined_maps, &slots, Some(slot));
+            let storages =
+                SortedStorages::new_with_slots(combined_maps.iter().zip(slots.iter()), Some(slot));
             sort_time.stop();
 
             let timings = HashStats {
