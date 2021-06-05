@@ -507,7 +507,7 @@ impl ReplayStage {
 
                     let mut select_forks_time = Measure::start("select_forks_time");
                     let (heaviest_bank, heaviest_bank_on_same_voted_fork) = heaviest_subtree_fork_choice
-                        .select_forks(&frozen_banks, &tower, &progress, &ancestors, &bank_forks);
+                        .select_forks(&my_pubkey, &frozen_banks, &tower, &progress, &ancestors, &bank_forks);
                     select_forks_time.stop();
 
                     if let Some(heaviest_bank_on_same_voted_fork) = heaviest_bank_on_same_voted_fork.as_ref() {
@@ -1121,6 +1121,7 @@ impl ReplayStage {
         for (duplicate_slot, bank_hash) in
             new_duplicate_slots.into_iter().zip(bank_hashes.into_iter())
         {
+            info!("{} marking slot {} duplicate", my_pubkey, duplicate_slot);
             // WindowService should only send the signal once per slot
             check_slot_agrees_with_cluster(
                 duplicate_slot,
@@ -3737,6 +3738,7 @@ mod tests {
         );
 
         let (heaviest_bank, _) = heaviest_subtree_fork_choice.select_forks(
+            &Pubkey::default(),
             &frozen_banks,
             &tower,
             &vote_simulator.progress,
@@ -5569,7 +5571,14 @@ mod tests {
             latest_validator_votes_for_frozen_banks,
         );
         let (heaviest_bank, heaviest_bank_on_same_fork) = heaviest_subtree_fork_choice
-            .select_forks(&frozen_banks, tower, progress, ancestors, bank_forks);
+            .select_forks(
+                &Pubkey::default(),
+                &frozen_banks,
+                tower,
+                progress,
+                ancestors,
+                bank_forks,
+            );
         assert!(heaviest_bank_on_same_fork.is_none());
         let SelectVoteAndResetForkResult {
             vote_bank,

@@ -5,6 +5,7 @@ use crate::{
     replay_stage::HeaviestForkFailures,
 };
 use solana_runtime::{bank::Bank, bank_forks::BankForks};
+use solana_sdk::pubkey::Pubkey;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
@@ -31,6 +32,7 @@ pub trait ForkChoice {
     // switching proof to vote for)
     fn select_forks(
         &self,
+        pubkey: &Pubkey,
         frozen_banks: &[Arc<Bank>],
         tower: &Tower,
         progress: &ProgressMap,

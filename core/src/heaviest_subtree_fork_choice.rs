@@ -955,6 +955,7 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
     // switching proof to vote for)
     fn select_forks(
         &self,
+        pubkey: &Pubkey,
         _frozen_banks: &[Arc<Bank>],
         tower: &Tower,
         _progress: &ProgressMap,
@@ -972,10 +973,14 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
             self.heaviest_slot_on_same_voted_fork(tower)
                 .map(|slot_hash| {
                     // BankForks should only contain one valid version of this slot
-                    r_bank_forks
-                        .get_with_checked_hash(slot_hash)
-                        .unwrap()
-                        .clone()
+                    let r = r_bank_forks.get_with_checked_hash(slot_hash);
+                    if r.is_none() {
+                        info!(
+                            "{} select forks couldn't find heaviest slot on same fork {:?}",
+                            pubkey, slot_hash
+                        );
+                    }
+                    r.unwrap().clone()
                 }),
         )
     }
