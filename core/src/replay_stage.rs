@@ -693,7 +693,7 @@ impl ReplayStage {
                     //
                     // Has to be before `maybe_start_leader()`. Otherwise, `ancestors` and `descendants`
                     // will be outdated, and we cannot assume `poh_bank` will be in either of these maps.
-                    Self::dump_then_repair_correct_slots(&mut duplicate_slots_to_repair, &mut ancestors, &mut descendants, &mut progress, &bank_forks, &blockstore, poh_bank.map(|bank| bank.slot()), &mut tower);
+                    Self::dump_then_repair_correct_slots(&mut duplicate_slots_to_repair, &mut ancestors, &mut descendants, &mut progress, &bank_forks, &blockstore, poh_bank.map(|bank| bank.slot()));
                     dump_then_repair_correct_slots_time.stop();
 
                     // From this point on, its not safe to use ancestors/descendants since maybe_start_leader
@@ -823,7 +823,6 @@ impl ReplayStage {
         (progress, heaviest_subtree_fork_choice)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn dump_then_repair_correct_slots(
         duplicate_slots_to_repair: &mut DuplicateSlotsToRepair,
         ancestors: &mut HashMap<Slot, HashSet<Slot>>,
@@ -832,7 +831,6 @@ impl ReplayStage {
         bank_forks: &RwLock<BankForks>,
         blockstore: &Blockstore,
         poh_bank_slot: Option<Slot>,
-        tower: &mut Tower,
     ) {
         if duplicate_slots_to_repair.is_empty() {
             return;
@@ -900,7 +898,6 @@ impl ReplayStage {
                         &root_bank,
                         bank_forks,
                         blockstore,
-                        tower,
                     );
                     true
                 // TODO: Send signal to repair to repair the correct version of
@@ -928,8 +925,9 @@ impl ReplayStage {
         root_bank: &Bank,
         bank_forks: &RwLock<BankForks>,
         blockstore: &Blockstore,
-        tower: &mut Tower,
     ) {
+        warn!("purging slot {}", duplicate_slot);
+
         // Doesn't need to be root bank, just needs a common bank to
         // access the status cache and accounts
         let slot_descendants = descendants.get(&duplicate_slot).cloned();
@@ -945,7 +943,6 @@ impl ReplayStage {
         // Clear the ancestors/descendants map to keep them
         // consistent
         let slot_descendants = slot_descendants.unwrap();
-
         Self::purge_ancestors_descendants(
             duplicate_slot,
             &slot_descendants,
@@ -980,35 +977,11 @@ impl ReplayStage {
         // `remove_unrooted_slots()` call.
         drop(removed_banks);
 
-        let last_vote = tower.last_voted_slot();
         for (slot, slot_id) in slots_to_purge {
             warn!(
                 "purging descendant: {} with slot_id {}, of slot {}",
                 slot, slot_id, duplicate_slot
             );
-
-            if last_vote
-                .map(|last_vote| slot == last_vote)
-                .unwrap_or(false)
-            {
-                // By now, we have already marked the last voted slot invalid in the fork choice rule.
-                // This means the  heaviest slot will be some ancestor of the last vote.
-
-                // The switch threshold check will panic if we attempt to perform the switch threshold
-                // check on an ancestor of the last vote UNLESS we pass the rollback_due_to_to_to_duplicate_ancestor
-                // check in the make_check_switch_threshold_decision(), which is what we relied on up until we deleted
-                // the entry for this slot from the progress map above.
-                //
-                // Once that entry is deleted from the progress map, we no longer know the latest duplicate ancestor
-                // of that last voted slot, so the rollback_due_to_to_to_duplicate_ancestor in check_switch_threshold()
-                // will fail and check in select_vote_and_reset_forks() will panic. Hence we introduce this other boolean
-                // here to suspend switch threshold checks until the next vote.
-
-                // TODO: This is not entirely safe because we are potentially violating switch threshold rules by
-                // suspending switch threshold checks when this flag is set.
-                tower.was_last_vote_reverted = true;
-            }
-
             // Clear the slot signatures from status cache for this slot.
             // TODO: What about RPC queries that had already cloned the Bank for this slot
             // and are looking up the signature for this slot?
@@ -4551,7 +4524,6 @@ mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
-            &mut Tower::default(),
         );
         for i in 5..=7 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
@@ -4589,7 +4561,6 @@ mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
-            &mut Tower::default(),
         );
         for i in 4..=7 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
@@ -4613,7 +4584,6 @@ mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
-            &mut Tower::default(),
         );
         for i in 1..=7 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
