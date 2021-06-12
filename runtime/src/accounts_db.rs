@@ -1373,7 +1373,6 @@ impl AccountsDb {
         purges: Vec<Pubkey>,
         max_clean_root: Option<Slot>,
     ) -> ReclaimResult {
-        println!("calling clean_accounts_older_than_root() {:?}", purges);
         if purges.is_empty() {
             return ReclaimResult::default();
         }
@@ -1433,7 +1432,7 @@ impl AccountsDb {
         let mut already_counted = HashSet::new();
         for (pubkey, (account_infos, ref_count_from_storage)) in purges.iter() {
             let no_delete = if account_infos.len() as u64 != *ref_count_from_storage {
-                println!(
+                debug!(
                     "calc_delete_dependencies(),
                     pubkey: {},
                     account_infos: {:?},
@@ -1448,7 +1447,7 @@ impl AccountsDb {
             } else {
                 let mut no_delete = false;
                 for (_slot, account_info) in account_infos {
-                    println!(
+                    debug!(
                         "calc_delete_dependencies()
                         storage id: {},
                         count len: {}",
@@ -1637,7 +1636,6 @@ impl AccountsDb {
         hashset_to_vec.stop();
         timings.hashset_to_vec_us += hashset_to_vec.as_us();
 
-        println!("delta keys {:?}", pubkeys);
         pubkeys
     }
 
@@ -1672,18 +1670,10 @@ impl AccountsDb {
                                 AccountIndexGetResult::Found(locked_entry, index) => {
                                     let slot_list = locked_entry.slot_list();
                                     let (slot, account_info) = &slot_list[index];
-                                    println!(
-                                        "checking found rooted pubkey {}, lamports {}",
-                                        pubkey, account_info.lamports
-                                    );
                                     if account_info.lamports == 0 {
                                         let res = self
                                             .accounts_index
                                             .roots_and_ref_count(&locked_entry, max_clean_root);
-                                        println!(
-                                            "roots and ref count for zero lamport key {} {:?}",
-                                            pubkey, res
-                                        );
                                         purges_zero_lamports.insert(*pubkey, res);
                                     } else {
                                         // prune zero_lamport_pubkey set which should contain all 0-lamport
@@ -1706,7 +1696,6 @@ impl AccountsDb {
                                         if let Some(max_clean_root) = max_clean_root {
                                             assert!(slot <= max_clean_root);
                                         }
-                                        println!("is uncleaned root {} {}", pubkey, slot);
                                         purges_old_accounts.push(*pubkey);
                                     }
                                 }
@@ -1762,6 +1751,7 @@ impl AccountsDb {
         // Calculate store counts as if everything was purged
         // Then purge if we can
         let mut store_counts: HashMap<AppendVecId, (usize, HashSet<Pubkey>)> = HashMap::new();
+        let original_account_infos = purges_zero_lamports.clone();
         for (key, (account_infos, ref_count)) in purges_zero_lamports.iter_mut() {
             if purged_account_slots.contains_key(&key) {
                 *ref_count = self.accounts_index.ref_count_from_storage(&key);
@@ -1815,10 +1805,8 @@ impl AccountsDb {
         // can be purged. All AppendVecs for those updates are dead.
         let mut purge_filter = Measure::start("purge_filter");
         purges_zero_lamports.retain(|_pubkey, (account_infos, _ref_count)| {
-            println!("checking zero lamport key {}", _pubkey);
             for (_slot, account_info) in account_infos.iter() {
                 if store_counts.get(&account_info.store_id).unwrap().0 != 0 {
-                    println!("checking zero lamport key {} return false", _pubkey);
                     return false;
                 }
             }
@@ -1830,14 +1818,38 @@ impl AccountsDb {
         // Recalculate reclaims with new purge set
         let pubkey_to_slot_set: Vec<_> = purges_zero_lamports
             .into_iter()
-            .map(|(key, (slots_list, _ref_count))| {
-                (
+            .map(|(key, (slots_list, ref_count))| {
+                let slot_list = slots_list
+                    .into_iter()
+                    .map(|(slot, _)| slot)
+                    .collect::<HashSet<Slot>>();
+
+                let og_entry = original_account_infos.get(&key).unwrap();
+
+                let og_slot_list = og_entry
+                    .0
+                    .iter()
+                    .map(|(slot, _)| *slot)
+                    .collect::<Vec<Slot>>();
+
+                let og_ref_count = og_entry.1;
+
+                info!(
+                    "purging zero lamport account {}, 
+                    slot_set: {:?}, 
+                    purged_set: {:?}, 
+                    ref_count: {:?},
+                    original_slots_set: {:?},
+                    original_ref_count: {:?}",
                     key,
-                    slots_list
-                        .into_iter()
-                        .map(|(slot, _)| slot)
-                        .collect::<HashSet<Slot>>(),
-                )
+                    slot_list,
+                    purged_account_slots.get(&key),
+                    ref_count,
+                    og_slot_list,
+                    og_ref_count,
+                );
+
+                (key, slot_list)
             })
             .collect();
 
@@ -3407,13 +3419,13 @@ impl AccountsDb {
 
     #[allow(clippy::needless_collect)]
     fn purge_slots(&self, slots: &HashSet<Slot>) {
+        info!("purging slots: {:?}", slots);
         // `add_root()` should be called first
         let mut safety_checks_elapsed = Measure::start("safety_checks_elapsed");
         let non_roots: Vec<&Slot> = slots
             .iter()
             .filter(|slot| !self.accounts_index.is_root(**slot))
             .collect();
-        println!("non roots: {:?}", non_roots);
         safety_checks_elapsed.stop();
         self.external_purge_slots_stats
             .safety_checks_elapsed
