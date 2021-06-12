@@ -1406,6 +1406,7 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
                 Self::can_purge_older_entries(max_clean_root, newest_root_in_slot_list, *slot)
                     && !value.is_cached();
             if should_purge {
+                println!("purging older value from slot {}", slot);
                 reclaims.push((*slot, value.clone()));
                 purged_slots.insert(*slot);
             }
@@ -1419,9 +1420,11 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         reclaims: &mut SlotList<T>,
         max_clean_root: Option<Slot>,
     ) {
+        println!("calling clean_rooted_entries on {}", pubkey);
         let mut is_slot_list_empty = false;
         if let Some(mut locked_entry) = self.get_account_write_entry(pubkey) {
             locked_entry.slot_list_mut(|slot_list| {
+                println!("running purge_older_root_entries for {}", pubkey);
                 self.purge_older_root_entries(slot_list, reclaims, max_clean_root);
                 is_slot_list_empty = slot_list.is_empty();
             });

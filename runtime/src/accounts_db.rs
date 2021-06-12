@@ -1373,6 +1373,7 @@ impl AccountsDb {
         purges: Vec<Pubkey>,
         max_clean_root: Option<Slot>,
     ) -> ReclaimResult {
+        println!("calling clean_accounts_older_than_root() {:?}", purges);
         if purges.is_empty() {
             return ReclaimResult::default();
         }
@@ -1432,7 +1433,7 @@ impl AccountsDb {
         let mut already_counted = HashSet::new();
         for (pubkey, (account_infos, ref_count_from_storage)) in purges.iter() {
             let no_delete = if account_infos.len() as u64 != *ref_count_from_storage {
-                debug!(
+                println!(
                     "calc_delete_dependencies(),
                     pubkey: {},
                     account_infos: {:?},
@@ -1447,7 +1448,7 @@ impl AccountsDb {
             } else {
                 let mut no_delete = false;
                 for (_slot, account_info) in account_infos {
-                    debug!(
+                    println!(
                         "calc_delete_dependencies()
                         storage id: {},
                         count len: {}",
@@ -1636,6 +1637,7 @@ impl AccountsDb {
         hashset_to_vec.stop();
         timings.hashset_to_vec_us += hashset_to_vec.as_us();
 
+        println!("delta keys {:?}", pubkeys);
         pubkeys
     }
 
@@ -1670,12 +1672,19 @@ impl AccountsDb {
                                 AccountIndexGetResult::Found(locked_entry, index) => {
                                     let slot_list = locked_entry.slot_list();
                                     let (slot, account_info) = &slot_list[index];
+                                    println!(
+                                        "checking found rooted pubkey {}, lamports {}",
+                                        pubkey, account_info.lamports
+                                    );
                                     if account_info.lamports == 0 {
-                                        purges_zero_lamports.insert(
-                                            *pubkey,
-                                            self.accounts_index
-                                                .roots_and_ref_count(&locked_entry, max_clean_root),
+                                        let res = self
+                                            .accounts_index
+                                            .roots_and_ref_count(&locked_entry, max_clean_root);
+                                        println!(
+                                            "roots and ref count for zero lamport key {} {:?}",
+                                            pubkey, res
                                         );
+                                        purges_zero_lamports.insert(*pubkey, res);
                                     } else {
                                         // prune zero_lamport_pubkey set which should contain all 0-lamport
                                         // keys whether rooted or not. A 0-lamport update may become rooted
@@ -1697,6 +1706,7 @@ impl AccountsDb {
                                         if let Some(max_clean_root) = max_clean_root {
                                             assert!(slot <= max_clean_root);
                                         }
+                                        println!("is uncleaned root {} {}", pubkey, slot);
                                         purges_old_accounts.push(*pubkey);
                                     }
                                 }
@@ -1805,8 +1815,10 @@ impl AccountsDb {
         // can be purged. All AppendVecs for those updates are dead.
         let mut purge_filter = Measure::start("purge_filter");
         purges_zero_lamports.retain(|_pubkey, (account_infos, _ref_count)| {
+            println!("checking zero lamport key {}", _pubkey);
             for (_slot, account_info) in account_infos.iter() {
                 if store_counts.get(&account_info.store_id).unwrap().0 != 0 {
+                    println!("checking zero lamport key {} return false", _pubkey);
                     return false;
                 }
             }
@@ -3401,6 +3413,7 @@ impl AccountsDb {
             .iter()
             .filter(|slot| !self.accounts_index.is_root(**slot))
             .collect();
+        println!("non roots: {:?}", non_roots);
         safety_checks_elapsed.stop();
         self.external_purge_slots_stats
             .safety_checks_elapsed
@@ -11007,5 +11020,59 @@ pub mod tests {
         assert!(uncleaned_pubkeys.contains(&pubkey1));
         assert!(uncleaned_pubkeys.contains(&pubkey2));
         assert!(uncleaned_pubkeys.contains(&pubkey3));
+    }
+
+    #[test]
+    fn test_purge_alive_unrooted_slots_after_clean() {
+        let mut accounts = AccountsDb::new_with_config(
+            Vec::new(),
+            &ClusterType::Development,
+            AccountSecondaryIndexes::default(),
+            false,
+        );
+        // Key shared between rooted and nonrooted slot
+        let shared_key = solana_sdk::pubkey::new_rand();
+        println!("shared key {}", shared_key);
+        // Key to keep the storage entry for the unrooted slot alive
+        let unrooted_key = solana_sdk::pubkey::new_rand();
+        let slot0 = 0;
+        let slot1 = 1;
+
+        // Store accounts with greater than 0 lamports
+        let account = AccountSharedData::new(1, 1, AccountSharedData::default().owner());
+        accounts.store_uncached(slot0, &[(&shared_key, &account)]);
+        accounts.store_uncached(slot0, &[(&unrooted_key, &account)]);
+
+        // Simulate adding dirty pubkeys on bank freeze. Note this is
+        // not a rooted slot
+        accounts.get_accounts_delta_hash(slot0);
+
+        // On the next *rooted* slot, update the `shared_key` account to zero lamports
+        let zero_lamport_account =
+            AccountSharedData::new(0, 0, AccountSharedData::default().owner());
+        accounts.store_uncached(slot1, &[(&shared_key, &zero_lamport_account)]);
+
+        // Simulate adding dirty pubkeys on bank freeze, set root
+        accounts.get_accounts_delta_hash(slot1);
+        accounts.add_root(slot1);
+
+        // The later rooted update should also clean up the earlier non rooted update
+        accounts.clean_accounts(None, false);
+
+        println!("second clean starting");
+        accounts.clean_accounts(None, false);
+        assert!(accounts
+            .accounts_index
+            .get_account_read_entry(&shared_key)
+            .is_none());
+
+        // Simulate purge_slot() all from AccountsBackgroundService, should clean up the remaining key
+        let is_from_abs = true;
+        accounts.purge_slot(slot0, is_from_abs);
+        assert!(accounts
+            .accounts_index
+            .get_account_read_entry(&shared_key)
+            .is_none());
+        assert!(accounts.storage.get_slot_storage_entries(slot0).is_none());
     }
 }
