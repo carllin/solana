@@ -801,7 +801,6 @@ $(
     solana-user-authorized_keys.sh \
     add-testnet-solana-user-authorized_keys.sh \
     install-ag.sh \
-    install-certbot.sh \
     install-earlyoom.sh \
     install-iftop.sh \
     install-libssl-compatability.sh \
