@@ -144,6 +144,7 @@ pub struct Blockstore {
     perf_samples_cf: LedgerColumn<cf::PerfSamples>,
     block_height_cf: LedgerColumn<cf::BlockHeight>,
     program_costs_cf: LedgerColumn<cf::ProgramCosts>,
+    bank_hash_cf: LedgerColumn<cf::BankHash>,
     last_root: Arc<RwLock<Slot>>,
     insert_shreds_lock: Arc<Mutex<()>>,
     pub new_shreds_signals: Vec<SyncSender<bool>>,
@@ -344,6 +345,7 @@ impl Blockstore {
         let perf_samples_cf = db.column();
         let block_height_cf = db.column();
         let program_costs_cf = db.column();
+        let bank_hash_cf = db.column();
 
         let db = Arc::new(db);
 
@@ -393,6 +395,7 @@ impl Blockstore {
             perf_samples_cf,
             block_height_cf,
             program_costs_cf,
+            bank_hash_cf,
             new_shreds_signals: vec![],
             completed_slots_senders: vec![],
             insert_shreds_lock: Arc::new(Mutex::new(())),
@@ -2947,6 +2950,14 @@ impl Blockstore {
             Some(_) => false,
             None => slot < self.max_root() && slot > lowest_root,
         }
+    }
+
+    pub fn insert_bank_hash(&self, slot: Slot, hash: Hash) {
+        self.bank_hash_cf.put(slot, &hash).unwrap()
+    }
+
+    pub fn get_bank_hash(&self, slot: Slot) -> Option<Hash> {
+        self.bank_hash_cf.get(slot).unwrap()
     }
 
     pub fn set_roots<'a>(&self, rooted_slots: impl Iterator<Item = &'a Slot>) -> Result<()> {

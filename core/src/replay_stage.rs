@@ -1121,7 +1121,6 @@ impl ReplayStage {
         for (duplicate_slot, bank_hash) in
             new_duplicate_slots.into_iter().zip(bank_hashes.into_iter())
         {
-            info!("{} marking slot {} duplicate", my_pubkey, duplicate_slot);
             // WindowService should only send the signal once per slot
             check_slot_agrees_with_cluster(
                 duplicate_slot,
@@ -1904,6 +1903,7 @@ impl ReplayStage {
                 if let Some(transaction_status_sender) = transaction_status_sender {
                     transaction_status_sender.send_transaction_status_freeze_message(&bank);
                 }
+                blockstore.insert_bank_hash(bank.slot(), bank.hash());
                 bank.freeze();
                 let bank_hash = bank.hash();
                 assert_ne!(bank_hash, Hash::default());
@@ -5059,7 +5059,14 @@ mod tests {
 
         // Try to switch to vote to the heaviest slot 6, then return the vote results
         let (heaviest_bank, heaviest_bank_on_same_fork) = heaviest_subtree_fork_choice
-            .select_forks(&frozen_banks, &tower, &progress, &ancestors, &bank_forks);
+            .select_forks(
+                &Pubkey::default(),
+                &frozen_banks,
+                &tower,
+                &progress,
+                &ancestors,
+                &bank_forks,
+            );
         assert_eq!(heaviest_bank.slot(), 7);
         assert!(heaviest_bank_on_same_fork.is_none());
         ReplayStage::select_vote_and_reset_forks(
@@ -5186,7 +5193,14 @@ mod tests {
 
         // Try to switch to vote to the heaviest slot 5, then return the vote results
         let (heaviest_bank, heaviest_bank_on_same_fork) = heaviest_subtree_fork_choice
-            .select_forks(&frozen_banks, &tower, &progress, &ancestors, &bank_forks);
+            .select_forks(
+                &Pubkey::default(),
+                &frozen_banks,
+                &tower,
+                &progress,
+                &ancestors,
+                &bank_forks,
+            );
         assert_eq!(heaviest_bank.slot(), 5);
         assert!(heaviest_bank_on_same_fork.is_none());
         ReplayStage::select_vote_and_reset_forks(

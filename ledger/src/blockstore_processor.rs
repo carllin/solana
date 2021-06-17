@@ -865,6 +865,7 @@ fn process_bank_0(
     )
     .expect("processing for bank 0 must succeed");
     bank0.freeze();
+    blockstore.insert_bank_hash(bank0.slot(), bank0.hash());
     cache_block_meta(bank0, cache_block_meta_sender);
 }
 
@@ -1182,6 +1183,7 @@ fn process_single_slot(
     })?;
 
     bank.freeze(); // all banks handled by this routine are created from complete slots
+    blockstore.insert_bank_hash(bank.slot(), bank.hash());
     cache_block_meta(bank, cache_block_meta_sender);
 
     Ok(())
