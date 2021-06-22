@@ -83,19 +83,25 @@ impl RequestResponse for ShredRepairType {
     }
 }
 
-pub struct AncestorHashesRepair(Slot);
+pub struct AncestorHashesRepairType(pub Slot);
+impl AncestorHashesRepairType {
+    pub fn slot(&self) -> Slot {
+        self.0
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub enum AncestorHashesResponseVersion {
     Current(Vec<(Slot, Hash)>),
 }
 impl AncestorHashesResponseVersion {
-    fn into_slot_hashes(self) -> Vec<(Slot, Hash)> {
+    pub fn into_slot_hashes(self) -> Vec<(Slot, Hash)> {
         match self {
             AncestorHashesResponseVersion::Current(slot_hashes) => slot_hashes,
         }
     }
 
-    fn slot_hashes(&self) -> &[(Slot, Hash)] {
+    pub fn slot_hashes(&self) -> &[(Slot, Hash)] {
         match self {
             AncestorHashesResponseVersion::Current(slot_hashes) => &slot_hashes,
         }
@@ -108,7 +114,7 @@ impl AncestorHashesResponseVersion {
     }
 }
 
-impl RequestResponse for AncestorHashesRepair {
+impl RequestResponse for AncestorHashesRepairType {
     type Response = AncestorHashesResponseVersion;
     fn num_expected_responses(&self) -> u32 {
         1
@@ -465,6 +471,16 @@ impl ServeRepair {
     fn orphan_bytes(&self, slot: Slot, nonce: Nonce) -> Result<Vec<u8>> {
         let req = RepairProtocol::OrphanWithNonce(self.my_info(), slot, nonce);
         let out = serialize(&req)?;
+        Ok(out)
+    }
+
+    pub fn ancestor_repair_request_bytes(
+        &self,
+        request_slot: Slot,
+        nonce: Nonce,
+    ) -> Result<Vec<u8>> {
+        let repair_request = RepairProtocol::AncestorHashes(self.my_info(), request_slot, nonce);
+        let out = serialize(&repair_request)?;
         Ok(out)
     }
 
