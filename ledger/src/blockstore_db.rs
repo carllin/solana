@@ -17,7 +17,6 @@ use serde::Serialize;
 use solana_runtime::hardened_unpack::UnpackError;
 use solana_sdk::{
     clock::{Slot, UnixTimestamp},
-    hash::Hash,
     pubkey::Pubkey,
     signature::Signature,
 };
@@ -897,7 +896,7 @@ impl ColumnName for columns::BankHash {
     const NAME: &'static str = BANK_HASH_CF;
 }
 impl TypedColumn for columns::BankHash {
-    type Type = Hash;
+    type Type = blockstore_meta::FrozenHashVersioned;
 }
 
 impl SlotColumn for columns::Root {}

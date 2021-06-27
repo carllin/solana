@@ -2952,12 +2952,52 @@ impl Blockstore {
         }
     }
 
-    pub fn insert_bank_hash(&self, slot: Slot, hash: Hash) {
-        self.bank_hash_cf.put(slot, &hash).unwrap()
+    pub fn insert_bank_hash(&self, slot: Slot, frozen_hash: Hash, is_duplicate_confirmed: bool) {
+        if let Some(prev_value) = self.bank_hash_cf.get(slot).unwrap() {
+            if prev_value.frozen_hash() == frozen_hash && prev_value.is_duplicate_confirmed() {
+                // Don't overwrite is_duplicate_confirmed == true with is_duplicate_confirmed == false,
+                // which may happen on startup when procesing from blockstore processor because the
+                // blocks may not reflect earlier observed gossip votes from before the restart.
+                return;
+            }
+        }
+        let data = FrozenHashVersioned::Current(FrozenHashStatus {
+            frozen_hash,
+            is_duplicate_confirmed,
+        });
+        self.bank_hash_cf.put(slot, &data).unwrap()
     }
 
     pub fn get_bank_hash(&self, slot: Slot) -> Option<Hash> {
-        self.bank_hash_cf.get(slot).unwrap()
+        self.bank_hash_cf
+            .get(slot)
+            .unwrap()
+            .map(|versioned| versioned.frozen_hash())
+    }
+
+    pub fn is_duplicate_confirmed(&self, slot: Slot) -> bool {
+        self.bank_hash_cf
+            .get(slot)
+            .unwrap()
+            .map(|versioned| versioned.is_duplicate_confirmed())
+            .unwrap_or(false)
+    }
+
+    pub fn set_duplicate_confirmed_slots_and_hashes(
+        &self,
+        duplicate_confirmed_slot_hashes: impl Iterator<Item = (Slot, Hash)>,
+    ) -> Result<()> {
+        let mut write_batch = self.db.batch()?;
+        for (slot, frozen_hash) in duplicate_confirmed_slot_hashes {
+            let data = FrozenHashVersioned::Current(FrozenHashStatus {
+                frozen_hash,
+                is_duplicate_confirmed: true,
+            });
+            write_batch.put::<cf::BankHash>(slot, &data)?;
+        }
+
+        self.db.write(write_batch)?;
+        Ok(())
     }
 
     pub fn set_roots<'a>(&self, rooted_slots: impl Iterator<Item = &'a Slot>) -> Result<()> {
