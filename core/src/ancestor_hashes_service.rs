@@ -137,6 +137,7 @@ impl AncestorHashesService {
             Arc::new(DashMap::new());
         // Listen for responses to our ancestor requests
         let t_ancestor_hashes_responses = Self::run_responses_listener(
+            repair_info.cluster_info.id(),
             ancestor_hashes_request_statuses.clone(),
             response_receiver,
             blockstore.clone(),
@@ -167,6 +168,7 @@ impl AncestorHashesService {
 
     /// Listen for responses to our ancestors hashes repair requests
     fn run_responses_listener(
+        id: Pubkey,
         ancestor_hashes_request_statuses: Arc<DashMap<Slot, DeadSlotAncestorRequestStatus>>,
         response_receiver: PacketReceiver,
         blockstore: Arc<Blockstore>,
@@ -182,6 +184,7 @@ impl AncestorHashesService {
                 let mut max_packets = 1024;
                 loop {
                     let result = Self::process_new_responses(
+                        &id,
                         &ancestor_hashes_request_statuses,
                         &response_receiver,
                         &blockstore,
@@ -208,6 +211,7 @@ impl AncestorHashesService {
 
     /// Process messages from the network
     fn process_new_responses(
+        id: &Pubkey,
         ancestor_hashes_request_statuses: &DashMap<Slot, DeadSlotAncestorRequestStatus>,
         response_receiver: &PacketReceiver,
         blockstore: &Blockstore,
@@ -237,6 +241,7 @@ impl AncestorHashesService {
         let mut time = Measure::start("ancestor_hashes::handle_packets");
         for response in responses {
             Self::handle_packets(
+                id,
                 ancestor_hashes_request_statuses,
                 response,
                 stats,
@@ -257,6 +262,7 @@ impl AncestorHashesService {
     }
 
     fn handle_packets(
+        id: &Pubkey,
         ancestor_hashes_request_statuses: &DashMap<Slot, DeadSlotAncestorRequestStatus>,
         packets: Packets,
         stats: &mut AncestorHashesResponsesStats,
@@ -297,6 +303,7 @@ impl AncestorHashesService {
                     ancestor_hashes_request_statuses.entry(request_slot)
                 {
                     if let Some(decision) = ancestor_hashes_status_ref.get_mut().add_response(
+                        id,
                         &from_addr,
                         ancestor_hashes_response.into_slot_hashes(),
                         blockstore,
