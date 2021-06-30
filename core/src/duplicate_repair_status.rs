@@ -119,6 +119,7 @@ impl DeadSlotAncestorRequestStatus {
     /// agreed we have the wrong version of the `n-1` ancestor.
     pub fn add_response(
         &mut self,
+        id: &Pubkey,
         from_addr: &SocketAddr,
         response_slot_hashes: Vec<(Slot, Hash)>,
         blockstore: &Blockstore,
@@ -149,9 +150,10 @@ impl DeadSlotAncestorRequestStatus {
         {
             // When we reach MINIMUM_ANCESTOR_AGREEMENT_SIZE of the same responses,
             // check for mismatches.
-            return Some(
-                self.handle_sampled_validators_reached_agreement(blockstore, response_slot_hashes),
-            );
+            let res =
+                self.handle_sampled_validators_reached_agreement(blockstore, response_slot_hashes);
+            println!("{} Agreed upon response: {:?}", id, res);
+            return Some(res);
         }
 
         // If everyone responded and we still haven't agreed upon a set of
@@ -392,7 +394,12 @@ pub mod tests {
         // Try adding a response from an invalid peer, should not be registered
         let rand_addr = create_rand_socket_addr();
         assert!(status
-            .add_response(&rand_addr, vec![(99, Hash::new_unique())], &blockstore)
+            .add_response(
+                &Pubkey::default(),
+                &rand_addr,
+                vec![(99, Hash::new_unique())],
+                &blockstore
+            )
             .is_none());
         assert_eq!(status.num_responses, 0);
         assert!(status.ancestor_request_responses.is_empty());
@@ -425,7 +432,7 @@ pub mod tests {
                 incorrect_ancestors_response.clone()
             };
             assert!(status
-                .add_response(responder_addr, response, &blockstore)
+                .add_response(&Pubkey::default(), responder_addr, response, &blockstore)
                 .is_none());
             assert_eq!(status.num_responses, 1);
             assert_eq!(status.ancestor_request_responses.len(), 1);
@@ -483,7 +490,9 @@ pub mod tests {
                 .unwrap_or_else(|| correct_ancestors_response)
                 .clone();
 
-            if let Some(decision) = status.add_response(responder_addr, response, blockstore) {
+            if let Some(decision) =
+                status.add_response(&Pubkey::default(), responder_addr, response, &blockstore)
+            {
                 // Note we may get a decision before we've heard back from all the
                 // sampled validators
                 return decision;
