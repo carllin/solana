@@ -124,6 +124,7 @@ impl DeadSlotAncestorRequestStatus {
         response_slot_hashes: Vec<(Slot, Hash)>,
         blockstore: &Blockstore,
     ) -> Option<DuplicateAncestorDecision> {
+        info!("received response from {:?}", from_addr);
         if let Some(did_get_response) = self.sampled_validators.get_mut(from_addr) {
             if *did_get_response {
                 // If we've already received a response from this validator, return.
@@ -143,7 +144,7 @@ impl DeadSlotAncestorRequestStatus {
             .or_default();
         validators_with_same_response.push(*from_addr);
 
-        println!(
+        info!(
             "validators_with_same_response len {:?}",
             validators_with_same_response.len()
         );
@@ -157,7 +158,7 @@ impl DeadSlotAncestorRequestStatus {
             // check for mismatches.
             let res =
                 self.handle_sampled_validators_reached_agreement(blockstore, response_slot_hashes);
-            println!("{} Agreed upon response: {:?}", id, res);
+            info!("{} Agreed upon response: {:?}", id, res);
             return Some(res);
         }
 
@@ -166,7 +167,7 @@ impl DeadSlotAncestorRequestStatus {
         // a bad set of validators.
         if self.num_responses == ANCESTOR_HASH_REPAIR_SAMPLE_SIZE.min(self.sampled_validators.len())
         {
-            println!("return invalid sample no agreement");
+            info!("return invalid sample no agreement");
             return Some(DuplicateAncestorDecision::InvalidSample);
         }
 
@@ -203,7 +204,7 @@ impl DeadSlotAncestorRequestStatus {
         // Iterate from smallest to largest ancestor, performing integrity checks.
         for (i, (ancestor_slot, agreed_upon_hash)) in agreed_response.iter().rev().enumerate() {
             if i != 0 && *ancestor_slot <= last_ancestor {
-                println!("return invalid sample out of order");
+                info!("return invalid sample out of order");
                 // Responses were not properly ordered
                 return DuplicateAncestorDecision::InvalidSample;
             }
@@ -211,7 +212,7 @@ impl DeadSlotAncestorRequestStatus {
             if *ancestor_slot > self.requested_mismatched_slot {
                 // We should only get ancestors of `self.requested_mismatched_slot`
                 // in valid responses
-                println!("return invalid sample big ancestor");
+                info!("return invalid sample big ancestor");
                 return DuplicateAncestorDecision::InvalidSample;
             }
             let our_frozen_hash = blockstore.get_bank_hash(*ancestor_slot);
@@ -219,7 +220,7 @@ impl DeadSlotAncestorRequestStatus {
                 if earliest_erroring_ancestor.is_some() && our_frozen_hash == *agreed_upon_hash {
                     // It's impossible have a different version of an earlier ancestor, but
                     // then also have the same version of a later ancestor.
-                    println!("mismatches then matches");
+                    info!("mismatches then matches");
                     return DuplicateAncestorDecision::InvalidSample;
                 } else if our_frozen_hash != *agreed_upon_hash
                     && earliest_erroring_ancestor.is_none()
@@ -303,7 +304,7 @@ impl DeadSlotAncestorRequestStatus {
             } else {
                 // We only need to look through the first `earliest_erroring_ancestor_index + 1`
                 // elements and dump/repair any mismatches.
-                println!(
+                info!(
                     "earliest failing ancestor: {}, {:?}",
                     earliest_erroring_ancestor_index,
                     agreed_response[earliest_erroring_ancestor_index]
@@ -475,9 +476,9 @@ pub mod tests {
         let mut event_order: Vec<usize> = (0..sampled_addresses.len()).collect();
         event_order.shuffle(&mut thread_rng());
 
-        println!("event order: {:?}", event_order);
+        info!("event order: {:?}", event_order);
         for (event, responder_addr) in event_order.iter().zip(sampled_addresses.iter()) {
-            println!("running event {}", event);
+            info!("running event {}", event);
             let response = events
                 .range((event + 1)..)
                 .next()
