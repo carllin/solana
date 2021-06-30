@@ -634,6 +634,10 @@ impl AncestorHashesService {
         );
 
         if let Ok(sampled_validators) = sampled_validators {
+            info!(
+                "Ancestor hashes sampled validators: {:?}",
+                sampled_validators
+            );
             for (pubkey, socket_addr) in sampled_validators.iter() {
                 repair_stats
                     .ancestor_requests

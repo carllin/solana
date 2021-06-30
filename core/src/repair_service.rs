@@ -187,6 +187,11 @@ impl RepairService {
         };
 
         let ancestor_hashes_request_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").unwrap());
+        info!(
+            "{} starting ancestor socket on {:?}",
+            repair_info.cluster_info.id(),
+            ancestor_hashes_request_socket.local_addr()
+        );
         let ancestor_hashes_service = AncestorHashesService::new(
             exit,
             blockstore,

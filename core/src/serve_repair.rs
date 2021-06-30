@@ -83,7 +83,7 @@ impl RequestResponse for ShredRepairType {
         }
     }
     fn verify_response(&self, response_shred: &Shred) -> bool {
-        match self {
+        let res = match self {
             ShredRepairType::Orphan(slot) => response_shred.slot() <= *slot,
             ShredRepairType::HighestShred(slot, index) => {
                 response_shred.slot() as u64 == *slot && response_shred.index() as u64 >= *index
@@ -91,10 +91,20 @@ impl RequestResponse for ShredRepairType {
             ShredRepairType::Shred(slot, index) => {
                 response_shred.slot() as u64 == *slot && response_shred.index() as u64 == *index
             }
+        };
+        if !res {
+            panic!(
+                "{:?} had bad response from shred {} {}",
+                self,
+                response_shred.slot(),
+                response_shred.index()
+            );
         }
+        res
     }
 }
 
+#[derive(Debug)]
 pub struct AncestorHashesRepairType(pub Slot);
 impl AncestorHashesRepairType {
     pub fn slot(&self) -> Slot {
@@ -614,6 +624,10 @@ impl ServeRepair {
         shred_index: u64,
         nonce: Nonce,
     ) -> Option<Packets> {
+        info!(
+            "Got request for nonce {}, slot: {}, index: {}",
+            nonce, slot, shred_index
+        );
         if let Some(blockstore) = blockstore {
             // Try to find the requested index in one of the slots
             let packet = repair_response::repair_response_packet(
@@ -731,6 +745,10 @@ impl ServeRepair {
             // If this slot is not duplicate confirmed, return nothing
             vec![]
         };
+        info!(
+            "Response to ancestor slot hash request: {:?}, send to {:?}",
+            ancestor_slot_hashes, from_addr
+        );
         let response = AncestorHashesResponseVersion::Current(ancestor_slot_hashes);
         let serialized_response = serialize(&response).ok()?;
 

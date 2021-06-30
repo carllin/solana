@@ -124,6 +124,7 @@ impl DeadSlotAncestorRequestStatus {
         response_slot_hashes: Vec<(Slot, Hash)>,
         blockstore: &Blockstore,
     ) -> Option<DuplicateAncestorDecision> {
+        info!("received response from {:?}", from_addr);
         if let Some(did_get_response) = self.sampled_validators.get_mut(from_addr) {
             if *did_get_response {
                 // If we've already received a response from this validator, return.
@@ -143,6 +144,11 @@ impl DeadSlotAncestorRequestStatus {
             .or_default();
         validators_with_same_response.push(*from_addr);
 
+        info!(
+            "validators_with_same_response len {:?}",
+            validators_with_same_response.len()
+        );
+
         // If we got enough of the sampled validators to respond, we are confident
         // this is the correct set of ancestors
         if validators_with_same_response.len()
@@ -152,7 +158,7 @@ impl DeadSlotAncestorRequestStatus {
             // check for mismatches.
             let res =
                 self.handle_sampled_validators_reached_agreement(blockstore, response_slot_hashes);
-            println!("{} Agreed upon response: {:?}", id, res);
+            info!("{} Agreed upon response: {:?}", id, res);
             return Some(res);
         }
 
@@ -310,6 +316,11 @@ impl DeadSlotAncestorRequestStatus {
             } else {
                 // We only need to look through the first `earliest_erroring_ancestor_index + 1`
                 // elements and dump/repair any mismatches.
+                info!(
+                    "earliest failing ancestor: {}, {:?}",
+                    earliest_erroring_ancestor_index,
+                    agreed_response[earliest_erroring_ancestor_index]
+                );
                 agreed_response.truncate(earliest_erroring_ancestor_index + 1);
                 let repair_status = decision.repair_status_mut().unwrap();
                 repair_status.correct_ancestors_to_repair = agreed_response;
