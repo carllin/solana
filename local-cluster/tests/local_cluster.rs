@@ -1966,13 +1966,7 @@ fn test_snapshots_restart_validity() {
 #[serial]
 #[allow(unused_attributes)]
 fn test_fail_entry_verification_leader() {
-    let leader_stake = (DUPLICATE_THRESHOLD * 100.0) as u64 + 1;
-    let validator_stake1 = (100 - leader_stake) / 2;
-    let validator_stake2 = 100 - leader_stake - validator_stake1;
-    test_faulty_node(
-        BroadcastStageType::FailEntryVerification,
-        vec![leader_stake, validator_stake1, validator_stake2],
-    );
+    test_faulty_node(BroadcastStageType::FailEntryVerification, vec![60, 50, 60]);
 }
 
 #[test]
@@ -1988,11 +1982,11 @@ fn test_fake_shreds_broadcast_leader() {
 #[serial]
 #[allow(unused_attributes)]
 fn test_duplicate_shreds_broadcast_leader() {
-    let node_stakes = vec![60, 50, 60];
+    let node_stakes = vec![10, 50, 60];
     test_faulty_node(
         BroadcastStageType::BroadcastDuplicates(BroadcastDuplicatesConfig {
             stake_partition: 50,
-            duplicate_send_delay: 1,
+            duplicate_send_delay: 0,
         }),
         node_stakes,
     );

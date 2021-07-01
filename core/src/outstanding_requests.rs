@@ -2,14 +2,15 @@ use crate::request_response::RequestResponse;
 use lru::LruCache;
 use rand::{thread_rng, Rng};
 use solana_ledger::shred::Nonce;
+use std::fmt::Debug;
 
 pub const DEFAULT_REQUEST_EXPIRATION_MS: u64 = 60_000;
 
-pub struct OutstandingRequests<T> {
+pub struct OutstandingRequests<T: Debug> {
     requests: LruCache<Nonce, RequestStatus<T>>,
 }
 
-impl<T, S> OutstandingRequests<T>
+impl<T: Debug, S> OutstandingRequests<T>
 where
     T: RequestResponse<Response = S>,
 {
@@ -41,6 +42,10 @@ where
             .requests
             .get_mut(&nonce)
             .map(|status| {
+                info!(
+                    "checking nonce: {:?}, num_expected_responses: {} {:?}",
+                    nonce, status.num_expected_responses, status.request
+                );
                 if status.num_expected_responses > 0
                     && now < status.expire_timestamp
                     && status.request.verify_response(response)
@@ -54,7 +59,10 @@ where
                     (None, true)
                 }
             })
-            .unwrap_or((None, false));
+            .unwrap_or_else(|| {
+                info!("response with nonce: {} does not match any request", nonce);
+                (None, false)
+            });
 
         if should_delete {
             self.requests
@@ -66,7 +74,7 @@ where
     }
 }
 
-impl<T> Default for OutstandingRequests<T> {
+impl<T: Debug> Default for OutstandingRequests<T> {
     fn default() -> Self {
         Self {
             requests: LruCache::new(16 * 1024),

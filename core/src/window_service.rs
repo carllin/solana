@@ -162,6 +162,14 @@ fn prune_shreds_invalid_repair(
             )
                 .0;
             if !should_keep {
+                if shred.is_data() {
+                    warn!(
+                        "Shred with nonce {} slot {} index {} removed and not kept",
+                        repair_infos[i - 1].as_ref().unwrap().nonce,
+                        shred.slot(),
+                        shred.index()
+                    );
+                }
                 removed.insert(i - 1);
             }
             should_keep
@@ -173,6 +181,7 @@ fn prune_shreds_invalid_repair(
 }
 
 fn run_insert<F>(
+    my_pubkey: &Pubkey,
     shred_receiver: &CrossbeamReceiver<(Vec<Shred>, Vec<Option<RepairMeta>>)>,
     blockstore: &Arc<Blockstore>,
     leader_schedule_cache: &Arc<LeaderScheduleCache>,
@@ -198,6 +207,7 @@ where
         .collect();
 
     let (completed_data_sets, inserted_indices) = blockstore.insert_shreds_handle_duplicate(
+        my_pubkey,
         shreds,
         repairs,
         Some(leader_schedule_cache),
@@ -281,7 +291,11 @@ where
                                         None
                                     }
                                 };
-                                if shred_filter(&shred, last_root) {
+                                let res = shred_filter(&shred, last_root);
+                                if shred.is_data() {
+                                    info!("{} received shred slot {} index {} with sig {}, filter result: {}", my_pubkey, shred.slot(), shred.index(), shred.signature(), res);
+                                }
+                                if res {
                                     let leader_pubkey = leader_schedule_cache
                                         .slot_leader_at(shred.slot(), Some(&root_bank));
                                     packet.meta.slot = shred.slot();
@@ -404,6 +418,7 @@ impl WindowService {
         );
 
         let t_insert = Self::start_window_insert_thread(
+            id,
             exit,
             &blockstore,
             leader_schedule_cache,
@@ -466,6 +481,7 @@ impl WindowService {
     }
 
     fn start_window_insert_thread(
+        my_pubkey: Pubkey,
         exit: &Arc<AtomicBool>,
         blockstore: &Arc<Blockstore>,
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
@@ -496,6 +512,7 @@ impl WindowService {
                     }
 
                     if let Err(e) = run_insert(
+                        &my_pubkey,
                         &insert_receiver,
                         &blockstore,
                         &leader_schedule_cache,

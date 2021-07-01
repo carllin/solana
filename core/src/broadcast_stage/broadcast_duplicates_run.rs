@@ -234,22 +234,6 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                     bank.slot(),
                     &duplicate_recipients,
                 );
-                warn!(
-                    "Duplicate shreds for slot {} will be broadcast in {} slot(s)",
-                    bank.slot(),
-                    self.config.duplicate_send_delay
-                );
-
-                let delayed_shreds: Option<Vec<Shred>> = vec![
-                    duplicate_data_shreds.last().cloned(),
-                    data_shreds.last().cloned(),
-                ]
-                .into_iter()
-                .collect();
-                self.delayed_queue
-                    .lock()
-                    .unwrap()
-                    .push_back((Some(highest_staked_node), delayed_shreds));
             }
         }
 
@@ -286,38 +270,27 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         sock: &UdpSocket,
         _bank_forks: &Arc<RwLock<BankForks>>,
     ) -> Result<()> {
-        // Check the delay queue for shreds that are ready to be sent
-        let (delayed_recipient, delayed_shreds) = {
-            let mut delayed_deque = self.delayed_queue.lock().unwrap();
-            if delayed_deque.len() > self.config.duplicate_send_delay {
-                delayed_deque.pop_front().unwrap()
-            } else {
-                (None, None)
-            }
-        };
-
         let ((stakes, shreds), _) = receiver.lock().unwrap().recv()?;
         let stakes = stakes.unwrap();
         for peer in cluster_info.tvu_peers() {
-            // Forward shreds to circumvent gossip
             if stakes.get(&peer.id).is_some() {
                 shreds.iter().for_each(|shred| {
-                    sock.send_to(&shred.payload, &peer.tvu_forwards).unwrap();
+                    if shred.is_data() {
+                        info!(
+                            "sending shred slot {} index {} with sig {} to {:?}",
+                            shred.slot(),
+                            shred.index(),
+                            shred.signature(),
+                            peer.id
+                        );
+                    }
+                    sock.send_to(&shred.payload, &peer.tvu).unwrap();
                 });
             }
-
-            // After a delay, broadcast duplicate shreds to a single node
-            if let Some(shreds) = delayed_shreds.as_ref() {
-                if Some(peer.id) == delayed_recipient {
-                    shreds.iter().for_each(|shred| {
-                        sock.send_to(&shred.payload, &peer.tvu).unwrap();
-                    });
-                }
-            }
         }
-
         Ok(())
     }
+
     fn record(
         &mut self,
         receiver: &Arc<Mutex<RecordReceiver>>,
