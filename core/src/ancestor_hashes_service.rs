@@ -634,10 +634,6 @@ impl AncestorHashesService {
         );
 
         if let Ok(sampled_validators) = sampled_validators {
-            info!(
-                "Ancestor hashes sampled validators: {:?}",
-                sampled_validators
-            );
             for (pubkey, socket_addr) in sampled_validators.iter() {
                 repair_stats
                     .ancestor_requests
@@ -646,6 +642,10 @@ impl AncestorHashesService {
                     .write()
                     .unwrap()
                     .add_request(AncestorHashesRepairType(duplicate_slot), timestamp());
+                info!(
+                    "Ancestor hashes sampled validator: {:?}, nonce {}",
+                    sampled_validators, nonce,
+                );
                 let request_bytes =
                     serve_repair.ancestor_repair_request_bytes(duplicate_slot, nonce);
                 if let Ok(request_bytes) = request_bytes {

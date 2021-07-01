@@ -37,7 +37,7 @@ impl ClusterSlots {
             cluster_info.get_epoch_slots(&mut cursor)
         };
         let id = cluster_info.id();
-        self.update_internal(&id, root, epoch_slots);
+        self.update_internal(&id, root_bank.slot(), epoch_slots);
     }
 
     fn update_internal(&self, pubkey: &Pubkey, root: Slot, epoch_slots_list: Vec<EpochSlots>) {
