@@ -745,10 +745,6 @@ impl ServeRepair {
             // If this slot is not duplicate confirmed, return nothing
             vec![]
         };
-        info!(
-            "Response to ancestor slot hash request: {:?}, send to {:?}",
-            ancestor_slot_hashes, from_addr
-        );
         let response = AncestorHashesResponseVersion::Current(ancestor_slot_hashes);
         let serialized_response = serialize(&response).ok()?;
 
@@ -760,6 +756,10 @@ impl ServeRepair {
             from_addr,
             nonce,
         )?;
+        info!(
+            "Response to ancestor slot hash request send to {:?}, nonce: {}, packet size: {:?}",
+            from_addr, nonce, packet.meta.size
+        );
         Some(Packets::new_unpinned_with_recycler_data(
             recycler,
             "run_ancestor_hashes",

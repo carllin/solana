@@ -795,6 +795,7 @@ impl Blockstore {
 
     pub fn insert_shreds_handle_duplicate<F>(
         &self,
+        id: &Pubkey,
         shreds: Vec<Shred>,
         is_repaired: Vec<bool>,
         leader_schedule: Option<&LeaderScheduleCache>,
@@ -840,6 +841,7 @@ impl Blockstore {
                         ShredSource::Turbine
                     };
                     if let Ok(completed_data_sets) = self.check_insert_data_shred(
+                        id,
                         shred,
                         &mut erasure_metas,
                         &mut index_working_set,
@@ -901,6 +903,7 @@ impl Blockstore {
                     let shred_slot = shred.slot();
                     if shred.verify(&leader) {
                         match self.check_insert_data_shred(
+                            id,
                             shred,
                             &mut erasure_metas,
                             &mut index_working_set,
@@ -1045,6 +1048,7 @@ impl Blockstore {
     ) -> Result<(Vec<CompletedDataSetInfo>, Vec<usize>)> {
         let shreds_len = shreds.len();
         self.insert_shreds_handle_duplicate(
+            &Pubkey::default(),
             shreds,
             vec![false; shreds_len],
             leader_schedule,
@@ -1214,6 +1218,7 @@ impl Blockstore {
     #[allow(clippy::too_many_arguments)]
     fn check_insert_data_shred<F>(
         &self,
+        id: &Pubkey,
         shred: Shred,
         erasure_metas: &mut HashMap<(u64, u64), ErasureMeta>,
         index_working_set: &mut HashMap<u64, IndexMetaWorkingSetEntry>,
@@ -1242,7 +1247,16 @@ impl Blockstore {
         let slot_meta = &mut slot_meta_entry.new_slot_meta.borrow_mut();
 
         if !is_trusted {
-            if Self::is_data_shred_present(&shred, slot_meta, index_meta.data()) {
+            let res = Self::is_data_shred_present(&shred, slot_meta, index_meta.data());
+            info!(
+                "{} Insert shred with slot {}, index {}, signature {} check exists: {:?}",
+                id,
+                shred.slot(),
+                shred.index(),
+                shred.signature(),
+                res
+            );
+            if res {
                 handle_duplicate(shred);
                 return Err(InsertDataShredError::Exists);
             }

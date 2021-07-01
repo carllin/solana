@@ -7,7 +7,7 @@ use {
 };
 
 pub const NUM_BAD_SLOTS: u64 = 10;
-pub const SLOT_TO_RESOLVE: u64 = 32;
+pub const SLOT_TO_RESOLVE: u64 = 1000;
 
 #[derive(Clone)]
 pub(super) struct FailEntryVerificationBroadcastRun {
@@ -66,6 +66,7 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
         // in the slot to make verification fail on validators
         let last_entries = {
             if last_tick_height == bank.max_tick_height() && bank.slot() < NUM_BAD_SLOTS {
+                // Make sure even the good shreds are missing the last entry
                 let good_last_entry = receive_results.entries.pop().unwrap();
                 let mut bad_last_entry = good_last_entry.clone();
                 bad_last_entry.hash = Hash::default();
