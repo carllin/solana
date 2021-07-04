@@ -583,7 +583,7 @@ impl AncestorHashesService {
                     info!(
                         "{} Looking up status of dead slot {}, 
                         completed_nodes: {:?}
-                        stake: {}, 
+                        stake: {},
                         total_stake: {}, 
                         pct: {}",
                         id,
