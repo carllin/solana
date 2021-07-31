@@ -234,7 +234,10 @@ impl Tower {
                     );
                     continue;
                 }
-                Ok(vote_state) => vote_state.clone(),
+                Ok(vote_state) => {
+                    info!("vote state for {} {:?}", key, vote_state);
+                    vote_state.clone()
+                }
             };
             for vote in &vote_state.votes {
                 lockout_intervals

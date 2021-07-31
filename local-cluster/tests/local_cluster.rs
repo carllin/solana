@@ -2038,7 +2038,6 @@ fn test_fake_shreds_broadcast_leader() {
 
 #[test]
 #[serial]
-#[ignore]
 #[allow(unused_attributes)]
 fn test_duplicate_shreds_broadcast_leader() {
     // Create 4 nodes:
