@@ -8,7 +8,7 @@ use crate::{
     result::{Error, Result},
     serve_repair::{AncestorHashesRepairType, ServeRepair},
 };
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use dashmap::{mapref::entry::Entry::Occupied, DashMap};
 use solana_ledger::{blockstore::Blockstore, shred::SIZE_OF_NONCE};
 use solana_measure::measure::Measure;
@@ -54,6 +54,9 @@ pub const MAX_ANCESTOR_HASHES_SLOT_REQUESTS_PER_SECOND: usize = 2;
 
 pub type AncestorHashesReplayUpdateSender = Sender<AncestorHashesReplayUpdate>;
 pub type AncestorHashesReplayUpdateReceiver = Receiver<AncestorHashesReplayUpdate>;
+
+type RetryableSlotsSender = Sender<Slot>;
+type RetryableSlotsReceiver = Receiver<Slot>;
 type OutstandingAncestorHashesRepairs = OutstandingRequests<AncestorHashesRepairType>;
 
 #[derive(Default)]
@@ -155,6 +158,8 @@ impl AncestorHashesService {
 
         let ancestor_hashes_request_statuses: Arc<DashMap<Slot, DeadSlotAncestorRequestStatus>> =
             Arc::new(DashMap::new());
+        let (retryable_slots_sender, retryable_slots_receiver) = unbounded();
+
         // Listen for responses to our ancestor requests
         let t_ancestor_hashes_responses = Self::run_responses_listener(
             repair_info.cluster_info.id(),
@@ -164,6 +169,7 @@ impl AncestorHashesService {
             outstanding_requests.clone(),
             exit.clone(),
             repair_info.duplicate_slots_reset_sender.clone(),
+            retryable_slots_sender,
         );
 
         // Generate ancestor requests for dead slots that are repairable
@@ -174,6 +180,7 @@ impl AncestorHashesService {
             outstanding_requests,
             exit,
             ancestor_hashes_replay_update_receiver,
+            retryable_slots_receiver,
         );
         let thread_hdls = vec![t_receiver, t_ancestor_hashes_responses, t_ancestor_requests];
         Self { thread_hdls }
@@ -195,6 +202,7 @@ impl AncestorHashesService {
         outstanding_requests: Arc<RwLock<OutstandingAncestorHashesRepairs>>,
         exit: Arc<AtomicBool>,
         duplicate_slots_reset_sender: DuplicateSlotsResetSender,
+        retryable_slots_sender: RetryableSlotsSender,
     ) -> JoinHandle<()> {
         Builder::new()
             .name("solana-ancestor-hashes-responses-service".to_string())
@@ -212,6 +220,7 @@ impl AncestorHashesService {
                         &mut stats,
                         &mut max_packets,
                         &duplicate_slots_reset_sender,
+                        &retryable_slots_sender,
                     );
                     match result {
                         Err(Error::RecvTimeout(_)) | Ok(_) => {}
@@ -239,6 +248,7 @@ impl AncestorHashesService {
         stats: &mut AncestorHashesResponsesStats,
         max_packets: &mut usize,
         duplicate_slots_reset_sender: &DuplicateSlotsResetSender,
+        retryable_slots_sender: &RetryableSlotsSender,
     ) -> Result<()> {
         let timeout = Duration::new(1, 0);
         let mut responses = vec![response_receiver.recv_timeout(timeout)?];
@@ -268,6 +278,7 @@ impl AncestorHashesService {
                 outstanding_requests,
                 blockstore,
                 duplicate_slots_reset_sender,
+                retryable_slots_sender,
             );
         }
         time.stop();
@@ -289,6 +300,7 @@ impl AncestorHashesService {
         outstanding_requests: &RwLock<OutstandingAncestorHashesRepairs>,
         blockstore: &Blockstore,
         duplicate_slots_reset_sender: &DuplicateSlotsResetSender,
+        retryable_slots_sender: &RetryableSlotsSender,
     ) {
         packets.packets.iter().for_each(|packet| {
             let decision = Self::verify_and_process_ancestor_response(
@@ -299,38 +311,13 @@ impl AncestorHashesService {
                 outstanding_requests,
                 blockstore,
             );
-            if let Some(decision) = decision {
-                let potential_slots_to_dump = {
-                    // TODO: In the case of DuplicateAncestorDecision::ContinueSearch
-                    // This means all the ancestors were mismatched, which
-                    // means the earliest mismatched ancestor has yet to be found.
-                    //
-                    // In the best case scenario, this means after ReplayStage dumps
-                    // the earliest known ancestor `A` here, and then repairs `A`,
-                    // because we may still have the incorrect version of some ancestor
-                    // of `A`, we will mark `A` as dead and then continue the search
-                    // protocol through another round of ancestor repairs.
-                    //
-                    // However this process is a bit slow, so in an ideal world, the
-                    // protocol could be extended to keep searching by making
-                    // another ancestor repair request from the earliest returned
-                    // ancestor from this search.
-                    decision
-                        .repair_status()
-                        .map(|status| status.correct_ancestors_to_repair.clone())
-                };
-
-                // Now signal replay the new updated slots. It's important to do this
-                // AFTER we've removed the ancestor_hashes_status_ref in case replay
-                // then sends us another dead slot signal based on the updates we are
-                // about to send.
-                if let Some(potential_slots_to_dump) = potential_slots_to_dump {
-                    // Signal ReplayStage to dump the fork that is descended from
-                    // `earliest_mismatched_slot_to_dump`.
-                    if !potential_slots_to_dump.is_empty() {
-                        let _ = duplicate_slots_reset_sender.send(potential_slots_to_dump);
-                    }
-                }
+            if let Some((slot, decision)) = decision {
+                Self::handle_ancestor_request_decision(
+                    slot,
+                    decision,
+                    duplicate_slots_reset_sender,
+                    retryable_slots_sender,
+                );
             }
         });
     }
@@ -342,7 +329,7 @@ impl AncestorHashesService {
         stats: &mut AncestorHashesResponsesStats,
         outstanding_requests: &RwLock<OutstandingAncestorHashesRepairs>,
         blockstore: &Blockstore,
-    ) -> Option<DuplicateAncestorDecision> {
+    ) -> Option<(Slot, DuplicateAncestorDecision)> {
         let from_addr = packet.meta.addr();
         limited_deserialize(&packet.data[..packet.meta.size - SIZE_OF_NONCE])
             .ok()
@@ -388,11 +375,53 @@ impl AncestorHashesService {
                         // another new one via `manage_ancestor_requests()`.
                         ancestor_hashes_status_ref.remove();
                     }
-                    decision
+                    decision.map(|decision| (request_slot, decision))
                 } else {
                     None
                 }
             })
+    }
+
+    fn handle_ancestor_request_decision(
+        slot: Slot,
+        decision: DuplicateAncestorDecision,
+        duplicate_slots_reset_sender: &DuplicateSlotsResetSender,
+        retryable_slots_sender: &RetryableSlotsSender,
+    ) {
+        if decision.is_retryable() {
+            let _ = retryable_slots_sender.send(slot);
+        }
+        let potential_slots_to_dump = {
+            // TODO: In the case of DuplicateAncestorDecision::ContinueSearch
+            // This means all the ancestors were mismatched, which
+            // means the earliest mismatched ancestor has yet to be found.
+            //
+            // In the best case scenario, this means after ReplayStage dumps
+            // the earliest known ancestor `A` here, and then repairs `A`,
+            // because we may still have the incorrect version of some ancestor
+            // of `A`, we will mark `A` as dead and then continue the search
+            // protocol through another round of ancestor repairs.
+            //
+            // However this process is a bit slow, so in an ideal world, the
+            // protocol could be extended to keep searching by making
+            // another ancestor repair request from the earliest returned
+            // ancestor from this search.
+            decision
+                .repair_status()
+                .map(|status| status.correct_ancestors_to_repair.clone())
+        };
+
+        // Now signal replay the new updated slots. It's important to do this
+        // AFTER we've removed the ancestor_hashes_status_ref in case replay
+        // then sends us another dead slot signal based on the updates we are
+        // about to send.
+        if let Some(potential_slots_to_dump) = potential_slots_to_dump {
+            // Signal ReplayStage to dump the fork that is descended from
+            // `earliest_mismatched_slot_to_dump`.
+            if !potential_slots_to_dump.is_empty() {
+                let _ = duplicate_slots_reset_sender.send(potential_slots_to_dump);
+            }
+        }
     }
 
     fn process_replay_updates(
@@ -430,6 +459,7 @@ impl AncestorHashesService {
         outstanding_requests: Arc<RwLock<OutstandingAncestorHashesRepairs>>,
         exit: Arc<AtomicBool>,
         ancestor_hashes_replay_update_receiver: AncestorHashesReplayUpdateReceiver,
+        retryable_slots_receiver: RetryableSlotsReceiver,
     ) -> JoinHandle<()> {
         let serve_repair = ServeRepair::new(repair_info.cluster_info.clone());
         let mut repair_stats = AncestorRepairRequestsStats::default();
@@ -453,6 +483,7 @@ impl AncestorHashesService {
                     &repair_info,
                     &outstanding_requests,
                     &ancestor_hashes_replay_update_receiver,
+                    &retryable_slots_receiver,
                     &serve_repair,
                     &mut repair_stats,
                     &mut dead_slot_pool,
@@ -472,6 +503,7 @@ impl AncestorHashesService {
         repair_info: &RepairInfo,
         outstanding_requests: &RwLock<OutstandingAncestorHashesRepairs>,
         ancestor_hashes_replay_update_receiver: &AncestorHashesReplayUpdateReceiver,
+        retryable_slots_receiver: &RetryableSlotsReceiver,
         serve_repair: &ServeRepair,
         repair_stats: &mut AncestorRepairRequestsStats,
         dead_slot_pool: &mut HashSet<Slot>,
@@ -479,6 +511,10 @@ impl AncestorHashesService {
         request_throttle: &mut Vec<u64>,
     ) {
         let root_bank = repair_info.bank_forks.read().unwrap().root_bank();
+        for slot in retryable_slots_receiver.try_iter() {
+            repairable_dead_slot_pool.insert(slot);
+        }
+
         Self::process_replay_updates(
             ancestor_hashes_replay_update_receiver,
             ancestor_hashes_request_statuses,
@@ -681,7 +717,6 @@ mod test {
         serve_repair::MAX_ANCESTOR_RESPONSES,
         vote_simulator::VoteSimulator,
     };
-    use crossbeam_channel::unbounded;
     use solana_gossip::{
         cluster_info::{ClusterInfo, Node},
         contact_info::ContactInfo,
