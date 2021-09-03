@@ -2808,6 +2808,10 @@ fn main() {
 
             let mut slot_hash = Vec::new();
             for (i, slot) in iter.into_iter().enumerate() {
+                if blockstore.is_dead(slot) {
+                    println!("root slot {} is dead", slot);
+                    blockstore.unset_dead_slot(slot);
+                }
                 if i > num_roots {
                     break;
                 }
