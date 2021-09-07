@@ -2808,6 +2808,7 @@ fn main() {
 
             let mut slot_hash = Vec::new();
             for (i, slot) in iter.into_iter().enumerate() {
+                println!("Found root {}", slot);
                 if blockstore.is_dead(slot) {
                     println!("root slot {} is dead", slot);
                     blockstore.unset_dead_slot(slot);
@@ -2838,6 +2839,7 @@ fn main() {
                     Box::new(stdout())
                 };
 
+            println!("Ultimately found {} roots", slot_hash.len());
             slot_hash
                 .into_iter()
                 .rev()
