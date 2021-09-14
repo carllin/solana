@@ -2064,6 +2064,62 @@ fn main() {
                     }
                 }
             }
+
+            let accounts_index_config = value_t!(arg_matches, "accounts_index_bins", usize)
+            .ok()
+            .map(|bins| AccountsIndexConfig { bins: Some(bins) });
+
+        let accounts_db_config = Some(AccountsDbConfig {
+            index: accounts_index_config,
+            accounts_hash_cache_path: Some(ledger_path.clone()),
+        });
+
+        let process_options = ProcessOptions {
+            dev_halt_at_slot: value_t!(arg_matches, "halt_at_slot", Slot).ok(),
+            new_hard_forks: hardforks_of(arg_matches, "hard_forks"),
+            poh_verify: !arg_matches.is_present("skip_poh_verify"),
+            bpf_jit: !matches.is_present("no_bpf_jit"),
+            accounts_db_caching_enabled: !arg_matches.is_present("no_accounts_db_caching"),
+            limit_load_slot_count_from_snapshot: value_t!(
+                arg_matches,
+                "limit_load_slot_count_from_snapshot",
+                usize
+            )
+            .ok(),
+            accounts_db_config,
+            verify_index: arg_matches.is_present("verify_accounts_index"),
+            allow_dead_slots: arg_matches.is_present("allow_dead_slots"),
+            accounts_db_test_hash_calculation: arg_matches
+                .is_present("accounts_db_test_hash_calculation"),
+            ..ProcessOptions::default()
+        };
+        let print_accounts_stats = arg_matches.is_present("print_accounts_stats");
+        println!(
+            "genesis hash: {}",
+            open_genesis_config_by(&ledger_path, arg_matches).hash()
+        );
+
+        let blockstore = open_blockstore(
+            &ledger_path,
+            AccessType::TryPrimaryThenSecondary,
+            wal_recovery_mode,
+        );
+        let (bank_forks, ..) = load_bank_forks(
+            arg_matches,
+            &open_genesis_config_by(&ledger_path, arg_matches),
+            &blockstore,
+            process_options,
+            snapshot_archive_path,
+        )
+        .unwrap_or_else(|err| {
+            eprintln!("Ledger verification failed: {:?}", err);
+            exit(1);
+        });
+        if print_accounts_stats {
+            let working_bank = bank_forks.working_bank();
+            working_bank.print_accounts_stats();
+        }
+        println!("Ok");
         }
         ("create-snapshot", Some(arg_matches)) => {
             let output_directory = value_t!(arg_matches, "output_directory", PathBuf)

@@ -1327,6 +1327,10 @@ fn process_single_slot(
     cache_block_meta_sender: Option<&CacheBlockMetaSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     timing: &mut ExecuteTimings,
+    // New
+    tower: &Tower,
+    // Votes
+    votes: &HashSet<Slot>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     // Mark corrupt slots as dead so validators don't replay this slot and
     // see AlreadyProcessed errors later in ReplayStage
@@ -1344,6 +1348,34 @@ fn process_single_slot(
     })?;
 
     bank.freeze(); // all banks handled by this routine are created from complete slots
+   
+    if votes.contains(bank.slot()) {
+        // Apply vote
+        tower.
+    }
+
+    // Simulate collecting vote lockouts
+    let computed_bank_state = Tower::collect_vote_lockouts(
+        my_vote_pubkey,
+        bank_slot,
+        &bank.vote_accounts(),
+        ancestors,
+        |slot| progress.get_hash(slot),
+        latest_validator_votes_for_frozen_banks,
+    );
+
+    let ComputedBankState {
+        voted_stakes,
+        total_stake,
+        lockout_intervals,
+        my_latest_landed_vote,
+        ..
+    } = computed_bank_state;
+
+    // Simulate checking vote stake threshold
+    stats.vote_threshold =
+        tower.check_vote_stake_threshold(bank_slot, &stats.voted_stakes, stats.total_stake);
+
     blockstore.insert_bank_hash(bank.slot(), bank.hash(), false);
     cache_block_meta(bank, cache_block_meta_sender);
 
