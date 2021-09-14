@@ -1214,6 +1214,26 @@ fn main() {
                     .help("Output file"),
             )
         ).subcommand(
+            SubCommand::with_name("recreate-tower")
+            .about("Create a new ledger snapshot")
+            .arg(
+                Arg::with_name("log_path")
+                    .index(1)
+                    .value_name("PATH")
+                    .takes_value(true)
+                    .required(true)
+                    .help("path to the log to parse to recreate the tower"),
+            )
+            .arg(
+                Arg::with_name("start_vote")
+                    .index(2)
+                    .value_name("START")
+                    .takes_value(true)
+                    .required(true)
+                    .help("first vote slot after which to start printing the tower"),
+            )
+        )
+        .subcommand(
             SubCommand::with_name("create-snapshot")
             .about("Create a new ledger snapshot")
             .arg(&no_snapshot_arg)
@@ -1988,6 +2008,60 @@ fn main() {
                 Err(err) => {
                     eprintln!("Failed to load ledger: {:?}", err);
                     exit(1);
+                }
+            }
+        }
+        ("recreate-tower", Some(arg_matches)) => {
+            let log_path = value_t_or_exit!(arg_matches, "log_path", String);
+            let start_vote = value_t_or_exit!(arg_matches, "start_vote", Slot);
+
+            let vote_regex = Regex::new(r"voting: (\d*)").unwrap();
+            let new_root_regex = Regex::new(r"new root (\d*)").unwrap();
+
+            let f = BufReader::new(File::open(&log_path).unwrap());
+            println!("Reading log file {}", log_path);
+            let mut current_vote_state = VoteState::default();
+
+            // Tracks when the recreated vote state becomes consistent with the
+            // original vote state
+            let mut is_consistent = false;
+            for line in f.lines().flatten() {
+                if let Some(vote_slot_string) = vote_regex.captures_iter(&line).next() {
+                    let vote_slot = vote_slot_string
+                        .get(1)
+                        .expect("Only one match group")
+                        .as_str()
+                        .parse::<u64>()
+                        .unwrap();
+                    current_vote_state.process_slot_vote_unchecked(vote_slot);
+                    if is_consistent && vote_slot >= start_vote {
+                        println!("Parsed vote for slot: {}", vote_slot);
+                        println!(
+                            "root: {:?}, Local vote state: {:#?}",
+                            current_vote_state.root_slot, current_vote_state.votes
+                        );
+                    }
+                } else if let Some(new_root_string) = new_root_regex.captures_iter(&line).next() {
+                    let root = new_root_string
+                        .get(1)
+                        .expect("Only one match group")
+                        .as_str()
+                        .parse::<u64>()
+                        .unwrap();
+                    if root >= start_vote {
+                        println!("Parsed new root: {}", root);
+                    }
+                    if Some(root) == current_vote_state.root_slot {
+                        if !is_consistent {
+                            println!("Current vote state is consistent as of root: {}", root);
+                            is_consistent = true;
+                        }
+                    } else if is_consistent {
+                        panic!(
+                            "Our tower was consistent and then became inconsistent, maybe
+                            the log is missing some votes!"
+                        );
+                    }
                 }
             }
         }
