@@ -1344,6 +1344,26 @@ fn main() {
             )
         )
         .subcommand(
+            SubCommand::with_name("list-ancestors")
+            .about("Output all ancestors of given start slot")
+            .arg(
+                Arg::with_name("start_slot")
+                    .long("start-slot")
+                    .value_name("NUM")
+                    .takes_value(true)
+                    .help("Starting slot to get the ancestors of")
+            )
+            .arg(
+                Arg::with_name("num_ancestors")
+                    .long("num-ancestors")
+                    .value_name("NUM")
+                    .takes_value(true)
+                    .default_value(DEFAULT_ROOT_COUNT)
+                    .required(false)
+                    .help("Number of ancestors in the output"),
+            )
+        )
+        .subcommand(
             SubCommand::with_name("list-roots")
             .about("Output up to last <num-roots> root hashes and their \
                     heights starting at the given block height")
@@ -2762,6 +2782,23 @@ fn main() {
                     purge_from_blockstore(dead_slot, dead_slot);
                 }
             }
+        }
+        ("list-ancestors", Some(arg_matches)) => {
+            let blockstore = open_blockstore(
+                &ledger_path,
+                AccessType::TryPrimaryThenSecondary,
+                wal_recovery_mode,
+            );
+
+            let start_slot = Slot::from_str(arg_matches.value_of("start_slot").unwrap())
+                .expect("Starting root must be a number");
+            let num_ancestors = usize::from_str(arg_matches.value_of("num_ancestors").unwrap())
+                .expect("Starting root must be a number");
+
+            let ancestors: Vec<Slot> = AncestorIterator::new(start_slot, &blockstore)
+                .take(num_ancestors)
+                .collect();
+            println!("ancestors of {} are {:?}", start_slot, ancestors);
         }
         ("list-roots", Some(arg_matches)) => {
             let blockstore = open_blockstore(
