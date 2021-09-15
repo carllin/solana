@@ -149,6 +149,13 @@ impl Default for Tower {
 }
 
 impl Tower {
+    pub fn new_from_vote_state(vote_state: VoteState) -> Tower {
+        Tower {
+            vote_state,
+            ..Tower::default()
+        }
+    }
+
     pub fn new(
         node_pubkey: &Pubkey,
         vote_account_pubkey: &Pubkey,

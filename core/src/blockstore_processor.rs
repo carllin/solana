@@ -1,8 +1,4 @@
-use crate::{
-    block_cost_limits::*, block_error::BlockError, blockstore::Blockstore,
-    blockstore_db::BlockstoreError, blockstore_meta::SlotMeta,
-    leader_schedule_cache::LeaderScheduleCache,
-};
+use crate::bank_forks_utils::SimulatedTower;
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use crossbeam_channel::Sender;
 use itertools::Itertools;
@@ -11,6 +7,11 @@ use rand::{seq::SliceRandom, thread_rng};
 use rayon::{prelude::*, ThreadPool};
 use solana_entry::entry::{
     self, create_ticks, Entry, EntrySlice, EntryType, EntryVerificationStatus, VerifyRecyclers,
+};
+use solana_ledger::{
+    block_cost_limits::*, block_error::BlockError, blockstore::Blockstore,
+    blockstore_db::BlockstoreError, blockstore_meta::SlotMeta,
+    leader_schedule_cache::LeaderScheduleCache,
 };
 use solana_measure::measure::Measure;
 use solana_metrics::{datapoint_error, inc_new_counter_debug};
@@ -483,6 +484,7 @@ pub fn process_blockstore(
     cache_block_meta_sender: Option<&CacheBlockMetaSender>,
     snapshot_config: Option<&SnapshotConfig>,
     accounts_package_sender: AccountsPackageSender,
+    simulated_tower: Option<SimulatedTower>,
 ) -> BlockstoreProcessorResult {
     if let Some(num_threads) = opts.override_num_threads {
         PAR_THREAD_POOL.with(|pool| {
@@ -499,7 +501,7 @@ pub fn process_blockstore(
         account_paths,
         &opts.frozen_accounts,
         opts.debug_keys.clone(),
-        Some(&crate::builtins::get(opts.bpf_jit)),
+        Some(&solana_ledger::builtins::get(opts.bpf_jit)),
         opts.account_indexes.clone(),
         opts.accounts_db_caching_enabled,
         opts.shrink_ratio,
@@ -527,6 +529,7 @@ pub fn process_blockstore(
         accounts_package_sender,
         BankFromArchiveTimings::default(),
         None,
+        simulated_tower,
     )
 }
 
@@ -555,6 +558,7 @@ pub(crate) fn process_blockstore_from_root(
         accounts_package_sender,
         timings,
         Some(last_full_snapshot_slot),
+        None,
     )
 }
 
@@ -570,6 +574,7 @@ fn do_process_blockstore_from_root(
     accounts_package_sender: AccountsPackageSender,
     timings: BankFromArchiveTimings,
     mut last_full_snapshot_slot: Option<Slot>,
+    simulated_tower: Option<SimulatedTower>,
 ) -> BlockstoreProcessorResult {
     info!("processing ledger from slot {}...", bank.slot());
 
@@ -3085,6 +3090,7 @@ pub mod tests {
             accounts_package_sender,
             BankFromArchiveTimings::default(),
             None,
+            None,
         )
         .unwrap();
 
@@ -3189,6 +3195,7 @@ pub mod tests {
             Some(&snapshot_config),
             accounts_package_sender.clone(),
             BankFromArchiveTimings::default(),
+            None,
             None,
         )
         .unwrap();

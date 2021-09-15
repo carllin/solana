@@ -14,15 +14,20 @@ use solana_clap_utils::{
         is_bin, is_parsable, is_pubkey, is_pubkey_or_keypair, is_slot, is_valid_percentage,
     },
 };
-use solana_core::cost_model::CostModel;
-use solana_core::cost_tracker::CostTracker;
+use solana_core::{
+    bank_forks_utils::{self, SimulatedTower},
+    blockstore_processor::ProcessOptions,
+    consensus::Tower,
+    cost_model::CostModel,
+    cost_tracker::CostTracker,
+};
 use solana_entry::entry::Entry;
 use solana_ledger::{
     ancestor_iterator::AncestorIterator,
-    bank_forks_utils,
+    //bank_forks_utils::{self, SimulatedTower},
     blockstore::{create_new_ledger, Blockstore, PurgeType},
     blockstore_db::{self, AccessType, BlockstoreRecoveryMode, Column, Database},
-    blockstore_processor::ProcessOptions,
+    //blockstore_processor::ProcessOptions,
     shred::Shred,
 };
 use solana_runtime::{
@@ -701,6 +706,42 @@ fn load_bank_forks(
     process_options: ProcessOptions,
     snapshot_archive_path: Option<PathBuf>,
 ) -> bank_forks_utils::LoadResult {
+    do_load_bank_forks(
+        arg_matches,
+        genesis_config,
+        blockstore,
+        process_options,
+        snapshot_archive_path,
+        None,
+    )
+}
+
+fn load_bank_forks_with_simulated_tower(
+    arg_matches: &ArgMatches,
+    genesis_config: &GenesisConfig,
+    blockstore: &Blockstore,
+    process_options: ProcessOptions,
+    snapshot_archive_path: Option<PathBuf>,
+    simulated_tower: SimulatedTower,
+) -> bank_forks_utils::LoadResult {
+    do_load_bank_forks(
+        arg_matches,
+        genesis_config,
+        blockstore,
+        process_options,
+        snapshot_archive_path,
+        Some(simulated_tower),
+    )
+}
+
+fn do_load_bank_forks(
+    arg_matches: &ArgMatches,
+    genesis_config: &GenesisConfig,
+    blockstore: &Blockstore,
+    process_options: ProcessOptions,
+    snapshot_archive_path: Option<PathBuf>,
+    simulated_tower: Option<SimulatedTower>,
+) -> bank_forks_utils::LoadResult {
     let bank_snapshots_dir = blockstore
         .ledger_path()
         .join(if blockstore.is_primary_access() {
@@ -751,6 +792,7 @@ fn load_bank_forks(
         None,
         None,
         accounts_package_sender,
+        simulated_tower,
     )
 }
 
@@ -2020,7 +2062,12 @@ fn main() {
 
             let f = BufReader::new(File::open(&log_path).unwrap());
             println!("Reading log file {}", log_path);
+
             let mut current_vote_state = VoteState::default();
+            let mut pending_votes: HashSet<Slot> = HashSet::new();
+
+            let snapshot_root_slot =
+                snapshot_utils::get_highest_full_snapshot_archive_slot(&ledger_path).unwrap();
 
             // Tracks when the recreated vote state becomes consistent with the
             // original vote state
@@ -2033,13 +2080,24 @@ fn main() {
                         .as_str()
                         .parse::<u64>()
                         .unwrap();
-                    current_vote_state.process_slot_vote_unchecked(vote_slot);
-                    if is_consistent && vote_slot >= start_vote {
-                        println!("Parsed vote for slot: {}", vote_slot);
-                        println!(
-                            "root: {:?}, Local vote state: {:#?}",
-                            current_vote_state.root_slot, current_vote_state.votes
-                        );
+
+                    if vote_slot > snapshot_root_slot {
+                        if !is_consistent {
+                            panic!(
+                                "vote state was not consistent by vote {} > snapshot slot: {}",
+                                vote_slot, snapshot_root_slot
+                            );
+                        }
+                        pending_votes.insert(vote_slot);
+                    } else {
+                        current_vote_state.process_slot_vote_unchecked(vote_slot);
+                        if is_consistent && vote_slot >= start_vote {
+                            println!("Parsed vote for slot: {}", vote_slot);
+                            println!(
+                                "root: {:?}, Local vote state: {:#?}",
+                                current_vote_state.root_slot, current_vote_state.votes
+                            );
+                        }
                     }
                 } else if let Some(new_root_string) = new_root_regex.captures_iter(&line).next() {
                     let root = new_root_string
@@ -2065,61 +2123,70 @@ fn main() {
                 }
             }
 
+            let tower = Tower::new_from_vote_state(current_vote_state);
+
+            let simulated_tower = SimulatedTower {
+                tower,
+                pending_votes,
+            };
+
+            // TODO: Don't copy paste this from "verify", extract into separate function
             let accounts_index_config = value_t!(arg_matches, "accounts_index_bins", usize)
-            .ok()
-            .map(|bins| AccountsIndexConfig { bins: Some(bins) });
+                .ok()
+                .map(|bins| AccountsIndexConfig { bins: Some(bins) });
 
-        let accounts_db_config = Some(AccountsDbConfig {
-            index: accounts_index_config,
-            accounts_hash_cache_path: Some(ledger_path.clone()),
-        });
+            let accounts_db_config = Some(AccountsDbConfig {
+                index: accounts_index_config,
+                accounts_hash_cache_path: Some(ledger_path.clone()),
+            });
 
-        let process_options = ProcessOptions {
-            dev_halt_at_slot: value_t!(arg_matches, "halt_at_slot", Slot).ok(),
-            new_hard_forks: hardforks_of(arg_matches, "hard_forks"),
-            poh_verify: !arg_matches.is_present("skip_poh_verify"),
-            bpf_jit: !matches.is_present("no_bpf_jit"),
-            accounts_db_caching_enabled: !arg_matches.is_present("no_accounts_db_caching"),
-            limit_load_slot_count_from_snapshot: value_t!(
+            let process_options = ProcessOptions {
+                dev_halt_at_slot: value_t!(arg_matches, "halt_at_slot", Slot).ok(),
+                new_hard_forks: hardforks_of(arg_matches, "hard_forks"),
+                poh_verify: !arg_matches.is_present("skip_poh_verify"),
+                bpf_jit: !matches.is_present("no_bpf_jit"),
+                accounts_db_caching_enabled: !arg_matches.is_present("no_accounts_db_caching"),
+                limit_load_slot_count_from_snapshot: value_t!(
+                    arg_matches,
+                    "limit_load_slot_count_from_snapshot",
+                    usize
+                )
+                .ok(),
+                accounts_db_config,
+                verify_index: arg_matches.is_present("verify_accounts_index"),
+                allow_dead_slots: arg_matches.is_present("allow_dead_slots"),
+                accounts_db_test_hash_calculation: arg_matches
+                    .is_present("accounts_db_test_hash_calculation"),
+                ..ProcessOptions::default()
+            };
+            let print_accounts_stats = arg_matches.is_present("print_accounts_stats");
+            println!(
+                "genesis hash: {}",
+                open_genesis_config_by(&ledger_path, arg_matches).hash()
+            );
+
+            let blockstore = open_blockstore(
+                &ledger_path,
+                AccessType::TryPrimaryThenSecondary,
+                wal_recovery_mode,
+            );
+            let (bank_forks, ..) = load_bank_forks_with_simulated_tower(
                 arg_matches,
-                "limit_load_slot_count_from_snapshot",
-                usize
+                &open_genesis_config_by(&ledger_path, arg_matches),
+                &blockstore,
+                process_options,
+                snapshot_archive_path,
+                simulated_tower,
             )
-            .ok(),
-            accounts_db_config,
-            verify_index: arg_matches.is_present("verify_accounts_index"),
-            allow_dead_slots: arg_matches.is_present("allow_dead_slots"),
-            accounts_db_test_hash_calculation: arg_matches
-                .is_present("accounts_db_test_hash_calculation"),
-            ..ProcessOptions::default()
-        };
-        let print_accounts_stats = arg_matches.is_present("print_accounts_stats");
-        println!(
-            "genesis hash: {}",
-            open_genesis_config_by(&ledger_path, arg_matches).hash()
-        );
-
-        let blockstore = open_blockstore(
-            &ledger_path,
-            AccessType::TryPrimaryThenSecondary,
-            wal_recovery_mode,
-        );
-        let (bank_forks, ..) = load_bank_forks(
-            arg_matches,
-            &open_genesis_config_by(&ledger_path, arg_matches),
-            &blockstore,
-            process_options,
-            snapshot_archive_path,
-        )
-        .unwrap_or_else(|err| {
-            eprintln!("Ledger verification failed: {:?}", err);
-            exit(1);
-        });
-        if print_accounts_stats {
-            let working_bank = bank_forks.working_bank();
-            working_bank.print_accounts_stats();
-        }
-        println!("Ok");
+            .unwrap_or_else(|err| {
+                eprintln!("Ledger verification failed: {:?}", err);
+                exit(1);
+            });
+            if print_accounts_stats {
+                let working_bank = bank_forks.working_bank();
+                working_bank.print_accounts_stats();
+            }
+            println!("Ok");
         }
         ("create-snapshot", Some(arg_matches)) => {
             let output_directory = value_t!(arg_matches, "output_directory", PathBuf)
