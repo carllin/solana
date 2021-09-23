@@ -363,48 +363,46 @@ impl Tower {
         local_vote_state: &mut VoteState,
         slot: Slot,
         hash: Hash,
-        last_voted_slot_in_bank: Option<Slot>,
-    ) -> Vote {
+        bank_vote_state: Option<VoteState>,
+    ) -> VoteStateUpdate {
         let vote = Vote::new(vec![slot], hash);
-        local_vote_state.process_vote_unchecked(&vote);
-        let slots = if let Some(last_voted_slot_in_bank) = last_voted_slot_in_bank {
-            local_vote_state
-                .votes
-                .iter()
-                .map(|v| v.slot)
-                .skip_while(|s| *s <= last_voted_slot_in_bank)
-                .collect()
-        } else {
-            local_vote_state.votes.iter().map(|v| v.slot).collect()
-        };
-        trace!(
-            "new vote with {:?} {:?} {:?}",
-            last_voted_slot_in_bank,
-            slots,
-            local_vote_state.votes
-        );
-        Vote::new(slots, hash)
-    }
+        if let Some(bank_vote_state) = bank_vote_state {
+            if bank_vote_state.last_voted_slot() > local_vote_state.last_voted_slot() {
+                // Note some fields in the Tower like `last_vote`, `last_vote_tx_blockhash`,
+                // `last_timestamp`, will not match the last vote in the vote state, until
+                // the new vote is made.
+                *local_vote_state = bank_vote_state;
 
-    pub fn last_voted_slot_in_bank(bank: &Bank, vote_account_pubkey: &Pubkey) -> Option<Slot> {
-        let (_stake, vote_account) = bank.get_vote_account(vote_account_pubkey)?;
-        let slot = vote_account.vote_state().as_ref().ok()?.last_voted_slot();
-        slot
+                // TODO: check if tower threshold check on this new tower would allow
+                // you to vote on this slot...
+            }
+        }
+
+        local_vote_state.process_vote_unchecked(&vote);
+        VoteStateUpdate::new(
+            local_vote_state.votes.clone(),
+            local_vote_state.root_slot,
+            hash,
+        )
     }
 
     pub fn record_bank_vote(&mut self, bank: &Bank, vote_account_pubkey: &Pubkey) -> Option<Slot> {
-        let last_voted_slot_in_bank = Self::last_voted_slot_in_bank(bank, vote_account_pubkey);
+        let bank_vote_state = bank
+            .get_vote_account(vote_account_pubkey)?
+            .vote_state()
+            .as_ref()
+            .ok()?;
 
         // Returns the new root if one is made after applying a vote for the given bank to
         // `self.vote_state`
-        self.record_bank_vote_and_update_lockouts(bank.slot(), bank.hash(), last_voted_slot_in_bank)
+        self.record_bank_vote_and_update_lockouts(bank.slot(), bank.hash(), bank_vote_state)
     }
 
     fn record_bank_vote_and_update_lockouts(
         &mut self,
         vote_slot: Slot,
         vote_hash: Hash,
-        last_voted_slot_in_bank: Option<Slot>,
+        bank_vote_state: Option<VoteState>,
     ) -> Option<Slot> {
         trace!("{} record_vote for {}", self.node_pubkey, vote_slot);
         let old_root = self.root();
@@ -412,7 +410,7 @@ impl Tower {
             &mut self.vote_state,
             vote_slot,
             vote_hash,
-            last_voted_slot_in_bank,
+            bank_vote_state,
         );
 
         new_vote.timestamp = self.maybe_timestamp(self.last_vote.last_voted_slot().unwrap_or(0));

@@ -532,8 +532,13 @@ impl VoteState {
         // must have been expired by later votes. Check that the lockouts match this assumption.
         while current_vote_state_index < self.votes.len() && new_vote_state_index < new_state.len()
         {
+            println!(
+                "cur_i: {:?}, new_i: {:?}",
+                current_vote_state_index, new_vote_state_index
+            );
             let current_vote = &self.votes[current_vote_state_index];
             let new_vote = &new_state[new_vote_state_index];
+            println!("current_vote: {:?}, new_vote: {:?}", current_vote, new_vote);
 
             // If the current slot is less than the new proposed slot, then the
             // new slot must have popped off the old slot, so check that the
