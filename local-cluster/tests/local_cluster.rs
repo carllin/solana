@@ -2576,7 +2576,6 @@ fn test_fake_shreds_broadcast_leader() {
 
 #[test]
 #[serial]
-#[ignore]
 #[allow(unused_attributes)]
 fn test_duplicate_shreds_broadcast_leader() {
     // Create 4 nodes:
@@ -2799,6 +2798,7 @@ fn test_faulty_node(
         validator_configs,
         validator_keys: Some(validator_keys.clone()),
         skip_warmup_slots: true,
+        ticks_per_slot: 8,
         ..ClusterConfig::default()
     };
 
