@@ -199,6 +199,7 @@ impl Tower {
     }
 
     pub(crate) fn collect_vote_lockouts(
+        id: &Pubkey,
         vote_account_pubkey: &Pubkey,
         bank_slot: Slot,
         vote_accounts: &HashMap<Pubkey, (/*stake:*/ u64, VoteAccount)>,
@@ -217,6 +218,7 @@ impl Tower {
         for (&key, (voted_stake, account)) in vote_accounts.iter() {
             let voted_stake = *voted_stake;
             if voted_stake == 0 {
+                warn!("voted stake 0");
                 continue;
             }
             trace!("{} {} with stake {}", vote_account_pubkey, key, voted_stake);
@@ -232,7 +234,17 @@ impl Tower {
                     );
                     continue;
                 }
-                Ok(vote_state) => vote_state.clone(),
+                Ok(vote_state) => {
+                    warn!(
+                        "{} vote state for slot {}, key: {}, root: {:?}, votes: {:?}",
+                        id,
+                        bank_slot,
+                        vote_state.node_pubkey,
+                        vote_state.root_slot,
+                        vote_state.votes
+                    );
+                    vote_state.clone()
+                }
             };
             for vote in &vote_state.votes {
                 lockout_intervals
@@ -1266,7 +1278,7 @@ pub fn reconcile_blockstore_roots_with_tower(
     Ok(())
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 pub mod test {
     use {
         super::*,
@@ -3165,4 +3177,4 @@ pub mod test {
         assert_eq!(tower.voted_slots(), vec![13, 14]);
         assert_eq!(tower.stray_restored_slot, Some(14));
     }
-}
+}*/

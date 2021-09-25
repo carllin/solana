@@ -2645,6 +2645,7 @@ fn test_duplicate_shreds_broadcast_leader() {
     let vote_keypair = our_info.info.voting_keypair;
     let bad_leader_id = cluster.entry_point_info.id;
     let bad_leader_ledger_path = cluster.validators[&bad_leader_id].info.ledger_path.clone();
+
     info!("our node id: {}", node_keypair.pubkey());
 
     // 3) Start up a spy to listen for votes
@@ -2798,7 +2799,6 @@ fn test_faulty_node(
         validator_configs,
         validator_keys: Some(validator_keys.clone()),
         skip_warmup_slots: true,
-        ticks_per_slot: 8,
         ..ClusterConfig::default()
     };
 

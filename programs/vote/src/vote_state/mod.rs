@@ -320,7 +320,7 @@ impl VoteState {
             j -= 1;
         }
         if j == slot_hashes.len() {
-            debug!(
+            info!(
                 "{} dropped vote {:?} too old: {:?} ",
                 self.node_pubkey, vote, slot_hashes
             );
@@ -335,7 +335,7 @@ impl VoteState {
             return Err(VoteError::SlotsMismatch);
         }
         if slot_hashes[j].1 != vote.hash {
-            warn!(
+            info!(
                 "{} dropped vote {:?} failed to match hash {} {}",
                 self.node_pubkey, vote, vote.hash, slot_hashes[j].1
             );

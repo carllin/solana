@@ -148,7 +148,7 @@ impl LocalCluster {
                 .iter()
                 .zip(&config.node_stakes)
                 .filter_map(|((node_keypair, in_genesis), stake)| {
-                    info!(
+                    warn!(
                         "STARTING LOCAL CLUSTER: key {} has {} stake",
                         node_keypair.pubkey(),
                         stake

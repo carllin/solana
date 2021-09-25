@@ -151,6 +151,7 @@ impl VoteSimulator {
             .collect();
 
         let _ = ReplayStage::compute_bank_stats(
+            &Pubkey::default(),
             my_pubkey,
             &ancestors,
             &mut frozen_banks,
@@ -177,6 +178,7 @@ impl VoteSimulator {
             heaviest_fork_failures,
             ..
         } = ReplayStage::select_vote_and_reset_forks(
+            &Pubkey::default(),
             &vote_bank,
             None,
             &ancestors,
