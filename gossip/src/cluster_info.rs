@@ -395,7 +395,7 @@ impl ClusterInfo {
     ) -> Self {
         let id = contact_info.id;
         let me = Self {
-            gossip: CrdsGossip::default(),
+            gossip: CrdsGossip::new(contact_info.id),
             keypair: RwLock::new(keypair),
             entrypoints: RwLock::default(),
             outbound_budget: DataBudget::default(),
@@ -1912,6 +1912,7 @@ impl ClusterInfo {
         let mut pull_responses = {
             let _st = ScopedTimer::from(&self.stats.generate_pull_responses);
             self.gossip.generate_pull_responses(
+                &self_id,
                 thread_pool,
                 &caller_and_filters,
                 output_size_limit,

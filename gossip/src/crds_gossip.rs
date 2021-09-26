@@ -41,6 +41,14 @@ pub struct CrdsGossip {
 }
 
 impl CrdsGossip {
+    pub fn new(id: Pubkey) -> Self {
+        Self {
+            push: CrdsGossipPush::new(id),
+            pull: CrdsGossipPull::new(id),
+            ..Self::default()
+        }
+    }
+
     /// Process a push message to the network.
     ///
     /// Returns unique origins' pubkeys of upserted values.
@@ -240,12 +248,14 @@ impl CrdsGossip {
 
     pub fn generate_pull_responses(
         &self,
+        id: &Pubkey,
         thread_pool: &ThreadPool,
         filters: &[(CrdsValue, CrdsFilter)],
         output_size_limit: usize, // Limit number of crds values returned.
         now: u64,
     ) -> Vec<Vec<CrdsValue>> {
         CrdsGossipPull::generate_pull_responses(
+            id,
             thread_pool,
             &self.crds,
             filters,

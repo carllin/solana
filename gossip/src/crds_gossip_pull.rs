@@ -188,6 +188,7 @@ pub struct ProcessPullStats {
 }
 
 pub struct CrdsGossipPull {
+    id: Pubkey,
     /// Timestamp of last request
     pull_request_time: RwLock<LruCache<Pubkey, /*timestamp:*/ u64>>,
     // Hash value and record time (ms) of the pull responses which failed to be
@@ -203,6 +204,7 @@ pub struct CrdsGossipPull {
 impl Default for CrdsGossipPull {
     fn default() -> Self {
         Self {
+            id: Pubkey::default(),
             pull_request_time: RwLock::new(LruCache::new(CRDS_UNIQUE_PUBKEY_CAPACITY)),
             failed_inserts: RwLock::default(),
             crds_timeout: CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
@@ -212,6 +214,13 @@ impl Default for CrdsGossipPull {
     }
 }
 impl CrdsGossipPull {
+    pub fn new(id: Pubkey) -> Self {
+        Self {
+            id,
+            ..Self::default()
+        }
+    }
+
     /// Generate a random request
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_pull_request(
@@ -355,13 +364,14 @@ impl CrdsGossipPull {
 
     /// Create gossip responses to pull requests
     pub(crate) fn generate_pull_responses(
+        id: &Pubkey,
         thread_pool: &ThreadPool,
         crds: &RwLock<Crds>,
         requests: &[(CrdsValue, CrdsFilter)],
         output_size_limit: usize, // Limit number of crds values returned.
         now: u64,
     ) -> Vec<Vec<CrdsValue>> {
-        Self::filter_crds_values(thread_pool, crds, requests, output_size_limit, now)
+        Self::filter_crds_values(id, thread_pool, crds, requests, output_size_limit, now)
     }
 
     // Checks if responses should be inserted and
@@ -435,9 +445,24 @@ impl CrdsGossipPull {
         let mut num_inserts = 0;
         for response in responses {
             let owner = response.pubkey();
+            let string = if let Some(vote) = response.data.vote() {
+                Some(format!(
+                    "{} received vote transaction slot {} signature {}",
+                    self.id,
+                    vote.slot().unwrap_or(0),
+                    response.signature,
+                ))
+            } else {
+                None
+            };
             if let Ok(()) = crds.insert(response, now) {
+                if let Some(string) = string {
+                    info!("Pull response vote insert success! {:?}", string);
+                }
                 num_inserts += 1;
                 owners.insert(owner);
+            } else if let Some(string) = string {
+                info!("Pull response vote insert failure! {:?}", string);
             }
         }
         stats.success += num_inserts;
@@ -488,6 +513,12 @@ impl CrdsGossipPull {
         let num_items = crds.len() + crds.num_purged() + failed_inserts.len();
         let num_items = MIN_NUM_BLOOM_ITEMS.max(num_items);
         let filters = CrdsFilterSet::new(num_items, bloom_size);
+        info!(
+            "{} build_crds_filters num items {}, num filters {}",
+            self.id,
+            num_items,
+            filters.filters.len()
+        );
         thread_pool.install(|| {
             crds.par_values()
                 .with_min_len(PAR_MIN_LENGTH)
@@ -508,6 +539,7 @@ impl CrdsGossipPull {
 
     /// Filter values that fail the bloom filter up to `max_bytes`.
     fn filter_crds_values(
+        id: &Pubkey,
         thread_pool: &ThreadPool,
         crds: &RwLock<Crds>,
         filters: &[(CrdsValue, CrdsFilter)],
@@ -525,11 +557,23 @@ impl CrdsGossipPull {
         let output_size_limit = AtomicI64::new(output_size_limit);
         let crds = crds.read().unwrap();
         let apply_filter = |caller: &CrdsValue, filter: &CrdsFilter| {
+            let caller_id = caller
+                .contact_info()
+                .map(|c| c.id)
+                .unwrap_or(Pubkey::default());
             if output_size_limit.load(Ordering::Relaxed) <= 0 {
+                info!(
+                    "{} output size limit, failed pull request from {}",
+                    id, caller_id
+                );
                 return Vec::default();
             }
             let caller_wallclock = caller.wallclock();
             if !caller_wallclock_window.contains(&caller_wallclock) {
+                info!(
+                    "{} outside of wallclock window, failed pull request from {}, caller wallclock: {}",
+                    id, caller_id, caller_wallclock,
+                );
                 dropped_requests.fetch_add(1, Ordering::Relaxed);
                 return Vec::default();
             }
@@ -537,15 +581,42 @@ impl CrdsGossipPull {
             let caller_wallclock = caller_wallclock.checked_add(jitter).unwrap_or(0);
             let pred = |entry: &&VersionedCrdsValue| {
                 debug_assert!(filter.test_mask(&entry.value_hash));
-                // Skip values that are too new.
-                if entry.value.wallclock() > caller_wallclock {
-                    total_skipped.fetch_add(1, Ordering::Relaxed);
-                    false
+                let vote_log = if let Some(vote) = entry.value.data.vote() {
+                    Some(format!(
+                        "{} filtering vote for slot {} to caller {}, signature {}",
+                        id,
+                        vote.slot().unwrap_or(0),
+                        caller_id,
+                        caller.signature
+                    ))
                 } else {
-                    !filter.filter_contains(&entry.value_hash)
-                        && (entry.value.pubkey() != caller_pubkey
-                            || entry.value.should_force_push(&caller_pubkey))
+                    None
+                };
+                // Skip values that are too new.
+                let (res, fail_reason) = if entry.value.wallclock() > caller_wallclock {
+                    total_skipped.fetch_add(1, Ordering::Relaxed);
+                    (false, format!("wallclock newer than caller wallclock: {}", caller_wallclock))
+                } else {
+                    if filter.filter_contains(&entry.value_hash) {
+                        (false, "filter contained value already")
+                    } else {
+                        (
+                            (entry.value.pubkey() != caller_pubkey
+                                || entry.value.should_force_push(&caller_pubkey)),
+                            "",
+                        )
+                    }
+                };
+
+                if res {
+                    if let Some(vote_log) = vote_log {
+                        info!("SUCCESS: {:?}", vote_log);
+                    }
+                } else if let Some(vote_log) = vote_log {
+                    info!("FAIL reason {:?}: {:?}", fail_reason, vote_log);
                 }
+
+                res
             };
             let out: Vec<_> = crds
                 .filter_bitmask(filter.mask, filter.mask_bits)
@@ -1221,6 +1292,7 @@ pub(crate) mod tests {
         let (_, filters) = req.unwrap();
         let mut filters: Vec<_> = filters.into_iter().map(|f| (caller.clone(), f)).collect();
         let rsp = CrdsGossipPull::generate_pull_responses(
+            &Pubkey::default(),
             &thread_pool,
             &dest_crds,
             &filters,
@@ -1242,6 +1314,7 @@ pub(crate) mod tests {
 
         //should skip new value since caller is to old
         let rsp = CrdsGossipPull::generate_pull_responses(
+            &Pubkey::default(),
             &thread_pool,
             &dest_crds,
             &filters,
@@ -1261,6 +1334,7 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>()
         });
         let rsp = CrdsGossipPull::generate_pull_responses(
+            &Pubkey::default(),
             &thread_pool,
             &dest_crds,
             &filters,
@@ -1315,6 +1389,7 @@ pub(crate) mod tests {
         let (_, filters) = req.unwrap();
         let filters: Vec<_> = filters.into_iter().map(|f| (caller.clone(), f)).collect();
         let rsp = CrdsGossipPull::generate_pull_responses(
+            &Pubkey::default(),
             &thread_pool,
             &dest_crds,
             &filters,
@@ -1394,6 +1469,7 @@ pub(crate) mod tests {
             let (_, filters) = req.unwrap();
             let filters: Vec<_> = filters.into_iter().map(|f| (caller.clone(), f)).collect();
             let rsp = CrdsGossipPull::generate_pull_responses(
+                &Pubkey::default(),
                 &thread_pool,
                 &dest_crds,
                 &filters,

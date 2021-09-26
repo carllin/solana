@@ -157,6 +157,13 @@ impl CrdsData {
             ),
         }
     }
+
+    pub fn vote(&self) -> Option<&Vote> {
+        match self {
+            CrdsData::Vote(_ix, vote) => Some(vote),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, AbiExample)]

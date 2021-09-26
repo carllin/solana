@@ -527,6 +527,7 @@ fn network_run_pull(
                         let rsp = node
                             .gossip
                             .generate_pull_responses(
+                                &Pubkey::default(),
                                 thread_pool,
                                 &filters,
                                 usize::MAX, // output_size_limit

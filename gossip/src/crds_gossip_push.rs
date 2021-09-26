@@ -54,6 +54,7 @@ pub const CRDS_GOSSIP_PRUNE_MIN_INGRESS_NODES: usize = 3;
 const PUSH_ACTIVE_TIMEOUT_MS: u64 = 60_000;
 
 pub struct CrdsGossipPush {
+    id: Pubkey,
     /// Max bytes per message
     max_bytes: usize,
     /// Active set of validators for push
@@ -86,6 +87,7 @@ impl Default for CrdsGossipPush {
     fn default() -> Self {
         Self {
             // Allow upto 64 Crds Values per PUSH
+            id: Pubkey::default(),
             max_bytes: PACKET_DATA_SIZE * 64,
             active_set: RwLock::default(),
             crds_cursor: Mutex::default(),
@@ -102,6 +104,12 @@ impl Default for CrdsGossipPush {
     }
 }
 impl CrdsGossipPush {
+    pub fn new(id: Pubkey) -> Self {
+        Self {
+            id,
+            ..Self::default()
+        }
+    }
     pub fn num_pending(&self, crds: &RwLock<Crds>) -> usize {
         let mut cursor: Cursor = *self.crds_cursor.lock().unwrap();
         crds.read().unwrap().get_entries(&mut cursor).count()
@@ -240,9 +248,27 @@ impl CrdsGossipPush {
             .map(|value| {
                 let value = value?;
                 let origin = value.pubkey();
+                let string = if let Some(vote) = value.data.vote() {
+                    Some(format!(
+                        "{} received vote transaction slot {} signature {}",
+                        self.id,
+                        vote.slot().unwrap_or(0),
+                        value.signature,
+                    ))
+                } else {
+                    None
+                };
                 match crds.insert(value, now) {
-                    Ok(()) => Ok(origin),
+                    Ok(()) => {
+                        if let Some(string) = string {
+                            info!("Push response vote insert success! {:?}", string);
+                        }
+                        Ok(origin)
+                    }
                     Err(_) => {
+                        if let Some(string) = string {
+                            info!("Push response vote insert failure! {:?}", string);
+                        }
                         self.num_old.fetch_add(1, Ordering::Relaxed);
                         Err(CrdsGossipError::PushMessageOldVersion)
                     }
@@ -295,7 +321,17 @@ impl CrdsGossipPush {
                 let index = i % active_set_len;
                 let (peer, filter) = active_set.get_index(index).unwrap();
                 if !filter.contains(&origin) || value.should_force_push(peer) {
-                    trace!("new_push_messages insert {} {:?}", *peer, value);
+                    if let Some(vote) = value.data.vote() {
+                        info!(
+                            "{} new push vote for slot {} 
+                            push to peer: {} 
+                            signature: {:?}",
+                            self.id,
+                            vote.slot().unwrap_or(0),
+                            *peer,
+                            value.signature
+                        );
+                    }
                     push_messages.entry(*peer).or_default().push(value.clone());
                     num_pushes += 1;
                 }
