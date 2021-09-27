@@ -593,19 +593,14 @@ impl CrdsGossipPull {
                     None
                 };
                 // Skip values that are too new.
-                let (res, fail_reason) = if entry.value.wallclock() > caller_wallclock {
-                    total_skipped.fetch_add(1, Ordering::Relaxed);
-                    (false, format!("wallclock newer than caller wallclock: {}", caller_wallclock))
+                let (res, fail_reason) = if filter.filter_contains(&entry.value_hash) {
+                    (false, "filter contained value already")
                 } else {
-                    if filter.filter_contains(&entry.value_hash) {
-                        (false, "filter contained value already")
-                    } else {
-                        (
-                            (entry.value.pubkey() != caller_pubkey
-                                || entry.value.should_force_push(&caller_pubkey)),
-                            "",
-                        )
-                    }
+                    (
+                        (entry.value.pubkey() != caller_pubkey
+                            || entry.value.should_force_push(&caller_pubkey)),
+                        "",
+                    )
                 };
 
                 if res {
