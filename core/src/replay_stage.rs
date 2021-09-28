@@ -384,6 +384,7 @@ impl ReplayStage {
                     last_refresh_time: Instant::now(),
                     last_print_time: Instant::now(),
                 };
+
                 loop {
                     // Stop getting entries if we get exit signal
                     if exit.load(Ordering::Relaxed) {
@@ -517,7 +518,7 @@ impl ReplayStage {
                         &vote_account,
                         &ancestors,
                         &mut frozen_banks,
-                        &tower,
+                        &mut tower,
                         &mut progress,
                         &vote_tracker,
                         &cluster_slots,
@@ -2155,7 +2156,7 @@ impl ReplayStage {
         my_vote_pubkey: &Pubkey,
         ancestors: &HashMap<u64, HashSet<u64>>,
         frozen_banks: &mut Vec<Arc<Bank>>,
-        tower: &Tower,
+        tower: &mut Tower,
         progress: &mut ProgressMap,
         vote_tracker: &VoteTracker,
         cluster_slots: &ClusterSlots,
@@ -2176,6 +2177,32 @@ impl ReplayStage {
                     .expect("All frozen banks must exist in the Progress map")
                     .computed;
                 if !is_computed {
+                    // Check if our tower is behind, if so (and the feature migration flag is in use)
+                    // overwrite with the newer bank.
+                    match (
+                        Tower::enable_direct_vote_state_updates(bank),
+                        bank.get_vote_account(my_vote_pubkey),
+                    ) {
+                        (true, Some((_, vote_account))) => {
+                            if let Some(bank_vote_state) =
+                                vote_account.vote_state().as_ref().ok().cloned()
+                            {
+                                if bank_vote_state.last_voted_slot()
+                                    > tower.vote_state.last_voted_slot()
+                                {
+                                    info!("Frozen bank vote state slot {:?} is newer than our local vote state slot {:?}, adopting the bank vote state as our own",
+                                        bank_vote_state.last_voted_slot(),
+                                        tower.vote_state.last_voted_slot(),
+                                    );
+                                    info!("  bank {:?}", bank_vote_state.votes);
+                                    info!("  local {:?}", tower.vote_state.votes);
+
+                                    tower.vote_state = bank_vote_state;
+                                }
+                            }
+                        }
+                        _ => (),
+                    }
                     let computed_bank_state = Tower::collect_vote_lockouts(
                         my_vote_pubkey,
                         bank_slot,

@@ -135,7 +135,7 @@ pub struct Tower {
     pub(crate) node_pubkey: Pubkey,
     threshold_depth: usize,
     threshold_size: f64,
-    vote_state: VoteState,
+    pub(crate) vote_state: VoteState,
     last_vote: Box<dyn VoteTransaction>,
     #[serde(skip)]
     // The blockhash used in the last vote transaction, may or may not equal the
@@ -387,45 +387,19 @@ impl Tower {
     }
 
     // Returns true if we have switched the new vote instruction that directly sets vote state
-    fn enable_direct_vote_state_updates(slot: Slot, bank: &Bank) -> bool {
-        let feature_slot = bank
-            .feature_set
-            .activated_slot(&feature_set::allow_votes_to_directly_update_vote_state::id());
-        match feature_slot {
-            None => false,
-            Some(feature_slot) => {
-                let epoch_schedule = bank.epoch_schedule();
-                let feature_epoch = epoch_schedule.get_epoch(feature_slot);
-                let current_epoch = epoch_schedule.get_epoch(slot);
-                feature_epoch < current_epoch
-            }
-        }
+    pub(crate) fn enable_direct_vote_state_updates(bank: &Bank) -> bool {
+        bank.feature_set.is_active(&feature_set::allow_votes_to_directly_update_vote_state::id())
     }
 
     fn apply_vote_and_generate_vote_diff(
         local_vote_state: &mut VoteState,
         slot: Slot,
         hash: Hash,
-        bank_vote_state: Option<VoteState>,
+        last_voted_slot_in_bank: Option<Slot>,
         bank: &Bank,
     ) -> Box<dyn VoteTransaction> {
         let vote = Vote::new(vec![slot], hash);
-        if Self::enable_direct_vote_state_updates(slot, bank) {
-            if let Some(bank_vote_state) = bank_vote_state {
-                if bank_vote_state.last_voted_slot() > local_vote_state.last_voted_slot() {
-                    // TODO: actually rewrite this tower in collect vote lockouts
-                    // also don't allow flip flopping between vote instructions?
-                    // Note some fields in the Tower like `last_vote`, `last_vote_tx_blockhash`,
-                    // `last_timestamp`, will not match the last vote in the vote state, until
-                    // the new vote is made.
-                    *local_vote_state = bank_vote_state;
-
-                    // TODO: check if tower threshold check on this new tower would allow
-                    // you to vote on this slot...
-                    // TODO: log the difference
-                }
-            }
-
+        if Self::enable_direct_vote_state_updates(bank) {
             local_vote_state.process_vote_unchecked(&vote);
 
             Box::new(VoteStateUpdate::new(
@@ -435,9 +409,7 @@ impl Tower {
             ))
         } else {
             local_vote_state.process_vote_unchecked(&vote);
-            let slots = if let Some(last_voted_slot) =
-                bank_vote_state.map(|vs| vs.last_voted_slot()).flatten()
-            {
+            let slots = if let Some(last_voted_slot) = last_voted_slot_in_bank {
                 local_vote_state
                     .votes
                     .iter()
@@ -458,19 +430,18 @@ impl Tower {
     }
 
     pub fn record_bank_vote(&mut self, bank: &Bank, vote_account_pubkey: &Pubkey) -> Option<Slot> {
-        let (_, vote_account) = bank.get_vote_account(vote_account_pubkey)?;
-        let bank_vote_state = vote_account.vote_state().as_ref().ok().cloned();
+        let last_voted_slot_in_bank = Self::last_voted_slot_in_bank(bank, vote_account_pubkey);
 
         // Returns the new root if one is made after applying a vote for the given bank to
         // `self.vote_state`
-        self.record_bank_vote_and_update_lockouts(bank.slot(), bank.hash(), bank_vote_state, bank)
+        self.record_bank_vote_and_update_lockouts(bank.slot(), bank.hash(), last_voted_slot_in_bank, bank)
     }
 
     fn record_bank_vote_and_update_lockouts(
         &mut self,
         vote_slot: Slot,
         vote_hash: Hash,
-        bank_vote_state: Option<VoteState>,
+        last_voted_slot_in_bank: Option<Slot>,
         bank: &Bank,
     ) -> Option<Slot> {
         trace!("{} record_vote for {}", self.node_pubkey, vote_slot);
@@ -479,7 +450,7 @@ impl Tower {
             &mut self.vote_state,
             vote_slot,
             vote_hash,
-            bank_vote_state,
+            last_voted_slot_in_bank,
             bank,
         );
 
