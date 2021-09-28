@@ -18,6 +18,7 @@ use solana_sdk::{
     slot_hashes::SlotHash,
     sysvar::clock::Clock,
 };
+use std::any::Any;
 use std::boxed::Box;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
@@ -34,16 +35,61 @@ pub const INITIAL_LOCKOUT: usize = 2;
 // Maximum number of credits history to keep around
 pub const MAX_EPOCH_CREDITS_HISTORY: usize = 64;
 
-// Offset of VoteState::prior_voters, for determining initialization status without deserialization
+// Offset of VoteState::pri : Clone + Debug {or_voters, for determining initialization status without deserialization
 const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 82;
 
-pub trait VoteTransaction {
+// VoteTransactionClone hack is done so that we can derive clone on the tower that uses the
+// VoteTransaction trait object. Clone doesn't work here because it returns Self which is not
+// allowed for trait objects
+#[typetag::serde{tag = "type"}]
+pub trait VoteTransaction: VoteTransactionClone + Debug + Send {
     fn slot(&self, i: usize) -> Slot;
     fn len(&self) -> usize;
     fn hash(&self) -> Hash;
+    fn last_voted_slot(&self) -> Option<Slot>;
+    fn last_voted_slot_hash(&self) -> Option<(Slot, Hash)>;
+    fn set_timestamp(&mut self, ts: Option<UnixTimestamp>);
 
     fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    // Have to manually implement because deriving PartialEq returns Self
+    fn eq(&self, other: &dyn VoteTransaction) -> bool;
+    fn as_any(&self) -> &dyn Any;
+}
+
+pub trait VoteTransactionClone {
+    fn clone_box(&self) -> Box<dyn VoteTransaction>;
+}
+
+impl<T> VoteTransactionClone for T
+where
+    T: VoteTransaction + Clone + 'static,
+{
+    fn clone_box(&self) -> Box<dyn VoteTransaction> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn VoteTransaction> {
+    fn clone(&self) -> Box<dyn VoteTransaction> {
+        self.clone_box()
+    }
+}
+
+// Have to manually implement because derive returns Self
+impl<'a, 'b> PartialEq<dyn VoteTransaction + 'b> for dyn VoteTransaction + 'a {
+    fn eq(&self, other: &(dyn VoteTransaction + 'b)) -> bool {
+        VoteTransaction::eq(self, other)
+    }
+}
+
+// This is needed because of weirdness in the derive PartialEq macro
+// See rust issue #31740 for more info
+impl PartialEq<&Self> for Box<dyn VoteTransaction> {
+    fn eq(&self, other: &&Self) -> bool {
+        VoteTransaction::eq(self.as_ref(), other.as_ref())
     }
 }
 
@@ -66,16 +112,9 @@ impl Vote {
             timestamp: None,
         }
     }
-
-    pub fn last_voted_slot(&self) -> Option<Slot> {
-        self.slots.last().copied()
-    }
-
-    pub fn last_voted_slot_hash(&self) -> Option<(Slot, Hash)> {
-        self.slots.last().copied().map(|slot| (slot, self.hash))
-    }
 }
 
+#[typetag::serde]
 impl VoteTransaction for Vote {
     fn slot(&self, i: usize) -> Slot {
         self.slots[i]
@@ -88,6 +127,24 @@ impl VoteTransaction for Vote {
     fn hash(&self) -> Hash {
         self.hash
     }
+
+    fn last_voted_slot(&self) -> Option<Slot> {
+        self.slots.last().copied()
+    }
+
+    fn last_voted_slot_hash(&self) -> Option<(Slot, Hash)> {
+        self.slots.last().copied().map(|slot| (slot, self.hash))
+    }
+
+    fn set_timestamp(&mut self, ts: Option<UnixTimestamp>) {
+        self.timestamp = ts
+    }
+
+    fn eq(&self, other: &dyn VoteTransaction) -> bool {
+        other.as_any().downcast_ref::<Self>().map_or(false, |x| x == self)
+    }
+
+    fn as_any(&self) -> &dyn Any { self }
 }
 
 #[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Copy, Clone, AbiExample)]
@@ -142,19 +199,9 @@ impl VoteStateUpdate {
             timestamp: None,
         }
     }
-
-    pub fn last_voted_slot(&self) -> Option<Slot> {
-        self.lockouts.back().copied().map(|lockout| lockout.slot)
-    }
-
-    pub fn last_voted_slot_hash(&self) -> Option<(Slot, Hash)> {
-        self.lockouts
-            .back()
-            .copied()
-            .map(|lockout| (lockout.slot, self.hash))
-    }
 }
 
+#[typetag::serde]
 impl VoteTransaction for VoteStateUpdate {
     fn slot(&self, i: usize) -> Slot {
         self.lockouts[i].slot
@@ -167,6 +214,27 @@ impl VoteTransaction for VoteStateUpdate {
     fn hash(&self) -> Hash {
         self.hash
     }
+
+    fn last_voted_slot(&self) -> Option<Slot> {
+        self.lockouts.back().copied().map(|lockout| lockout.slot)
+    }
+
+    fn last_voted_slot_hash(&self) -> Option<(Slot, Hash)> {
+        self.lockouts
+            .back()
+            .copied()
+            .map(|lockout| (lockout.slot, self.hash))
+    }
+
+    fn set_timestamp(&mut self, ts: Option<UnixTimestamp>) {
+        self.timestamp = ts
+    }
+
+    fn eq(&self, other: &dyn VoteTransaction) -> bool {
+        other.as_any().downcast_ref::<Self>().map_or(false, |x| x == self)
+    }
+
+    fn as_any(&self) -> &dyn Any { self }
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]

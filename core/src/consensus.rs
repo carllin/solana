@@ -13,6 +13,7 @@ use {
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
+        feature_set,
         hash::Hash,
         instruction::Instruction,
         pubkey::Pubkey,
@@ -21,7 +22,10 @@ use {
     },
     solana_vote_program::{
         vote_instruction,
-        vote_state::{BlockTimestamp, Lockout, Vote, VoteState, MAX_LOCKOUT_HISTORY},
+        vote_state::{
+            BlockTimestamp, Lockout, Vote, VoteState, VoteStateUpdate, VoteTransaction,
+            MAX_LOCKOUT_HISTORY,
+        },
     },
     std::{
         cmp::Ordering,
@@ -45,29 +49,52 @@ pub enum SwitchForkDecision {
 impl SwitchForkDecision {
     pub fn to_vote_instruction(
         &self,
-        vote: Vote,
+        vote: Box<dyn VoteTransaction>,
         vote_account_pubkey: &Pubkey,
         authorized_voter_pubkey: &Pubkey,
     ) -> Option<Instruction> {
-        match self {
-            SwitchForkDecision::FailedSwitchThreshold(_, total_stake) => {
+        match (
+            self,
+            vote.as_any().downcast_ref::<Vote>(),
+            vote.as_any().downcast_ref::<VoteStateUpdate>(),
+        ) {
+            (SwitchForkDecision::FailedSwitchThreshold(_, total_stake), _, _) => {
                 assert_ne!(*total_stake, 0);
                 None
             }
-            SwitchForkDecision::FailedSwitchDuplicateRollback(_) => None,
-            SwitchForkDecision::SameFork => Some(vote_instruction::vote(
+            (SwitchForkDecision::FailedSwitchDuplicateRollback(_), _, _) => None,
+            (SwitchForkDecision::SameFork, Some(v), None) => Some(vote_instruction::vote(
                 vote_account_pubkey,
                 authorized_voter_pubkey,
-                vote,
+                v.clone(),
             )),
-            SwitchForkDecision::SwitchProof(switch_proof_hash) => {
+            (SwitchForkDecision::SameFork, None, Some(v)) => {
+                Some(vote_instruction::update_vote_state(
+                    vote_account_pubkey,
+                    authorized_voter_pubkey,
+                    v.clone(),
+                ))
+            }
+            (SwitchForkDecision::SwitchProof(switch_proof_hash), Some(v), None) => {
                 Some(vote_instruction::vote_switch(
                     vote_account_pubkey,
                     authorized_voter_pubkey,
-                    vote,
+                    v.clone(),
                     *switch_proof_hash,
                 ))
             }
+            // TODO: do we need a separate instruction here?
+            (SwitchForkDecision::SwitchProof(_switch_proof_hash), None, Some(v)) => {
+                Some(vote_instruction::update_vote_state(
+                    vote_account_pubkey,
+                    authorized_voter_pubkey,
+                    v.clone(),
+                ))
+            }
+            _ => panic!(
+                "This should never happen invalid vote {:?} {:?}",
+                self, vote
+            ),
         }
     }
 
@@ -109,7 +136,7 @@ pub struct Tower {
     threshold_depth: usize,
     threshold_size: f64,
     vote_state: VoteState,
-    last_vote: Vote,
+    last_vote: Box<dyn VoteTransaction>,
     #[serde(skip)]
     // The blockhash used in the last vote transaction, may or may not equal the
     // blockhash of the voted block itself, depending if the vote slot was refreshed.
@@ -136,7 +163,7 @@ impl Default for Tower {
             threshold_depth: VOTE_THRESHOLD_DEPTH,
             threshold_size: VOTE_THRESHOLD_SIZE,
             vote_state: VoteState::default(),
-            last_vote: Vote::default(),
+            last_vote: Box::new(Vote::default()),
             last_timestamp: BlockTimestamp::default(),
             last_vote_tx_blockhash: Hash::default(),
             stray_restored_slot: Option::default(),
@@ -359,31 +386,69 @@ impl Tower {
         self.last_vote_tx_blockhash = new_vote_tx_blockhash;
     }
 
+    // Returns true if we have switched the new vote instruction that directly sets vote state
+    fn enable_direct_vote_state_updates(slot: Slot, bank: &Bank) -> bool {
+        let feature_slot = bank
+            .feature_set
+            .activated_slot(&feature_set::allow_votes_to_directly_update_vote_state::id());
+        match feature_slot {
+            None => false,
+            Some(feature_slot) => {
+                let epoch_schedule = bank.epoch_schedule();
+                let feature_epoch = epoch_schedule.get_epoch(feature_slot);
+                let current_epoch = epoch_schedule.get_epoch(slot);
+                feature_epoch < current_epoch
+            }
+        }
+    }
+
     fn apply_vote_and_generate_vote_diff(
         local_vote_state: &mut VoteState,
         slot: Slot,
         hash: Hash,
-        last_voted_slot_in_bank: Option<Slot>,
-    ) -> Vote {
+        bank_vote_state: Option<VoteState>,
+        bank: &Bank,
+    ) -> Box<dyn VoteTransaction> {
         let vote = Vote::new(vec![slot], hash);
-        local_vote_state.process_vote_unchecked(&vote);
-        let slots = if let Some(last_voted_slot_in_bank) = last_voted_slot_in_bank {
-            local_vote_state
-                .votes
-                .iter()
-                .map(|v| v.slot)
-                .skip_while(|s| *s <= last_voted_slot_in_bank)
-                .collect()
+        if Self::enable_direct_vote_state_updates(slot, bank) {
+            if let Some(bank_vote_state) = bank_vote_state {
+                if bank_vote_state.last_voted_slot() > local_vote_state.last_voted_slot() {
+                    // TODO: actually rewrite this tower in collect vote lockouts
+                    // also don't allow flip flopping between vote instructions?
+                    // Note some fields in the Tower like `last_vote`, `last_vote_tx_blockhash`,
+                    // `last_timestamp`, will not match the last vote in the vote state, until
+                    // the new vote is made.
+                    *local_vote_state = bank_vote_state;
+
+                    // TODO: check if tower threshold check on this new tower would allow
+                    // you to vote on this slot...
+                    // TODO: log the difference
+                }
+            }
+
+            local_vote_state.process_vote_unchecked(&vote);
+
+            Box::new(VoteStateUpdate::new(
+                local_vote_state.votes.clone(),
+                local_vote_state.root_slot,
+                hash,
+            ))
         } else {
-            local_vote_state.votes.iter().map(|v| v.slot).collect()
-        };
-        trace!(
-            "new vote with {:?} {:?} {:?}",
-            last_voted_slot_in_bank,
-            slots,
-            local_vote_state.votes
-        );
-        Vote::new(slots, hash)
+            local_vote_state.process_vote_unchecked(&vote);
+            let slots = if let Some(last_voted_slot) =
+                bank_vote_state.map(|vs| vs.last_voted_slot()).flatten()
+            {
+                local_vote_state
+                    .votes
+                    .iter()
+                    .map(|v| v.slot)
+                    .skip_while(|s| *s <= last_voted_slot)
+                    .collect()
+            } else {
+                local_vote_state.votes.iter().map(|v| v.slot).collect()
+            };
+            Box::new(Vote::new(slots, hash))
+        }
     }
 
     pub fn last_voted_slot_in_bank(bank: &Bank, vote_account_pubkey: &Pubkey) -> Option<Slot> {
@@ -393,18 +458,20 @@ impl Tower {
     }
 
     pub fn record_bank_vote(&mut self, bank: &Bank, vote_account_pubkey: &Pubkey) -> Option<Slot> {
-        let last_voted_slot_in_bank = Self::last_voted_slot_in_bank(bank, vote_account_pubkey);
+        let (_, vote_account) = bank.get_vote_account(vote_account_pubkey)?;
+        let bank_vote_state = vote_account.vote_state().as_ref().ok().cloned();
 
         // Returns the new root if one is made after applying a vote for the given bank to
         // `self.vote_state`
-        self.record_bank_vote_and_update_lockouts(bank.slot(), bank.hash(), last_voted_slot_in_bank)
+        self.record_bank_vote_and_update_lockouts(bank.slot(), bank.hash(), bank_vote_state, bank)
     }
 
     fn record_bank_vote_and_update_lockouts(
         &mut self,
         vote_slot: Slot,
         vote_hash: Hash,
-        last_voted_slot_in_bank: Option<Slot>,
+        bank_vote_state: Option<VoteState>,
+        bank: &Bank,
     ) -> Option<Slot> {
         trace!("{} record_vote for {}", self.node_pubkey, vote_slot);
         let old_root = self.root();
@@ -412,10 +479,11 @@ impl Tower {
             &mut self.vote_state,
             vote_slot,
             vote_hash,
-            last_voted_slot_in_bank,
+            bank_vote_state,
+            bank,
         );
 
-        new_vote.timestamp = self.maybe_timestamp(self.last_vote.last_voted_slot().unwrap_or(0));
+        new_vote.set_timestamp(self.maybe_timestamp(self.last_vote.last_voted_slot().unwrap_or(0)));
         self.last_vote = new_vote;
 
         let new_root = self.root();
@@ -433,8 +501,8 @@ impl Tower {
     }
 
     #[cfg(test)]
-    pub fn record_vote(&mut self, slot: Slot, hash: Hash) -> Option<Slot> {
-        self.record_bank_vote_and_update_lockouts(slot, hash, self.last_voted_slot())
+    pub fn record_vote(&mut self, slot: Slot, hash: Hash, bank: &Bank) -> Option<Slot> {
+        self.record_bank_vote_and_update_lockouts(slot, hash, self.last_voted_slot(), bank)
     }
 
     pub fn last_voted_slot(&self) -> Option<Slot> {
@@ -449,8 +517,8 @@ impl Tower {
         self.stray_restored_slot
     }
 
-    pub fn last_vote(&mut self) -> Vote {
-        self.last_vote.clone()
+    pub fn last_vote(&mut self) -> Box<dyn VoteTransaction> {
+        self.last_vote.clone_box()
     }
 
     fn maybe_timestamp(&mut self, current_slot: Slot) -> Option<UnixTimestamp> {
@@ -959,8 +1027,8 @@ impl Tower {
         assert_eq!(slot_history.check(replayed_root), Check::Found);
 
         assert!(
-            self.last_vote == Vote::default() && self.vote_state.votes.is_empty()
-                || self.last_vote != Vote::default() && !self.vote_state.votes.is_empty(),
+            self.last_vote == (Box::new(Vote::default()) as Box<dyn VoteTransaction>) && self.vote_state.votes.is_empty()
+                || self.last_vote != (Box::new(Vote::default()) as Box<dyn VoteTransaction>) && !self.vote_state.votes.is_empty(),
             "last vote: {:?} vote_state.votes: {:?}",
             self.last_vote,
             self.vote_state.votes
@@ -1114,7 +1182,7 @@ impl Tower {
             info!("All restored votes were behind; resetting root_slot and last_vote in tower!");
             // we might not have banks for those votes so just reset.
             // That's because the votes may well past replayed_root
-            self.last_vote = Vote::default();
+            self.last_vote = Box::new(Vote::default());
         } else {
             info!(
                 "{} restored votes (out of {}) were on different fork or are upcoming votes on unrooted slots: {:?}!",
