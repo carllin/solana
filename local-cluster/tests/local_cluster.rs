@@ -23,7 +23,7 @@ use {
         consensus::{Tower, SWITCH_FORK_THRESHOLD, VOTE_THRESHOLD_DEPTH},
         optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
         replay_stage::DUPLICATE_THRESHOLD,
-        tower_storage::{FileTowerStorage, SavedTower, TowerStorage},
+        tower_storage::{FileTowerStorage, SavedTower, SavedTowerVersions, TowerStorage},
         validator::ValidatorConfig,
     },
     solana_download_utils::download_snapshot_archive,
@@ -1914,7 +1914,9 @@ fn test_validator_saves_tower() {
 fn save_tower(tower_path: &Path, tower: &Tower, node_keypair: &Keypair) {
     let file_tower_storage = FileTowerStorage::new(tower_path.to_path_buf());
     let saved_tower = SavedTower::new(tower, node_keypair).unwrap();
-    file_tower_storage.store(&saved_tower).unwrap();
+    file_tower_storage
+        .store(&SavedTowerVersions::from(saved_tower))
+        .unwrap();
 }
 
 fn root_in_tower(tower_path: &Path, node_pubkey: &Pubkey) -> Option<Slot> {

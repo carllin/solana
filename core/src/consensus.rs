@@ -1,9 +1,10 @@
+use crate::tower1_7_14::Tower1_7_14;
 use {
     crate::{
         heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
         latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
         progress_map::{LockoutIntervals, ProgressMap},
-        tower_storage::{SavedTower, TowerStorage},
+        tower_storage::{SavedTower, SavedTowerVersions, TowerStorage},
     },
     chrono::prelude::*,
     solana_ledger::{ancestor_iterator::AncestorIterator, blockstore::Blockstore, blockstore_db},
@@ -13,6 +14,7 @@ use {
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
+        feature_set,
         hash::Hash,
         instruction::Instruction,
         pubkey::Pubkey,
@@ -21,7 +23,10 @@ use {
     },
     solana_vote_program::{
         vote_instruction,
-        vote_state::{BlockTimestamp, Lockout, Vote, VoteState, MAX_LOCKOUT_HISTORY},
+        vote_state::{
+            BlockTimestamp, Lockout, Vote, VoteState, VoteStateUpdate, VoteTransaction,
+            MAX_LOCKOUT_HISTORY,
+        },
     },
     std::{
         cmp::Ordering,
@@ -45,29 +50,43 @@ pub enum SwitchForkDecision {
 impl SwitchForkDecision {
     pub fn to_vote_instruction(
         &self,
-        vote: Vote,
+        vote: VoteTransaction,
         vote_account_pubkey: &Pubkey,
         authorized_voter_pubkey: &Pubkey,
     ) -> Option<Instruction> {
-        match self {
-            SwitchForkDecision::FailedSwitchThreshold(_, total_stake) => {
+        match (self, vote) {
+            (SwitchForkDecision::FailedSwitchThreshold(_, total_stake), _) => {
                 assert_ne!(*total_stake, 0);
                 None
             }
-            SwitchForkDecision::FailedSwitchDuplicateRollback(_) => None,
-            SwitchForkDecision::SameFork => Some(vote_instruction::vote(
-                vote_account_pubkey,
-                authorized_voter_pubkey,
-                vote,
-            )),
-            SwitchForkDecision::SwitchProof(switch_proof_hash) => {
+            (SwitchForkDecision::FailedSwitchDuplicateRollback(_), _) => None,
+            (SwitchForkDecision::SameFork, VoteTransaction::Vote(v)) => Some(
+                vote_instruction::vote(vote_account_pubkey, authorized_voter_pubkey, v),
+            ),
+            (SwitchForkDecision::SameFork, VoteTransaction::VoteStateUpdate(v)) => {
+                Some(vote_instruction::update_vote_state(
+                    vote_account_pubkey,
+                    authorized_voter_pubkey,
+                    v,
+                ))
+            }
+            (SwitchForkDecision::SwitchProof(switch_proof_hash), VoteTransaction::Vote(v)) => {
                 Some(vote_instruction::vote_switch(
                     vote_account_pubkey,
                     authorized_voter_pubkey,
-                    vote,
+                    v,
                     *switch_proof_hash,
                 ))
             }
+            (
+                SwitchForkDecision::SwitchProof(switch_proof_hash),
+                VoteTransaction::VoteStateUpdate(v),
+            ) => Some(vote_instruction::update_vote_state_switch(
+                vote_account_pubkey,
+                authorized_voter_pubkey,
+                v,
+                *switch_proof_hash,
+            )),
         }
     }
 
@@ -102,14 +121,47 @@ pub(crate) struct ComputedBankState {
     pub my_latest_landed_vote: Option<Slot>,
 }
 
-#[frozen_abi(digest = "GMs1FxKteU7K4ZFRofMBqNhBpM4xkPVxfYod6R8DQmpT")]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub enum TowerVersions {
+    V1_17_14(Tower1_7_14),
+    Current(Tower),
+}
+
+impl TowerVersions {
+    pub fn new_current(tower: Tower) -> Self {
+        Self::Current(tower)
+    }
+
+    pub fn convert_to_current(self) -> Tower {
+        match self {
+            TowerVersions::V1_17_14(tower) => {
+                let box_last_vote = VoteTransaction::from(tower.last_vote.clone());
+
+                Tower {
+                    node_pubkey: tower.node_pubkey,
+                    threshold_depth: tower.threshold_depth,
+                    threshold_size: tower.threshold_size,
+                    vote_state: tower.vote_state,
+                    last_vote: box_last_vote,
+                    last_vote_tx_blockhash: tower.last_vote_tx_blockhash,
+                    last_timestamp: tower.last_timestamp,
+                    stray_restored_slot: tower.stray_restored_slot,
+                    last_switch_threshold_check: tower.last_switch_threshold_check,
+                }
+            }
+            TowerVersions::Current(tower) => tower,
+        }
+    }
+}
+
+#[frozen_abi(digest = "BfeSJNsfQeX6JU7dmezv1s1aSvR5SoyxKRRZ4ubTh2mt")]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, AbiExample)]
 pub struct Tower {
     pub node_pubkey: Pubkey,
     threshold_depth: usize,
     threshold_size: f64,
-    vote_state: VoteState,
-    last_vote: Vote,
+    pub(crate) vote_state: VoteState,
+    last_vote: VoteTransaction,
     #[serde(skip)]
     // The blockhash used in the last vote transaction, may or may not equal the
     // blockhash of the voted block itself, depending if the vote slot was refreshed.
@@ -136,7 +188,7 @@ impl Default for Tower {
             threshold_depth: VOTE_THRESHOLD_DEPTH,
             threshold_size: VOTE_THRESHOLD_SIZE,
             vote_state: VoteState::default(),
-            last_vote: Vote::default(),
+            last_vote: VoteTransaction::from(Vote::default()),
             last_timestamp: BlockTimestamp::default(),
             last_vote_tx_blockhash: Hash::default(),
             stray_restored_slot: Option::default(),
@@ -359,12 +411,18 @@ impl Tower {
         self.last_vote_tx_blockhash = new_vote_tx_blockhash;
     }
 
+    // Returns true if we have switched the new vote instruction that directly sets vote state
+    pub(crate) fn is_direct_vote_state_update_enabled(bank: &Bank) -> bool {
+        bank.feature_set
+            .is_active(&feature_set::allow_votes_to_directly_update_vote_state::id())
+    }
+
     fn apply_vote_and_generate_vote_diff(
         local_vote_state: &mut VoteState,
         slot: Slot,
         hash: Hash,
         last_voted_slot_in_bank: Option<Slot>,
-    ) -> Vote {
+    ) -> VoteTransaction {
         let vote = Vote::new(vec![slot], hash);
         local_vote_state.process_vote_unchecked(&vote);
         let slots = if let Some(last_voted_slot) = last_voted_slot_in_bank {
@@ -377,7 +435,7 @@ impl Tower {
         } else {
             local_vote_state.votes.iter().map(|v| v.slot).collect()
         };
-        Vote::new(slots, hash)
+        VoteTransaction::from(Vote::new(slots, hash))
     }
 
     pub fn last_voted_slot_in_bank(bank: &Bank, vote_account_pubkey: &Pubkey) -> Option<Slot> {
@@ -391,7 +449,12 @@ impl Tower {
 
         // Returns the new root if one is made after applying a vote for the given bank to
         // `self.vote_state`
-        self.record_bank_vote_and_update_lockouts(bank.slot(), bank.hash(), last_voted_slot_in_bank)
+        self.record_bank_vote_and_update_lockouts(
+            bank.slot(),
+            bank.hash(),
+            last_voted_slot_in_bank,
+            Self::is_direct_vote_state_update_enabled(bank),
+        )
     }
 
     fn record_bank_vote_and_update_lockouts(
@@ -399,18 +462,29 @@ impl Tower {
         vote_slot: Slot,
         vote_hash: Hash,
         last_voted_slot_in_bank: Option<Slot>,
+        is_direct_vote_state_update_enabled: bool,
     ) -> Option<Slot> {
         trace!("{} record_vote for {}", self.node_pubkey, vote_slot);
         let old_root = self.root();
-        let mut new_vote = Self::apply_vote_and_generate_vote_diff(
-            &mut self.vote_state,
-            vote_slot,
-            vote_hash,
-            last_voted_slot_in_bank,
-        );
 
-        new_vote.timestamp =
-            self.maybe_timestamp(self.last_vote.slots.last().copied().unwrap_or_default());
+        let mut new_vote = if is_direct_vote_state_update_enabled {
+            let vote = Vote::new(vec![vote_slot], vote_hash);
+            self.vote_state.process_vote_unchecked(&vote);
+            VoteTransaction::from(VoteStateUpdate::new(
+                self.vote_state.votes.clone(),
+                self.vote_state.root_slot,
+                vote_hash,
+            ))
+        } else {
+            Self::apply_vote_and_generate_vote_diff(
+                &mut self.vote_state,
+                vote_slot,
+                vote_hash,
+                last_voted_slot_in_bank,
+            )
+        };
+
+        new_vote.set_timestamp(self.maybe_timestamp(self.last_voted_slot().unwrap_or_default()));
         self.last_vote = new_vote;
 
         let new_root = self.root();
@@ -429,7 +503,7 @@ impl Tower {
 
     #[cfg(test)]
     pub fn record_vote(&mut self, slot: Slot, hash: Hash) -> Option<Slot> {
-        self.record_bank_vote_and_update_lockouts(slot, hash, self.last_voted_slot())
+        self.record_bank_vote_and_update_lockouts(slot, hash, self.last_voted_slot(), false)
     }
 
     /// Used for tests
@@ -440,18 +514,22 @@ impl Tower {
     }
 
     pub fn last_voted_slot(&self) -> Option<Slot> {
-        self.last_vote.slots.last().copied()
+        if self.last_vote.is_empty() {
+            None
+        } else {
+            Some(self.last_vote.slot(self.last_vote.len() - 1))
+        }
     }
 
     pub fn last_voted_slot_hash(&self) -> Option<(Slot, Hash)> {
-        Some((*self.last_vote.slots.last()?, self.last_vote.hash))
+        Some((self.last_voted_slot()?, self.last_vote.hash()))
     }
 
     pub fn stray_restored_slot(&self) -> Option<Slot> {
         self.stray_restored_slot
     }
 
-    pub fn last_vote(&mut self) -> Vote {
+    pub fn last_vote(&self) -> VoteTransaction {
         self.last_vote.clone()
     }
 
@@ -583,9 +661,9 @@ impl Tower {
                         // `switch < last` is needed not to warn! this message just because of using
                         // newer snapshots on validator restart
                         let message = format!(
-                          "bank_forks doesn't have corresponding data for the stray restored \
+                            "bank_forks doesn't have corresponding data for the stray restored \
                            last vote({}), meaning some inconsistency between saved tower and ledger.",
-                          last_voted_slot
+                           last_voted_slot
                         );
                         warn!("{}", message);
                         datapoint_warn!("tower_warn", ("warn", message, String));
@@ -627,42 +705,56 @@ impl Tower {
                 // TODO: Handle if the last vote is on a dupe, and then we restart. The dupe won't be in
                 // heaviest_subtree_fork_choice, so `heaviest_subtree_fork_choice.latest_invalid_ancestor()` will return
                 // None, but the last vote will be persisted in tower.
-                let switch_hash = progress.get_hash(switch_slot).expect("Slot we're trying to switch to must exist AND be frozen in progress map");
-                if let Some(latest_duplicate_ancestor) = heaviest_subtree_fork_choice.latest_invalid_ancestor(&(last_voted_slot, last_voted_hash)) {
+                let switch_hash = progress
+                    .get_hash(switch_slot)
+                    .expect("Slot we're trying to switch to must exist AND be frozen in progress map");
+                if let Some(latest_duplicate_ancestor) = heaviest_subtree_fork_choice
+                    .latest_invalid_ancestor(&(last_voted_slot, last_voted_hash))
+                {
                     // We're rolling back because one of the ancestors of the last vote was a duplicate. In this
                     // case, it's acceptable if the switch candidate is one of ancestors of the previous vote,
                     // just fail the switch check because there's no point in voting on an ancestor. ReplayStage
                     // should then have a special case continue building an alternate fork from this ancestor, NOT
                     // the `last_voted_slot`. This is in contrast to usual SwitchFailure where ReplayStage continues to build blocks
                     // on latest vote. See `ReplayStage::select_vote_and_reset_forks()` for more details.
-                    if heaviest_subtree_fork_choice.is_strict_ancestor(&(switch_slot, switch_hash), &(last_voted_slot, last_voted_hash)) {
+                    if heaviest_subtree_fork_choice.is_strict_ancestor(
+                        &(switch_slot, switch_hash),
+                        &(last_voted_slot, last_voted_hash),
+                    ) {
                         return rollback_due_to_to_to_duplicate_ancestor(latest_duplicate_ancestor);
-                    } else if progress.get_hash(last_voted_slot).map(|current_slot_hash| current_slot_hash != last_voted_hash).unwrap_or(true) {
+                    } else if progress
+                        .get_hash(last_voted_slot)
+                            .map(|current_slot_hash| current_slot_hash != last_voted_hash)
+                            .unwrap_or(true)
+                    {
                         // Our last vote slot was purged because it was on a duplicate fork, don't continue below
                         // where checks may panic. We allow a freebie vote here that may violate switching
                         // thresholds
                         // TODO: Properly handle this case
-                        info!("Allowing switch vote on {:?} because last vote {:?} was rolled back", (switch_slot, switch_hash), (last_voted_slot, last_voted_hash));
+                        info!(
+                            "Allowing switch vote on {:?} because last vote {:?} was rolled back",
+                            (switch_slot, switch_hash),
+                            (last_voted_slot, last_voted_hash)
+                        );
                         return SwitchForkDecision::SwitchProof(Hash::default());
                     }
                 }
 
-                let last_vote_ancestors =
-                    ancestors.get(&last_voted_slot).unwrap_or_else(|| {
-                        if self.is_stray_last_vote() {
-                            // Unless last vote is stray and stale, ancestors.get(last_voted_slot) must
-                            // return Some(_), justifying to panic! here.
-                            // Also, adjust_lockouts_after_replay() correctly makes last_voted_slot None,
-                            // if all saved votes are ancestors of replayed_root_slot. So this code shouldn't be
-                            // touched in that case as well.
-                            // In other words, except being stray, all other slots have been voted on while
-                            // this validator has been running, so we must be able to fetch ancestors for
-                            // all of them.
-                            empty_ancestors_due_to_minor_unsynced_ledger()
-                        } else {
-                            panic!("no ancestors found with slot: {}", last_voted_slot);
-                        }
-                    });
+                let last_vote_ancestors = ancestors.get(&last_voted_slot).unwrap_or_else(|| {
+                    if self.is_stray_last_vote() {
+                        // Unless last vote is stray and stale, ancestors.get(last_voted_slot) must
+                        // return Some(_), justifying to panic! here.
+                        // Also, adjust_lockouts_after_replay() correctly makes last_voted_slot None,
+                        // if all saved votes are ancestors of replayed_root_slot. So this code shouldn't be
+                        // touched in that case as well.
+                        // In other words, except being stray, all other slots have been voted on while
+                        // this validator has been running, so we must be able to fetch ancestors for
+                        // all of them.
+                        empty_ancestors_due_to_minor_unsynced_ledger()
+                    } else {
+                        panic!("no ancestors found with slot: {}", last_voted_slot);
+                    }
+                });
 
                 let switch_slot_ancestors = ancestors.get(&switch_slot).unwrap();
 
@@ -734,22 +826,76 @@ impl Tower {
                     // Find any locked out intervals for vote accounts in this bank with
                     // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
                     // `last_vote` on another fork.
-                    for (_lockout_interval_end, intervals_keyed_by_end) in lockout_intervals.range((Included(last_voted_slot), Unbounded)) {
-                        for (lockout_interval_start, vote_account_pubkey) in intervals_keyed_by_end {
-                            if locked_out_vote_accounts.contains(vote_account_pubkey) {
-                                continue;
-                            }
+                    for (_lockout_interval_end, intervals_keyed_by_end) in
+                        lockout_intervals.range((Included(last_voted_slot), Unbounded))
+                            {
+                                for (lockout_interval_start, vote_account_pubkey) in intervals_keyed_by_end {
+                                    if locked_out_vote_accounts.contains(vote_account_pubkey) {
+                                        continue;
+                                    }
 
-                            // Only count lockouts on slots that are:
-                            // 1) Not ancestors of `last_vote`, meaning being on different fork
-                            // 2) Not from before the current root as we can't determine if
-                            // anything before the root was an ancestor of `last_vote` or not
-                            if !last_vote_ancestors.contains(lockout_interval_start)
-                                // Given a `lockout_interval_start` < root that appears in a
-                                // bank for a `candidate_slot`, it must be that `lockout_interval_start`
-                                // is an ancestor of the current root, because `candidate_slot` is a
-                                // descendant of the current root
-                                && *lockout_interval_start > root
+                                    // Only count lockouts on slots that are:
+                                    // 1) Not ancestors of `last_vote`, meaning being on different fork
+                                    // 2) Not from before the current root as we can't determine if
+                                    // anything before the root was an ancestor of `last_vote` or not
+                                    if !last_vote_ancestors.contains(lockout_interval_start)
+                                        // Given a `lockout_interval_start` < root that appears in a
+                                        // bank for a `candidate_slot`, it must be that `lockout_interval_start`
+                                        // is an ancestor of the current root, because `candidate_slot` is a
+                                        // descendant of the current root
+                                        && *lockout_interval_start > root
+                                    {
+                                        let stake = epoch_vote_accounts
+                                            .get(vote_account_pubkey)
+                                            .map(|(stake, _)| *stake)
+                                            .unwrap_or(0);
+                                        locked_out_stake += stake;
+                                        if (locked_out_stake as f64 / total_stake as f64)
+                                            > SWITCH_FORK_THRESHOLD
+                                        {
+                                            return SwitchForkDecision::SwitchProof(switch_proof);
+                                        }
+                                        locked_out_vote_accounts.insert(vote_account_pubkey);
+                                    }
+                                }
+                            }
+                }
+
+                // Check the latest votes for potentially gossip votes that haven't landed yet
+                for (
+                    vote_account_pubkey,
+                    (candidate_latest_frozen_vote, _candidate_latest_frozen_vote_hash),
+                ) in latest_validator_votes_for_frozen_banks.max_gossip_frozen_votes()
+                {
+                    if locked_out_vote_accounts.contains(&vote_account_pubkey) {
+                        continue;
+                    }
+
+                    if *candidate_latest_frozen_vote > last_voted_slot
+                        &&
+                            // Because `candidate_latest_frozen_vote` is the last vote made by some validator
+                            // in the cluster for a frozen bank `B` observed through gossip, we may have cleared
+                            // that frozen bank `B` because we `set_root(root)` for a `root` on a different fork,
+                            // like so:
+                            //
+                            //    |----------X ------candidate_latest_frozen_vote (frozen)
+                            // old root
+                            //    |----------new root ----last_voted_slot
+                            //
+                            // In most cases, because `last_voted_slot` must be a descendant of `root`, then
+                            // if `candidate_latest_frozen_vote` is not found in the ancestors/descendants map (recall these
+                            // directly reflect the state of BankForks), this implies that `B` was pruned from BankForks
+                            // because it was on a different fork than `last_voted_slot`, and thus this vote for `candidate_latest_frozen_vote`
+                            // should be safe to count towards the switching proof:
+                            //
+                            // However, there is also the possibility that `last_voted_slot` is a stray, in which
+                            // case we cannot make this conclusion as we do not know the ancestors/descendants
+                            // of strays. Hence we err on the side of caution here and ignore this vote. This
+                            // is ok because validators voting on different unrooted forks should eventually vote
+                            // on some descendant of the root, at which time they can be included in switching proofs.
+                            !Self::is_candidate_slot_descendant_of_last_vote(
+                                *candidate_latest_frozen_vote, last_voted_slot, ancestors)
+                            .unwrap_or(true)
                             {
                                 let stake = epoch_vote_accounts
                                     .get(vote_account_pubkey)
@@ -761,58 +907,13 @@ impl Tower {
                                 }
                                 locked_out_vote_accounts.insert(vote_account_pubkey);
                             }
-                        }
-                    }
-                }
-
-                // Check the latest votes for potentially gossip votes that haven't landed yet
-                for (vote_account_pubkey, (candidate_latest_frozen_vote, _candidate_latest_frozen_vote_hash)) in latest_validator_votes_for_frozen_banks.max_gossip_frozen_votes() {
-                    if locked_out_vote_accounts.contains(&vote_account_pubkey) {
-                        continue;
-                    }
-
-                    if *candidate_latest_frozen_vote > last_voted_slot
-                    &&
-                    // Because `candidate_latest_frozen_vote` is the last vote made by some validator
-                    // in the cluster for a frozen bank `B` observed through gossip, we may have cleared
-                    // that frozen bank `B` because we `set_root(root)` for a `root` on a different fork,
-                    // like so:
-                    //
-                    //    |----------X ------candidate_latest_frozen_vote (frozen)
-                    // old root
-                    //    |----------new root ----last_voted_slot
-                    //
-                    // In most cases, because `last_voted_slot` must be a descendant of `root`, then
-                    // if `candidate_latest_frozen_vote` is not found in the ancestors/descendants map (recall these
-                    // directly reflect the state of BankForks), this implies that `B` was pruned from BankForks
-                    // because it was on a different fork than `last_voted_slot`, and thus this vote for `candidate_latest_frozen_vote`
-                    // should be safe to count towards the switching proof:
-                    //
-                    // However, there is also the possibility that `last_voted_slot` is a stray, in which
-                    // case we cannot make this conclusion as we do not know the ancestors/descendants
-                    // of strays. Hence we err on the side of caution here and ignore this vote. This
-                    // is ok because validators voting on different unrooted forks should eventually vote
-                    // on some descendant of the root, at which time they can be included in switching proofs.
-                    !Self::is_candidate_slot_descendant_of_last_vote(
-                        *candidate_latest_frozen_vote, last_voted_slot, ancestors)
-                        .unwrap_or(true) {
-                        let stake = epoch_vote_accounts
-                                .get(vote_account_pubkey)
-                                .map(|(stake, _)| *stake)
-                                .unwrap_or(0);
-                        locked_out_stake += stake;
-                        if (locked_out_stake as f64 / total_stake as f64) > SWITCH_FORK_THRESHOLD {
-                            return SwitchForkDecision::SwitchProof(switch_proof);
-                        }
-                        locked_out_vote_accounts.insert(vote_account_pubkey);
-                    }
                 }
 
                 // We have not detected sufficient lockout past the last voted slot to generate
                 // a switching proof
                 SwitchForkDecision::FailedSwitchThreshold(locked_out_stake, total_stake)
             })
-            .unwrap_or(SwitchForkDecision::SameFork)
+        .unwrap_or(SwitchForkDecision::SameFork)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -933,13 +1034,7 @@ impl Tower {
     }
 
     pub fn is_stray_last_vote(&self) -> bool {
-        if let Some(last_voted_slot) = self.last_voted_slot() {
-            if let Some(stray_restored_slot) = self.stray_restored_slot {
-                return stray_restored_slot == last_voted_slot;
-            }
-        }
-
-        false
+        self.stray_restored_slot == self.last_voted_slot()
     }
 
     // The tower root can be older/newer if the validator booted from a newer/older snapshot, so
@@ -961,8 +1056,10 @@ impl Tower {
         assert_eq!(slot_history.check(replayed_root), Check::Found);
 
         assert!(
-            self.last_vote == Vote::default() && self.vote_state.votes.is_empty()
-                || self.last_vote != Vote::default() && !self.vote_state.votes.is_empty(),
+            self.last_vote == VoteTransaction::from(Vote::default())
+                && self.vote_state.votes.is_empty()
+                || self.last_vote != VoteTransaction::from(Vote::default())
+                    && !self.vote_state.votes.is_empty(),
             "last vote: {:?} vote_state.votes: {:?}",
             self.last_vote,
             self.vote_state.votes
@@ -1116,7 +1213,7 @@ impl Tower {
             info!("All restored votes were behind; resetting root_slot and last_vote in tower!");
             // we might not have banks for those votes so just reset.
             // That's because the votes may well past replayed_root
-            self.last_vote = Vote::default();
+            self.last_vote = VoteTransaction::from(Vote::default());
         } else {
             info!(
                 "{} restored votes (out of {}) were on different fork or are upcoming votes on unrooted slots: {:?}!",
@@ -1125,11 +1222,8 @@ impl Tower {
                 self.voted_slots()
             );
 
-            assert_eq!(
-                self.last_vote.slots.last().unwrap(),
-                self.voted_slots().last().unwrap()
-            );
-            self.stray_restored_slot = Some(*self.last_vote.slots.last().unwrap());
+            assert_eq!(self.last_voted_slot(), self.voted_slots().last().copied());
+            self.stray_restored_slot = self.last_vote.last_voted_slot()
         }
 
         Ok(())
@@ -1176,13 +1270,12 @@ impl Tower {
 
     pub fn save(&self, tower_storage: &dyn TowerStorage, node_keypair: &Keypair) -> Result<()> {
         let saved_tower = SavedTower::new(self, node_keypair)?;
-        tower_storage.store(&saved_tower)?;
+        tower_storage.store(&SavedTowerVersions::from(saved_tower))?;
         Ok(())
     }
 
     pub fn restore(tower_storage: &dyn TowerStorage, node_pubkey: &Pubkey) -> Result<Self> {
-        let saved_tower = tower_storage.load(node_pubkey)?;
-        saved_tower.try_into_tower(node_pubkey)
+        tower_storage.load(node_pubkey)
     }
 }
 
@@ -1331,17 +1424,29 @@ pub mod test {
         let vote = Vote::default();
         let mut decision = SwitchForkDecision::FailedSwitchThreshold(0, 1);
         assert!(decision
-            .to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default())
+            .to_vote_instruction(
+                VoteTransaction::from(vote.clone()),
+                &Pubkey::default(),
+                &Pubkey::default()
+            )
             .is_none());
 
         decision = SwitchForkDecision::FailedSwitchDuplicateRollback(0);
         assert!(decision
-            .to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default())
+            .to_vote_instruction(
+                VoteTransaction::from(vote.clone()),
+                &Pubkey::default(),
+                &Pubkey::default()
+            )
             .is_none());
 
         decision = SwitchForkDecision::SameFork;
         assert_eq!(
-            decision.to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default()),
+            decision.to_vote_instruction(
+                VoteTransaction::from(vote.clone()),
+                &Pubkey::default(),
+                &Pubkey::default()
+            ),
             Some(vote_instruction::vote(
                 &Pubkey::default(),
                 &Pubkey::default(),
@@ -1351,7 +1456,11 @@ pub mod test {
 
         decision = SwitchForkDecision::SwitchProof(Hash::default());
         assert_eq!(
-            decision.to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default()),
+            decision.to_vote_instruction(
+                VoteTransaction::from(vote.clone()),
+                &Pubkey::default(),
+                &Pubkey::default()
+            ),
             Some(vote_instruction::vote_switch(
                 &Pubkey::default(),
                 &Pubkey::default(),
@@ -1846,7 +1955,7 @@ pub mod test {
                         / (tr(44)
                             // Minor fork 2
                             / (tr(45) / (tr(46))))
-                            / (tr(110)))));
+                        / (tr(110)))));
 
         // Have two validators, each representing 20% of the stake vote on
         // minor fork 2 at slots 46 + 47
@@ -2254,7 +2363,7 @@ pub mod test {
         let mut local = VoteState::default();
         let vote = Tower::apply_vote_and_generate_vote_diff(&mut local, 0, Hash::default(), None);
         assert_eq!(local.votes.len(), 1);
-        assert_eq!(vote.slots, vec![0]);
+        assert_eq!(vote.slots(), vec![0]);
         assert_eq!(local.tower(), vec![0]);
     }
 
@@ -2265,7 +2374,7 @@ pub mod test {
         // another vote for slot 0 should return an empty vote as the diff.
         let vote =
             Tower::apply_vote_and_generate_vote_diff(&mut local, 0, Hash::default(), Some(0));
-        assert!(vote.slots.is_empty());
+        assert!(vote.is_empty());
     }
 
     #[test]
@@ -2280,7 +2389,7 @@ pub mod test {
         assert_eq!(local.votes.len(), 1);
         let vote =
             Tower::apply_vote_and_generate_vote_diff(&mut local, 1, Hash::default(), Some(0));
-        assert_eq!(vote.slots, vec![1]);
+        assert_eq!(vote.slots(), vec![1]);
         assert_eq!(local.tower(), vec![0, 1]);
     }
 
@@ -2300,7 +2409,7 @@ pub mod test {
         // observable in any of the results.
         let vote =
             Tower::apply_vote_and_generate_vote_diff(&mut local, 3, Hash::default(), Some(0));
-        assert_eq!(vote.slots, vec![3]);
+        assert_eq!(vote.slots(), vec![3]);
         assert_eq!(local.tower(), vec![3]);
     }
 
@@ -2382,8 +2491,8 @@ pub mod test {
             tower.record_vote(i as u64, Hash::default());
         }
 
-        expected.timestamp = tower.last_vote.timestamp;
-        assert_eq!(expected, tower.last_vote)
+        expected.timestamp = tower.last_vote.timestamp();
+        assert_eq!(VoteTransaction::from(expected), tower.last_vote)
     }
 
     #[test]
@@ -2683,10 +2792,12 @@ pub mod test {
                     .write(true)
                     .open(path)
                     .unwrap();
+                // 4 is the offset into SavedTowerVersions for the signature
+                assert_eq!(file.seek(SeekFrom::Start(4)).unwrap(), 4);
                 let mut buf = [0u8];
                 assert_eq!(file.read(&mut buf).unwrap(), 1);
                 buf[0] = !buf[0];
-                assert_eq!(file.seek(SeekFrom::Start(0)).unwrap(), 0);
+                assert_eq!(file.seek(SeekFrom::Start(4)).unwrap(), 4);
                 assert_eq!(file.write(&buf).unwrap(), 1);
             },
         );
@@ -3025,7 +3136,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(1));
         tower.vote_state.votes.push_back(Lockout::new(0));
         let vote = Vote::new(vec![0], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = VoteTransaction::from(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3043,7 +3154,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(1));
         tower.vote_state.votes.push_back(Lockout::new(2));
         let vote = Vote::new(vec![2], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = VoteTransaction::from(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3068,7 +3179,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(0));
         tower.vote_state.votes.push_back(Lockout::new(1));
         let vote = Vote::new(vec![1], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = VoteTransaction::from(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(MAX_ENTRIES);
@@ -3087,7 +3198,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(2));
         tower.vote_state.votes.push_back(Lockout::new(1));
         let vote = Vote::new(vec![1], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = VoteTransaction::from(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3106,7 +3217,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(3));
         tower.vote_state.votes.push_back(Lockout::new(3));
         let vote = Vote::new(vec![3], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = VoteTransaction::from(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3125,7 +3236,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(43));
         tower.vote_state.votes.push_back(Lockout::new(44));
         let vote = Vote::new(vec![44], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = VoteTransaction::from(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(42);
@@ -3139,7 +3250,7 @@ pub mod test {
         let mut tower = Tower::new_for_tests(10, 0.9);
         tower.vote_state.votes.push_back(Lockout::new(0));
         let vote = Vote::new(vec![0], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = VoteTransaction::from(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3153,7 +3264,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(13));
         tower.vote_state.votes.push_back(Lockout::new(14));
         let vote = Vote::new(vec![14], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = VoteTransaction::from(vote);
         tower.initialize_root(12);
 
         let mut slot_history = SlotHistory::default();
