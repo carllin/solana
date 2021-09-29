@@ -1074,7 +1074,7 @@ impl<'a> Iterator for AncestorIterator<'a> {
     }
 }
 
-/*#[cfg(test)]
+#[cfg(test)]
 mod test {
     use super::*;
     use crate::vote_simulator::VoteSimulator;
@@ -3569,4 +3569,4 @@ mod test {
             );
         }
     }
-}*/
+}
