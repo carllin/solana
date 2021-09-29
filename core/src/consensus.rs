@@ -1375,17 +1375,17 @@ pub mod test {
         let vote = Vote::default();
         let mut decision = SwitchForkDecision::FailedSwitchThreshold(0, 1);
         assert!(decision
-            .to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default())
+            .to_vote_instruction(Box::new(vote.clone()), &Pubkey::default(), &Pubkey::default())
             .is_none());
 
         decision = SwitchForkDecision::FailedSwitchDuplicateRollback(0);
         assert!(decision
-            .to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default())
+            .to_vote_instruction(Box::new(vote.clone()), &Pubkey::default(), &Pubkey::default())
             .is_none());
 
         decision = SwitchForkDecision::SameFork;
         assert_eq!(
-            decision.to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default()),
+            decision.to_vote_instruction(Box::new(vote.clone()), &Pubkey::default(), &Pubkey::default()),
             Some(vote_instruction::vote(
                 &Pubkey::default(),
                 &Pubkey::default(),
@@ -1395,7 +1395,7 @@ pub mod test {
 
         decision = SwitchForkDecision::SwitchProof(Hash::default());
         assert_eq!(
-            decision.to_vote_instruction(vote.clone(), &Pubkey::default(), &Pubkey::default()),
+            decision.to_vote_instruction(Box::new(vote.clone()), &Pubkey::default(), &Pubkey::default()),
             Some(vote_instruction::vote_switch(
                 &Pubkey::default(),
                 &Pubkey::default(),
@@ -2298,7 +2298,7 @@ pub mod test {
         let mut local = VoteState::default();
         let vote = Tower::apply_vote_and_generate_vote_diff(&mut local, 0, Hash::default(), None);
         assert_eq!(local.votes.len(), 1);
-        assert_eq!(vote.slots, vec![0]);
+        assert_eq!(vote.slots(), vec![0]);
         assert_eq!(local.tower(), vec![0]);
     }
 
@@ -2309,7 +2309,7 @@ pub mod test {
         // another vote for slot 0 should return an empty vote as the diff.
         let vote =
             Tower::apply_vote_and_generate_vote_diff(&mut local, 0, Hash::default(), Some(0));
-        assert!(vote.slots.is_empty());
+        assert!(vote.is_empty());
     }
 
     #[test]
@@ -2324,7 +2324,7 @@ pub mod test {
         assert_eq!(local.votes.len(), 1);
         let vote =
             Tower::apply_vote_and_generate_vote_diff(&mut local, 1, Hash::default(), Some(0));
-        assert_eq!(vote.slots, vec![1]);
+        assert_eq!(vote.slots(), vec![1]);
         assert_eq!(local.tower(), vec![0, 1]);
     }
 
@@ -2344,7 +2344,7 @@ pub mod test {
         // observable in any of the results.
         let vote =
             Tower::apply_vote_and_generate_vote_diff(&mut local, 3, Hash::default(), Some(0));
-        assert_eq!(vote.slots, vec![3]);
+        assert_eq!(vote.slots(), vec![3]);
         assert_eq!(local.tower(), vec![3]);
     }
 
@@ -2421,13 +2421,13 @@ pub mod test {
         } else {
             vec![]
         };
-        let mut expected = Vote::new(slots, Hash::default());
+        let mut expected = Box::new(Vote::new(slots, Hash::default()));
         for i in 0..num_votes {
             tower.record_vote(i as u64, Hash::default());
         }
 
-        expected.timestamp = tower.last_vote.timestamp;
-        assert_eq!(expected, tower.last_vote)
+        expected.timestamp = tower.last_vote.timestamp();
+        assert_eq!(expected as Box<dyn VoteTransaction>, tower.last_vote)
     }
 
     #[test]
@@ -3069,7 +3069,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(1));
         tower.vote_state.votes.push_back(Lockout::new(0));
         let vote = Vote::new(vec![0], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = Box::new(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3087,7 +3087,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(1));
         tower.vote_state.votes.push_back(Lockout::new(2));
         let vote = Vote::new(vec![2], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = Box::new(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3112,7 +3112,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(0));
         tower.vote_state.votes.push_back(Lockout::new(1));
         let vote = Vote::new(vec![1], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = Box::new(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(MAX_ENTRIES);
@@ -3131,7 +3131,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(2));
         tower.vote_state.votes.push_back(Lockout::new(1));
         let vote = Vote::new(vec![1], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = Box::new(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3150,7 +3150,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(3));
         tower.vote_state.votes.push_back(Lockout::new(3));
         let vote = Vote::new(vec![3], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = Box::new(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3169,7 +3169,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(43));
         tower.vote_state.votes.push_back(Lockout::new(44));
         let vote = Vote::new(vec![44], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = Box::new(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(42);
@@ -3183,7 +3183,7 @@ pub mod test {
         let mut tower = Tower::new_for_tests(10, 0.9);
         tower.vote_state.votes.push_back(Lockout::new(0));
         let vote = Vote::new(vec![0], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = Box::new(vote);
 
         let mut slot_history = SlotHistory::default();
         slot_history.add(0);
@@ -3197,7 +3197,7 @@ pub mod test {
         tower.vote_state.votes.push_back(Lockout::new(13));
         tower.vote_state.votes.push_back(Lockout::new(14));
         let vote = Vote::new(vec![14], Hash::default());
-        tower.last_vote = vote;
+        tower.last_vote = Box::new(vote);
         tower.initialize_root(12);
 
         let mut slot_history = SlotHistory::default();
