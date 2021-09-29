@@ -273,6 +273,7 @@ lazy_static! {
         (reduce_required_deploy_balance::id(), "reduce required payer balance for program deploys"),
         (sol_log_data_syscall_enabled::id(), "enable sol_log_data syscall"),
         (stakes_remove_delegation_if_inactive::id(), "remove delegations from stakes cache when inactive"),
+        (allow_votes_to_directly_update_vote_state::id(), "enable direct vote state update"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()
