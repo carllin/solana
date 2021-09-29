@@ -428,7 +428,7 @@ impl Tower {
             bank.slot(),
             bank.hash(),
             last_voted_slot_in_bank,
-            bank,
+            Self::enable_direct_vote_state_updates(bank),
         )
     }
 
@@ -437,12 +437,12 @@ impl Tower {
         vote_slot: Slot,
         vote_hash: Hash,
         last_voted_slot_in_bank: Option<Slot>,
-        bank: &Bank,
+        enable_direct_vote_state_updates: bool,
     ) -> Option<Slot> {
         trace!("{} record_vote for {}", self.node_pubkey, vote_slot);
         let old_root = self.root();
 
-        let mut new_vote = if Self::enable_direct_vote_state_updates(bank) {
+        let mut new_vote = if enable_direct_vote_state_updates {
             let vote = Vote::new(vec![vote_slot], vote_hash);
             self.vote_state.process_vote_unchecked(&vote);
             Box::new(VoteStateUpdate::new(
@@ -476,10 +476,10 @@ impl Tower {
         }
     }
 
-    /*#[cfg(test)]
+    #[cfg(test)]
     pub fn record_vote(&mut self, slot: Slot, hash: Hash) -> Option<Slot> {
-        self.record_bank_vote_and_update_lockouts(slot, hash, self.last_voted_slot())
-    }*/
+        self.record_bank_vote_and_update_lockouts(slot, hash, self.last_voted_slot(), false)
+    }
 
     pub fn last_voted_slot(&self) -> Option<Slot> {
         self.last_vote.last_voted_slot()
@@ -1312,7 +1312,7 @@ pub fn reconcile_blockstore_roots_with_tower(
     Ok(())
 }
 
-/*#[cfg(test)]
+#[cfg(test)]
 pub mod test {
     use {
         super::*,
@@ -3211,4 +3211,4 @@ pub mod test {
         assert_eq!(tower.voted_slots(), vec![13, 14]);
         assert_eq!(tower.stray_restored_slot, Some(14));
     }
-}*/
+}
