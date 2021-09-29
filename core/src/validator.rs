@@ -412,6 +412,8 @@ impl Validator {
             accounts_package_channel.0.clone(),
         );
 
+        info!("Cluster type: {:?}", genesis_config.cluster_type);
+
         *start_progress.write().unwrap() = ValidatorStartProgress::StartingServices;
 
         let leader_schedule_cache = Arc::new(leader_schedule_cache);
