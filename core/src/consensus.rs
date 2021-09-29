@@ -445,6 +445,10 @@ impl Tower {
         let mut new_vote = if enable_direct_vote_state_updates {
             let vote = Vote::new(vec![vote_slot], vote_hash);
             self.vote_state.process_vote_unchecked(&vote);
+            println!(
+                "making new vote with root slot: {:?}",
+                self.vote_state.root_slot
+            );
             Box::new(VoteStateUpdate::new(
                 self.vote_state.votes.clone(),
                 self.vote_state.root_slot,
@@ -897,6 +901,7 @@ impl Tower {
 
     pub fn check_vote_stake_threshold(
         &self,
+        id: &Pubkey,
         slot: Slot,
         voted_stakes: &VotedStakes,
         total_stake: Stake,
@@ -907,9 +912,9 @@ impl Tower {
         if let Some(vote) = vote {
             if let Some(fork_stake) = voted_stakes.get(&vote.slot) {
                 let lockout = *fork_stake as f64 / total_stake as f64;
-                trace!(
-                    "fork_stake slot: {}, vote slot: {}, lockout: {} fork_stake: {} total_stake: {}",
-                    slot, vote.slot, lockout, fork_stake, total_stake
+                println!(
+                    "{} fork_stake slot: {}, vote slot: {}, lockout: {} fork_stake: {} total_stake: {}",
+                    id, slot, vote.slot, lockout, fork_stake, total_stake
                 );
                 if vote.confirmation_count as usize > self.threshold_depth {
                     for old_vote in &self.vote_state.votes {

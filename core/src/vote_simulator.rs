@@ -151,6 +151,7 @@ impl VoteSimulator {
             .collect();
 
         let _ = ReplayStage::compute_bank_stats(
+            &Pubkey::default(),
             my_pubkey,
             &ancestors,
             &mut frozen_banks,

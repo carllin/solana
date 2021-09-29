@@ -1139,9 +1139,11 @@ pub fn process_vote_state_update<S: std::hash::BuildHasher>(
     vote_state_update: &VoteStateUpdate,
     signers: &HashSet<Pubkey, S>,
 ) -> Result<(), InstructionError> {
+    println!("process_vote_state_update");
     let versioned = State::<VoteStateVersions>::state(vote_account)?;
 
     if versioned.is_uninitialized() {
+        println!("UninitializedAccount");
         return Err(InstructionError::UninitializedAccount);
     }
 
@@ -1149,13 +1151,32 @@ pub fn process_vote_state_update<S: std::hash::BuildHasher>(
     let authorized_voter = vote_state.get_and_update_authorized_voter(clock.epoch)?;
     verify_authorized_signer(&authorized_voter, signers)?;
 
-    vote_state.check_slots_are_valid(vote_state_update, slot_hashes)?;
-    vote_state.process_new_vote_state(
+    let res = vote_state.check_slots_are_valid(vote_state_update, slot_hashes);
+    println!("check_slots_are_valid res: {:?}", res);
+    res?;
+
+    let current_lockouts: Vec<Slot> = vote_state
+        .votes
+        .iter()
+        .map(|lockout| lockout.slot)
+        .collect();
+    let new_lockouts: Vec<Slot> = vote_state_update
+        .lockouts
+        .iter()
+        .map(|lockout| lockout.slot)
+        .collect();
+    let res = vote_state.process_new_vote_state(
         vote_state_update.lockouts.clone(),
         vote_state_update.root,
         vote_state_update.timestamp,
         clock.epoch,
-    )?;
+    );
+
+    println!(
+        "process_vote_state update result: {:?}, current: {:?}, new: {:?}, new root: {:?}",
+        res, current_lockouts, new_lockouts, vote_state_update.root,
+    );
+    res?;
     vote_account.set_state(&VoteStateVersions::new_current(vote_state))
 }
 
