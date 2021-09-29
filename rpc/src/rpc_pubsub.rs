@@ -1214,7 +1214,7 @@ mod tests {
             hash: Hash::default(),
             timestamp: None,
         };
-        subscriptions.notify_vote(&vote);
+        subscriptions.notify_vote(Box::new(vote));
 
         let response = receiver.recv();
         assert_eq!(

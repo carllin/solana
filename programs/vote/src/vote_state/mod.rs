@@ -46,9 +46,14 @@ pub trait VoteTransaction: VoteTransactionClone + Debug + Send {
     fn slot(&self, i: usize) -> Slot;
     fn len(&self) -> usize;
     fn hash(&self) -> Hash;
+    fn timestamp(&self) -> Option<UnixTimestamp>;
     fn last_voted_slot(&self) -> Option<Slot>;
     fn last_voted_slot_hash(&self) -> Option<(Slot, Hash)>;
     fn set_timestamp(&mut self, ts: Option<UnixTimestamp>);
+
+    fn slots(&self) -> Vec<Slot> {
+        (0..self.len()).map(|i| self.slot(i)).collect()
+    }
 
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -128,6 +133,10 @@ impl VoteTransaction for Vote {
         self.hash
     }
 
+    fn timestamp(&self) -> Option<UnixTimestamp> {
+        self.timestamp
+    }
+
     fn last_voted_slot(&self) -> Option<Slot> {
         self.slots.last().copied()
     }
@@ -141,10 +150,15 @@ impl VoteTransaction for Vote {
     }
 
     fn eq(&self, other: &dyn VoteTransaction) -> bool {
-        other.as_any().downcast_ref::<Self>().map_or(false, |x| x == self)
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .map_or(false, |x| x == self)
     }
 
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Copy, Clone, AbiExample)]
@@ -215,6 +229,10 @@ impl VoteTransaction for VoteStateUpdate {
         self.hash
     }
 
+    fn timestamp(&self) -> Option<UnixTimestamp> {
+        self.timestamp
+    }
+
     fn last_voted_slot(&self) -> Option<Slot> {
         self.lockouts.back().copied().map(|lockout| lockout.slot)
     }
@@ -231,10 +249,15 @@ impl VoteTransaction for VoteStateUpdate {
     }
 
     fn eq(&self, other: &dyn VoteTransaction) -> bool {
-        other.as_any().downcast_ref::<Self>().map_or(false, |x| x == self)
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .map_or(false, |x| x == self)
     }
 
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
