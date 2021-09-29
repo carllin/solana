@@ -2183,20 +2183,56 @@ impl ReplayStage {
                         Tower::enable_direct_vote_state_updates(bank),
                         bank.get_vote_account(my_vote_pubkey),
                     ) {
-                        if let Some(bank_vote_state) =
+                        if let Some(mut bank_vote_state) =
                             vote_account.vote_state().as_ref().ok().cloned()
                         {
                             if bank_vote_state.last_voted_slot()
                                 > tower.vote_state.last_voted_slot()
                             {
-                                info!("Frozen bank vote state slot {:?} is newer than our local vote state slot {:?}, adopting the bank vote state as our own",
-                                        bank_vote_state.last_voted_slot(),
-                                        tower.vote_state.last_voted_slot(),
-                                    );
-                                info!("  bank {:?}", bank_vote_state.votes);
-                                info!("  local {:?}", tower.vote_state.votes);
+                                info!(
+                                    "Frozen bank vote state slot {:?}
+                                    is newer than our local vote state slot {:?},
+                                    adopting the bank vote state as our own.
+                                    Bank votes: {:?}, root: {:?},
+                                    Local votes: {:?}, root: {:?}",
+                                    bank_vote_state.last_voted_slot(),
+                                    tower.vote_state.last_voted_slot(),
+                                    bank_vote_state.votes,
+                                    bank_vote_state.root_slot,
+                                    tower.vote_state.votes,
+                                    tower.vote_state.root_slot
+                                );
 
-                                tower.vote_state = bank_vote_state;
+                                if let Some(local_root) = tower.vote_state.root_slot {
+                                    if bank_vote_state
+                                        .root_slot
+                                        .map(|bank_root| local_root > bank_root)
+                                        .unwrap_or(true)
+                                    {
+                                        // If the local root is larger than this on chain vote state
+                                        // root (possible due to supermajority roots being set on
+                                        // startup), then we need to adjust the tower
+                                        bank_vote_state.root_slot = Some(local_root);
+                                        bank_vote_state
+                                            .votes
+                                            .retain(|lockout| lockout.slot > local_root);
+
+                                        if let Some(first_vote) = bank_vote_state.votes.front() {
+                                            assert!(ancestors
+                                                .get(&first_vote.slot)
+                                                .expect(
+                                                    "Ancestors map must contain an
+                                                        entry for all slots on this fork
+                                                        greater than `local_root` and less
+                                                        than `bank_slot`"
+                                                )
+                                                .contains(&local_root));
+                                        }
+                                    }
+                                }
+
+                                tower.vote_state.root_slot = bank_vote_state.root_slot;
+                                tower.vote_state.votes = bank_vote_state.votes;
                             }
                         }
                     }

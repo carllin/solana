@@ -1375,17 +1375,29 @@ pub mod test {
         let vote = Vote::default();
         let mut decision = SwitchForkDecision::FailedSwitchThreshold(0, 1);
         assert!(decision
-            .to_vote_instruction(Box::new(vote.clone()), &Pubkey::default(), &Pubkey::default())
+            .to_vote_instruction(
+                Box::new(vote.clone()),
+                &Pubkey::default(),
+                &Pubkey::default()
+            )
             .is_none());
 
         decision = SwitchForkDecision::FailedSwitchDuplicateRollback(0);
         assert!(decision
-            .to_vote_instruction(Box::new(vote.clone()), &Pubkey::default(), &Pubkey::default())
+            .to_vote_instruction(
+                Box::new(vote.clone()),
+                &Pubkey::default(),
+                &Pubkey::default()
+            )
             .is_none());
 
         decision = SwitchForkDecision::SameFork;
         assert_eq!(
-            decision.to_vote_instruction(Box::new(vote.clone()), &Pubkey::default(), &Pubkey::default()),
+            decision.to_vote_instruction(
+                Box::new(vote.clone()),
+                &Pubkey::default(),
+                &Pubkey::default()
+            ),
             Some(vote_instruction::vote(
                 &Pubkey::default(),
                 &Pubkey::default(),
@@ -1395,7 +1407,11 @@ pub mod test {
 
         decision = SwitchForkDecision::SwitchProof(Hash::default());
         assert_eq!(
-            decision.to_vote_instruction(Box::new(vote.clone()), &Pubkey::default(), &Pubkey::default()),
+            decision.to_vote_instruction(
+                Box::new(vote.clone()),
+                &Pubkey::default(),
+                &Pubkey::default()
+            ),
             Some(vote_instruction::vote_switch(
                 &Pubkey::default(),
                 &Pubkey::default(),
