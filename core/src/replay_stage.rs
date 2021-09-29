@@ -2179,29 +2179,26 @@ impl ReplayStage {
                 if !is_computed {
                     // Check if our tower is behind, if so (and the feature migration flag is in use)
                     // overwrite with the newer bank.
-                    match (
+                    if let (true, Some((_, vote_account))) = (
                         Tower::enable_direct_vote_state_updates(bank),
                         bank.get_vote_account(my_vote_pubkey),
                     ) {
-                        (true, Some((_, vote_account))) => {
-                            if let Some(bank_vote_state) =
-                                vote_account.vote_state().as_ref().ok().cloned()
+                        if let Some(bank_vote_state) =
+                            vote_account.vote_state().as_ref().ok().cloned()
+                        {
+                            if bank_vote_state.last_voted_slot()
+                                > tower.vote_state.last_voted_slot()
                             {
-                                if bank_vote_state.last_voted_slot()
-                                    > tower.vote_state.last_voted_slot()
-                                {
-                                    info!("Frozen bank vote state slot {:?} is newer than our local vote state slot {:?}, adopting the bank vote state as our own",
+                                info!("Frozen bank vote state slot {:?} is newer than our local vote state slot {:?}, adopting the bank vote state as our own",
                                         bank_vote_state.last_voted_slot(),
                                         tower.vote_state.last_voted_slot(),
                                     );
-                                    info!("  bank {:?}", bank_vote_state.votes);
-                                    info!("  local {:?}", tower.vote_state.votes);
+                                info!("  bank {:?}", bank_vote_state.votes);
+                                info!("  local {:?}", tower.vote_state.votes);
 
-                                    tower.vote_state = bank_vote_state;
-                                }
+                                tower.vote_state = bank_vote_state;
                             }
                         }
-                        _ => (),
                     }
                     let computed_bank_state = Tower::collect_vote_lockouts(
                         my_vote_pubkey,
