@@ -1731,7 +1731,7 @@ impl ClusterInfo {
                         None => (HashMap::new(), None),
                     };
                     let require_stake_for_gossip =
-                        self.require_stake_for_gossip(feature_set.as_deref(), &stakes);
+                        self.require_stake_for_gossip(feature_set.as_deref().map(|x| &**x), &stakes);
                     let _ = self.run_gossip(
                         &thread_pool,
                         gossip_validators.as_ref(),
@@ -2517,7 +2517,7 @@ impl ClusterInfo {
             None => (None, HashMap::default()),
             Some(bank_forks) => {
                 let bank = bank_forks.read().unwrap().root_bank();
-                let feature_set = bank.feature_set.clone();
+                let feature_set = (*bank.feature_set).clone();
                 (Some(feature_set), bank.staked_nodes())
             }
         };
