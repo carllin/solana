@@ -135,7 +135,8 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     convert::{TryFrom, TryInto},
-    fmt, mem,
+    fmt,
+    mem::{self, ManuallyDrop},
     ops::RangeInclusive,
     path::PathBuf,
     ptr,
@@ -889,54 +890,54 @@ impl AbiExample for OptionalDropCallback {
 #[derive(AbiExample, Debug)]
 pub struct Bank {
     /// References to accounts, parent and signature status
-    pub rc: BankRc,
+    pub rc: ManuallyDrop<BankRc>,
 
-    pub src: StatusCacheRc,
+    pub src: ManuallyDrop<StatusCacheRc>,
 
     /// FIFO queue of `recent_blockhash` items
-    blockhash_queue: RwLock<BlockhashQueue>,
+    blockhash_queue: ManuallyDrop<RwLock<BlockhashQueue>>,
 
     /// The set of parents including this bank
-    pub ancestors: Ancestors,
+    pub ancestors: ManuallyDrop<Ancestors>,
 
     /// Hash of this Bank's state. Only meaningful after freezing.
-    hash: RwLock<Hash>,
+    hash: ManuallyDrop<RwLock<Hash>>,
 
     /// Hash of this Bank's parent's state
-    parent_hash: Hash,
+    parent_hash: ManuallyDrop<Hash>,
 
     /// parent's slot
     parent_slot: Slot,
 
     /// slots to hard fork at
-    hard_forks: Arc<RwLock<HardForks>>,
+    hard_forks: ManuallyDrop<Arc<RwLock<HardForks>>>,
 
     /// The number of transactions processed without error
-    transaction_count: AtomicU64,
+    transaction_count: ManuallyDrop<AtomicU64>,
 
     /// The number of transaction errors in this slot
-    transaction_error_count: AtomicU64,
+    transaction_error_count: ManuallyDrop<AtomicU64>,
 
     /// The number of transaction entries in this slot
-    transaction_entries_count: AtomicU64,
+    transaction_entries_count: ManuallyDrop<AtomicU64>,
 
     /// The max number of transaction in an entry in this slot
-    transactions_per_entry_max: AtomicU64,
+    transactions_per_entry_max: ManuallyDrop<AtomicU64>,
 
     /// Bank tick height
-    tick_height: AtomicU64,
+    tick_height: ManuallyDrop<AtomicU64>,
 
     /// The number of signatures from valid transactions in this slot
-    signature_count: AtomicU64,
+    signature_count: ManuallyDrop<AtomicU64>,
 
     /// Total capitalization, used to calculate inflation
-    capitalization: AtomicU64,
+    capitalization: ManuallyDrop<AtomicU64>,
 
     // Bank max_tick_height
-    max_tick_height: u64,
+    max_tick_height: ManuallyDrop<u64>,
 
     /// The number of hashes in each tick. None value means hashing is disabled.
-    hashes_per_tick: Option<u64>,
+    hashes_per_tick: ManuallyDrop<Option<u64>>,
 
     /// The number of ticks in each slot.
     ticks_per_slot: u64,
@@ -945,106 +946,106 @@ pub struct Bank {
     pub ns_per_slot: u128,
 
     /// genesis time, used for computed clock
-    genesis_creation_time: UnixTimestamp,
+    genesis_creation_time: ManuallyDrop<UnixTimestamp>,
 
     /// The number of slots per year, used for inflation
-    slots_per_year: f64,
+    slots_per_year: ManuallyDrop<f64>,
 
     /// Unused
-    unused: u64,
+    unused: ManuallyDrop<u64>,
 
     /// Bank slot (i.e. block)
     slot: Slot,
 
-    bank_id: BankId,
+    bank_id: ManuallyDrop<BankId>,
 
     /// Bank epoch
-    epoch: Epoch,
+    epoch: ManuallyDrop<Epoch>,
 
     /// Bank block_height
     block_height: u64,
 
     /// The pubkey to send transactions fees to.
-    collector_id: Pubkey,
+    collector_id: ManuallyDrop<Pubkey>,
 
     /// Fees that have been collected
-    collector_fees: AtomicU64,
+    collector_fees: ManuallyDrop<AtomicU64>,
 
     /// Deprecated, do not use
     /// Latest transaction fees for transactions processed by this bank
-    fee_calculator: FeeCalculator,
+    fee_calculator: ManuallyDrop<FeeCalculator>,
 
     /// Track cluster signature throughput and adjust fee rate
-    fee_rate_governor: FeeRateGovernor,
+    fee_rate_governor: ManuallyDrop<FeeRateGovernor>,
 
     /// Rent that has been collected
-    collected_rent: AtomicU64,
+    collected_rent: ManuallyDrop<AtomicU64>,
 
     /// latest rent collector, knows the epoch
-    rent_collector: RentCollector,
+    rent_collector: ManuallyDrop<RentCollector>,
 
     /// initialized from genesis
-    epoch_schedule: EpochSchedule,
+    epoch_schedule: ManuallyDrop<EpochSchedule>,
 
     /// inflation specs
-    inflation: Arc<RwLock<Inflation>>,
+    inflation: ManuallyDrop<Arc<RwLock<Inflation>>>,
 
     /// cache of vote_account and stake_account state for this fork
-    stakes: RwLock<Stakes>,
+    stakes: ManuallyDrop<RwLock<Stakes>>,
 
     /// staked nodes on epoch boundaries, saved off when a bank.slot() is at
     ///   a leader schedule calculation boundary
-    epoch_stakes: HashMap<Epoch, EpochStakes>,
+    epoch_stakes: ManuallyDrop<HashMap<Epoch, EpochStakes>>,
 
     /// A boolean reflecting whether any entries were recorded into the PoH
     /// stream for the slot == self.slot
-    is_delta: AtomicBool,
+    is_delta: ManuallyDrop<AtomicBool>,
 
     /// The InstructionProcessor
-    instruction_processor: InstructionProcessor,
+    instruction_processor: ManuallyDrop<InstructionProcessor>,
 
-    compute_budget: Option<ComputeBudget>,
+    compute_budget: ManuallyDrop<Option<ComputeBudget>>,
 
     /// Builtin programs activated dynamically by feature
     #[allow(clippy::rc_buffer)]
-    feature_builtins: Arc<Vec<(Builtin, Pubkey, ActivationType)>>,
+    feature_builtins: ManuallyDrop<Arc<Vec<(Builtin, Pubkey, ActivationType)>>>,
 
     /// Last time when the cluster info vote listener has synced with this bank
     pub last_vote_sync: AtomicU64,
 
     /// Protocol-level rewards that were distributed by this bank
-    pub rewards: RwLock<Vec<(Pubkey, RewardInfo)>>,
+    pub rewards: ManuallyDrop<RwLock<Vec<(Pubkey, RewardInfo)>>>,
 
-    pub cluster_type: Option<ClusterType>,
+    pub cluster_type: ManuallyDrop<Option<ClusterType>>,
 
-    pub lazy_rent_collection: AtomicBool,
+    pub lazy_rent_collection: ManuallyDrop<AtomicBool>,
 
     // this is temporary field only to remove rewards_pool entirely
-    pub rewards_pool_pubkeys: Arc<HashSet<Pubkey>>,
+    pub rewards_pool_pubkeys: ManuallyDrop<Arc<HashSet<Pubkey>>>,
 
     /// Cached executors
-    cached_executors: RwLock<CowCachedExecutors>,
+    cached_executors: ManuallyDrop<RwLock<CowCachedExecutors>>,
 
-    transaction_debug_keys: Option<Arc<HashSet<Pubkey>>>,
+    transaction_debug_keys: ManuallyDrop<Option<Arc<HashSet<Pubkey>>>>,
 
     // Global configuration for how transaction logs should be collected across all banks
-    pub transaction_log_collector_config: Arc<RwLock<TransactionLogCollectorConfig>>,
+    pub transaction_log_collector_config: ManuallyDrop<Arc<RwLock<TransactionLogCollectorConfig>>>,
 
     // Logs from transactions that this Bank executed collected according to the criteria in
     // `transaction_log_collector_config`
-    pub transaction_log_collector: Arc<RwLock<TransactionLogCollector>>,
+    pub transaction_log_collector: ManuallyDrop<Arc<RwLock<TransactionLogCollector>>>,
 
-    pub feature_set: Arc<FeatureSet>,
+    pub feature_set: ManuallyDrop<Arc<FeatureSet>>,
 
-    pub drop_callback: RwLock<OptionalDropCallback>,
+    pub drop_callback: ManuallyDrop<RwLock<OptionalDropCallback>>,
 
-    pub freeze_started: AtomicBool,
+    pub freeze_started: ManuallyDrop<AtomicBool>,
 
     vote_only_bank: bool,
 
-    pub cost_tracker: RwLock<CostTracker>,
+    pub cost_tracker: ManuallyDrop<RwLock<CostTracker>>,
 
-    sysvar_cache: RwLock<Vec<(Pubkey, Vec<u8>)>>,
+    sysvar_cache: ManuallyDrop<RwLock<Vec<(Pubkey, Vec<u8>)>>>,
 }
 
 impl Default for BlockhashQueue {
@@ -1129,62 +1130,67 @@ impl Bank {
 
     fn default_with_accounts(accounts: Accounts) -> Self {
         Self {
-            rc: BankRc::new(accounts, Slot::default()),
-            src: StatusCacheRc::default(),
-            blockhash_queue: RwLock::<BlockhashQueue>::default(),
-            ancestors: Ancestors::default(),
-            hash: RwLock::<Hash>::default(),
-            parent_hash: Hash::default(),
+            rc: ManuallyDrop::new(BankRc::new(accounts, Slot::default())),
+            src: ManuallyDrop::new(StatusCacheRc::default()),
+            blockhash_queue: ManuallyDrop::new(RwLock::<BlockhashQueue>::default()),
+            ancestors: ManuallyDrop::new(Ancestors::default()),
+            hash: ManuallyDrop::new(RwLock::<Hash>::default()),
+            parent_hash: ManuallyDrop::new(Hash::default()),
             parent_slot: Slot::default(),
-            hard_forks: Arc::<RwLock<HardForks>>::default(),
-            transaction_count: AtomicU64::default(),
-            transaction_error_count: AtomicU64::default(),
-            transaction_entries_count: AtomicU64::default(),
-            transactions_per_entry_max: AtomicU64::default(),
-            tick_height: AtomicU64::default(),
-            signature_count: AtomicU64::default(),
-            capitalization: AtomicU64::default(),
-            max_tick_height: u64::default(),
-            hashes_per_tick: Option::<u64>::default(),
+            hard_forks: ManuallyDrop::new(Arc::<RwLock<HardForks>>::default()),
+            transaction_count: ManuallyDrop::new(AtomicU64::default()),
+            transaction_error_count: ManuallyDrop::new(AtomicU64::default()),
+            transaction_entries_count: ManuallyDrop::new(AtomicU64::default()),
+            transactions_per_entry_max: ManuallyDrop::new(AtomicU64::default()),
+            tick_height: ManuallyDrop::new(AtomicU64::default()),
+            signature_count: ManuallyDrop::new(AtomicU64::default()),
+            capitalization: ManuallyDrop::new(AtomicU64::default()),
+            max_tick_height: ManuallyDrop::new(u64::default()),
+            hashes_per_tick: ManuallyDrop::new(Option::<u64>::default()),
             ticks_per_slot: u64::default(),
             ns_per_slot: u128::default(),
-            genesis_creation_time: UnixTimestamp::default(),
-            slots_per_year: f64::default(),
-            unused: u64::default(),
+            genesis_creation_time: ManuallyDrop::new(UnixTimestamp::default()),
+            slots_per_year: ManuallyDrop::new(f64::default()),
+            unused: ManuallyDrop::new(u64::default()),
             slot: Slot::default(),
-            bank_id: BankId::default(),
-            epoch: Epoch::default(),
+            bank_id: ManuallyDrop::new(BankId::default()),
+            epoch: ManuallyDrop::new(Epoch::default()),
             block_height: u64::default(),
-            collector_id: Pubkey::default(),
-            collector_fees: AtomicU64::default(),
-            fee_calculator: FeeCalculator::default(),
-            fee_rate_governor: FeeRateGovernor::default(),
-            collected_rent: AtomicU64::default(),
-            rent_collector: RentCollector::default(),
-            epoch_schedule: EpochSchedule::default(),
-            inflation: Arc::<RwLock<Inflation>>::default(),
-            stakes: RwLock::<Stakes>::default(),
-            epoch_stakes: HashMap::<Epoch, EpochStakes>::default(),
-            is_delta: AtomicBool::default(),
-            instruction_processor: InstructionProcessor::default(),
-            compute_budget: Option::<ComputeBudget>::default(),
-            feature_builtins: Arc::<Vec<(Builtin, Pubkey, ActivationType)>>::default(),
-            last_vote_sync: AtomicU64::default(),
-            rewards: RwLock::<Vec<(Pubkey, RewardInfo)>>::default(),
-            cluster_type: Option::<ClusterType>::default(),
-            lazy_rent_collection: AtomicBool::default(),
-            rewards_pool_pubkeys: Arc::<HashSet<Pubkey>>::default(),
-            cached_executors: RwLock::<CowCachedExecutors>::default(),
-            transaction_debug_keys: Option::<Arc<HashSet<Pubkey>>>::default(),
-            transaction_log_collector_config: Arc::<RwLock<TransactionLogCollectorConfig>>::default(
+            collector_id: ManuallyDrop::new(Pubkey::default()),
+            collector_fees: ManuallyDrop::new(AtomicU64::default()),
+            fee_calculator: ManuallyDrop::new(FeeCalculator::default()),
+            fee_rate_governor: ManuallyDrop::new(FeeRateGovernor::default()),
+            collected_rent: ManuallyDrop::new(AtomicU64::default()),
+            rent_collector: ManuallyDrop::new(RentCollector::default()),
+            epoch_schedule: ManuallyDrop::new(EpochSchedule::default()),
+            inflation: ManuallyDrop::new(Arc::<RwLock<Inflation>>::default()),
+            stakes: ManuallyDrop::new(RwLock::<Stakes>::default()),
+            epoch_stakes: ManuallyDrop::new(HashMap::<Epoch, EpochStakes>::default()),
+            is_delta: ManuallyDrop::new(AtomicBool::default()),
+            instruction_processor: ManuallyDrop::new(InstructionProcessor::default()),
+            compute_budget: ManuallyDrop::new(Option::<ComputeBudget>::default()),
+            feature_builtins: ManuallyDrop::new(
+                Arc::<Vec<(Builtin, Pubkey, ActivationType)>>::default(),
             ),
-            transaction_log_collector: Arc::<RwLock<TransactionLogCollector>>::default(),
-            feature_set: Arc::<FeatureSet>::default(),
-            drop_callback: RwLock::<OptionalDropCallback>::default(),
-            freeze_started: AtomicBool::default(),
+            last_vote_sync: AtomicU64::default(),
+            rewards: ManuallyDrop::new(RwLock::<Vec<(Pubkey, RewardInfo)>>::default()),
+            cluster_type: ManuallyDrop::new(Option::<ClusterType>::default()),
+            lazy_rent_collection: ManuallyDrop::new(AtomicBool::default()),
+            rewards_pool_pubkeys: ManuallyDrop::new(Arc::<HashSet<Pubkey>>::default()),
+            cached_executors: ManuallyDrop::new(RwLock::<CowCachedExecutors>::default()),
+            transaction_debug_keys: ManuallyDrop::new(Option::<Arc<HashSet<Pubkey>>>::default()),
+            transaction_log_collector_config: ManuallyDrop::new(Arc::<
+                RwLock<TransactionLogCollectorConfig>,
+            >::default()),
+            transaction_log_collector: ManuallyDrop::new(
+                Arc::<RwLock<TransactionLogCollector>>::default(),
+            ),
+            feature_set: ManuallyDrop::new(Arc::<FeatureSet>::default()),
+            drop_callback: ManuallyDrop::new(RwLock::<OptionalDropCallback>::default()),
+            freeze_started: ManuallyDrop::new(AtomicBool::default()),
             vote_only_bank: false,
-            cost_tracker: RwLock::<CostTracker>::default(),
-            sysvar_cache: RwLock::new(Vec::new()),
+            cost_tracker: ManuallyDrop::new(RwLock::<CostTracker>::default()),
+            sysvar_cache: ManuallyDrop::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -1264,9 +1270,9 @@ impl Bank {
             accounts_update_notifier,
         );
         let mut bank = Self::default_with_accounts(accounts);
-        bank.ancestors = Ancestors::from(vec![bank.slot()]);
-        bank.transaction_debug_keys = debug_keys;
-        bank.cluster_type = Some(genesis_config.cluster_type);
+        bank.ancestors = ManuallyDrop::new(Ancestors::from(vec![bank.slot()]));
+        bank.transaction_debug_keys = ManuallyDrop::new(debug_keys);
+        bank.cluster_type = ManuallyDrop::new(Some(genesis_config.cluster_type));
 
         bank.process_genesis_config(genesis_config);
         bank.finish_init(
@@ -1376,12 +1382,14 @@ impl Bank {
 
         let bank_id = rc.bank_id_generator.fetch_add(1, Relaxed) + 1;
         let mut new = Bank {
-            rc,
-            src,
+            rc: ManuallyDrop::new(rc),
+            src: ManuallyDrop::new(src),
             slot,
-            bank_id,
-            epoch,
-            blockhash_queue: RwLock::new(parent.blockhash_queue.read().unwrap().clone()),
+            bank_id: ManuallyDrop::new(bank_id),
+            epoch: ManuallyDrop::new(epoch),
+            blockhash_queue: ManuallyDrop::new(RwLock::new(
+                parent.blockhash_queue.read().unwrap().clone(),
+            )),
 
             // TODO: clean this up, so much special-case copying...
             hashes_per_tick: parent.hashes_per_tick,
@@ -1391,48 +1399,52 @@ impl Bank {
             unused: parent.unused,
             slots_per_year: parent.slots_per_year,
             epoch_schedule,
-            collected_rent: AtomicU64::new(0),
-            rent_collector: parent.rent_collector.clone_with_epoch(epoch),
-            max_tick_height: (slot + 1) * parent.ticks_per_slot,
+            collected_rent: ManuallyDrop::new(AtomicU64::new(0)),
+            rent_collector: ManuallyDrop::new(parent.rent_collector.clone_with_epoch(epoch)),
+            max_tick_height: ManuallyDrop::new((slot + 1) * parent.ticks_per_slot),
             block_height: parent.block_height + 1,
-            fee_calculator,
-            fee_rate_governor,
-            capitalization: AtomicU64::new(parent.capitalization()),
+            fee_calculator: ManuallyDrop::new(fee_calculator),
+            fee_rate_governor: ManuallyDrop::new(fee_rate_governor),
+            capitalization: ManuallyDrop::new(AtomicU64::new(parent.capitalization())),
             vote_only_bank,
             inflation: parent.inflation.clone(),
-            transaction_count: AtomicU64::new(parent.transaction_count()),
-            transaction_error_count: AtomicU64::new(0),
-            transaction_entries_count: AtomicU64::new(0),
-            transactions_per_entry_max: AtomicU64::new(0),
+            transaction_count: ManuallyDrop::new(AtomicU64::new(parent.transaction_count())),
+            transaction_error_count: ManuallyDrop::new(AtomicU64::new(0)),
+            transaction_entries_count: ManuallyDrop::new(AtomicU64::new(0)),
+            transactions_per_entry_max: ManuallyDrop::new(AtomicU64::new(0)),
             // we will .clone_with_epoch() this soon after stake data update; so just .clone() for now
-            stakes: RwLock::new(parent.stakes.read().unwrap().clone()),
+            stakes: ManuallyDrop::new(RwLock::new(parent.stakes.read().unwrap().clone())),
             epoch_stakes: parent.epoch_stakes.clone(),
-            parent_hash: parent.hash(),
+            parent_hash: ManuallyDrop::new(parent.hash()),
             parent_slot: parent.slot(),
-            collector_id: *collector_id,
-            collector_fees: AtomicU64::new(0),
-            ancestors: Ancestors::default(),
-            hash: RwLock::new(Hash::default()),
-            is_delta: AtomicBool::new(false),
-            tick_height: AtomicU64::new(parent.tick_height.load(Relaxed)),
-            signature_count: AtomicU64::new(0),
+            collector_id: ManuallyDrop::new(*collector_id),
+            collector_fees: ManuallyDrop::new(AtomicU64::new(0)),
+            ancestors: ManuallyDrop::new(Ancestors::default()),
+            hash: ManuallyDrop::new(RwLock::new(Hash::default())),
+            is_delta: ManuallyDrop::new(AtomicBool::new(false)),
+            tick_height: ManuallyDrop::new(AtomicU64::new(parent.tick_height.load(Relaxed))),
+            signature_count: ManuallyDrop::new(AtomicU64::new(0)),
             instruction_processor: parent.instruction_processor.clone(),
             compute_budget: parent.compute_budget,
             feature_builtins: parent.feature_builtins.clone(),
             hard_forks: parent.hard_forks.clone(),
             last_vote_sync: AtomicU64::new(parent.last_vote_sync.load(Relaxed)),
-            rewards: RwLock::new(vec![]),
+            rewards: ManuallyDrop::new(RwLock::new(vec![])),
             cluster_type: parent.cluster_type,
-            lazy_rent_collection: AtomicBool::new(parent.lazy_rent_collection.load(Relaxed)),
+            lazy_rent_collection: ManuallyDrop::new(AtomicBool::new(
+                parent.lazy_rent_collection.load(Relaxed),
+            )),
             rewards_pool_pubkeys: parent.rewards_pool_pubkeys.clone(),
-            cached_executors: RwLock::new(
+            cached_executors: ManuallyDrop::new(RwLock::new(
                 (*parent.cached_executors.read().unwrap()).clone_with_epoch(epoch),
-            ),
+            )),
             transaction_debug_keys: parent.transaction_debug_keys.clone(),
             transaction_log_collector_config: parent.transaction_log_collector_config.clone(),
-            transaction_log_collector: Arc::new(RwLock::new(TransactionLogCollector::default())),
+            transaction_log_collector: ManuallyDrop::new(Arc::new(RwLock::new(
+                TransactionLogCollector::default(),
+            ))),
             feature_set: parent.feature_set.clone(),
-            drop_callback: RwLock::new(OptionalDropCallback(
+            drop_callback: ManuallyDrop::new(RwLock::new(OptionalDropCallback(
                 parent
                     .drop_callback
                     .read()
@@ -1440,10 +1452,10 @@ impl Bank {
                     .0
                     .as_ref()
                     .map(|drop_callback| drop_callback.clone_box()),
-            )),
-            freeze_started: AtomicBool::new(false),
-            cost_tracker: RwLock::new(CostTracker::default()),
-            sysvar_cache: RwLock::new(Vec::new()),
+            ))),
+            freeze_started: ManuallyDrop::new(AtomicBool::new(false)),
+            cost_tracker: ManuallyDrop::new(RwLock::new(CostTracker::default())),
+            sysvar_cache: ManuallyDrop::new(RwLock::new(Vec::new())),
         };
 
         datapoint_info!(
@@ -1458,7 +1470,7 @@ impl Bank {
         new.parents().iter().for_each(|p| {
             ancestors.push(p.slot());
         });
-        new.ancestors = Ancestors::from(ancestors);
+        new.ancestors = ManuallyDrop::new(Ancestors::from(ancestors));
 
         // Following code may touch AccountsDb, requiring proper ancestors
         let parent_epoch = parent.epoch();
@@ -1576,64 +1588,64 @@ impl Bank {
             T::default()
         }
         let mut bank = Self {
-            rc: bank_rc,
+            rc: ManuallyDrop::new(bank_rc),
             src: new(),
-            blockhash_queue: RwLock::new(fields.blockhash_queue),
-            ancestors: Ancestors::from(&fields.ancestors),
-            hash: RwLock::new(fields.hash),
-            parent_hash: fields.parent_hash,
+            blockhash_queue: ManuallyDrop::new(RwLock::new(fields.blockhash_queue)),
+            ancestors: ManuallyDrop::new(Ancestors::from(&fields.ancestors)),
+            hash: ManuallyDrop::new(RwLock::new(fields.hash)),
+            parent_hash: ManuallyDrop::new(fields.parent_hash),
             parent_slot: fields.parent_slot,
-            hard_forks: Arc::new(RwLock::new(fields.hard_forks)),
-            transaction_count: AtomicU64::new(fields.transaction_count),
+            hard_forks: ManuallyDrop::new(Arc::new(RwLock::new(fields.hard_forks))),
+            transaction_count: ManuallyDrop::new(AtomicU64::new(fields.transaction_count)),
             transaction_error_count: new(),
             transaction_entries_count: new(),
             transactions_per_entry_max: new(),
-            tick_height: AtomicU64::new(fields.tick_height),
-            signature_count: AtomicU64::new(fields.signature_count),
-            capitalization: AtomicU64::new(fields.capitalization),
-            max_tick_height: fields.max_tick_height,
-            hashes_per_tick: fields.hashes_per_tick,
+            tick_height: ManuallyDrop::new(AtomicU64::new(fields.tick_height)),
+            signature_count: ManuallyDrop::new(AtomicU64::new(fields.signature_count)),
+            capitalization: ManuallyDrop::new(AtomicU64::new(fields.capitalization)),
+            max_tick_height: ManuallyDrop::new(fields.max_tick_height),
+            hashes_per_tick: ManuallyDrop::new(fields.hashes_per_tick),
             ticks_per_slot: fields.ticks_per_slot,
             ns_per_slot: fields.ns_per_slot,
-            genesis_creation_time: fields.genesis_creation_time,
-            slots_per_year: fields.slots_per_year,
-            unused: genesis_config.unused,
+            genesis_creation_time: ManuallyDrop::new(fields.genesis_creation_time),
+            slots_per_year: ManuallyDrop::new(fields.slots_per_year),
+            unused: ManuallyDrop::new(genesis_config.unused),
             slot: fields.slot,
-            bank_id: 0,
-            epoch: fields.epoch,
+            bank_id: ManuallyDrop::new(0),
+            epoch: ManuallyDrop::new(fields.epoch),
             block_height: fields.block_height,
-            collector_id: fields.collector_id,
-            collector_fees: AtomicU64::new(fields.collector_fees),
-            fee_calculator: fields.fee_calculator,
-            fee_rate_governor: fields.fee_rate_governor,
-            collected_rent: AtomicU64::new(fields.collected_rent),
+            collector_id: ManuallyDrop::new(fields.collector_id),
+            collector_fees: ManuallyDrop::new(AtomicU64::new(fields.collector_fees)),
+            fee_calculator: ManuallyDrop::new(fields.fee_calculator),
+            fee_rate_governor: ManuallyDrop::new(fields.fee_rate_governor),
+            collected_rent: ManuallyDrop::new(AtomicU64::new(fields.collected_rent)),
             // clone()-ing is needed to consider a gated behavior in rent_collector
-            rent_collector: fields.rent_collector.clone_with_epoch(fields.epoch),
-            epoch_schedule: fields.epoch_schedule,
-            inflation: Arc::new(RwLock::new(fields.inflation)),
-            stakes: RwLock::new(fields.stakes),
-            epoch_stakes: fields.epoch_stakes,
-            is_delta: AtomicBool::new(fields.is_delta),
+            rent_collector: ManuallyDrop::new(fields.rent_collector.clone_with_epoch(fields.epoch)),
+            epoch_schedule: ManuallyDrop::new(fields.epoch_schedule),
+            inflation: ManuallyDrop::new(Arc::new(RwLock::new(fields.inflation))),
+            stakes: ManuallyDrop::new(RwLock::new(fields.stakes)),
+            epoch_stakes: ManuallyDrop::new(fields.epoch_stakes),
+            is_delta: ManuallyDrop::new(AtomicBool::new(fields.is_delta)),
             instruction_processor: new(),
-            compute_budget: None,
+            compute_budget: ManuallyDrop::new(None),
             feature_builtins: new(),
             last_vote_sync: new(),
             rewards: new(),
-            cluster_type: Some(genesis_config.cluster_type),
+            cluster_type: ManuallyDrop::new(Some(genesis_config.cluster_type)),
             lazy_rent_collection: new(),
             rewards_pool_pubkeys: new(),
-            cached_executors: RwLock::new(CowCachedExecutors::new(Arc::new(RwLock::new(
-                CachedExecutors::new(MAX_CACHED_EXECUTORS, fields.epoch),
+            cached_executors: ManuallyDrop::new(RwLock::new(CowCachedExecutors::new(Arc::new(
+                RwLock::new(CachedExecutors::new(MAX_CACHED_EXECUTORS, fields.epoch)),
             )))),
-            transaction_debug_keys: debug_keys,
+            transaction_debug_keys: ManuallyDrop::new(debug_keys),
             transaction_log_collector_config: new(),
             transaction_log_collector: new(),
             feature_set: new(),
-            drop_callback: RwLock::new(OptionalDropCallback(None)),
-            freeze_started: AtomicBool::new(fields.hash != Hash::default()),
+            drop_callback: ManuallyDrop::new(RwLock::new(OptionalDropCallback(None))),
+            freeze_started: ManuallyDrop::new(AtomicBool::new(fields.hash != Hash::default())),
             vote_only_bank: false,
-            cost_tracker: RwLock::new(CostTracker::default()),
-            sysvar_cache: RwLock::new(Vec::new()),
+            cost_tracker: ManuallyDrop::new(RwLock::new(CostTracker::default())),
+            sysvar_cache: ManuallyDrop::new(RwLock::new(Vec::new())),
         };
         bank.finish_init(
             genesis_config,
@@ -1646,7 +1658,7 @@ impl Bank {
         // (BankFieldsToSerialize/BankFieldsToDeserialize) and initializing
         // from the passed in genesis_config instead (as new()/new_with_paths() already do)
         assert_eq!(
-            bank.hashes_per_tick,
+            *bank.hashes_per_tick,
             genesis_config.poh_config.hashes_per_tick
         );
         assert_eq!(bank.ticks_per_slot, genesis_config.ticks_per_slot);
@@ -1655,25 +1667,25 @@ impl Bank {
             genesis_config.poh_config.target_tick_duration.as_nanos()
                 * genesis_config.ticks_per_slot as u128
         );
-        assert_eq!(bank.genesis_creation_time, genesis_config.creation_time);
-        assert_eq!(bank.unused, genesis_config.unused);
-        assert_eq!(bank.max_tick_height, (bank.slot + 1) * bank.ticks_per_slot);
+        assert_eq!(*bank.genesis_creation_time, genesis_config.creation_time);
+        assert_eq!(*bank.unused, genesis_config.unused);
+        assert_eq!(*bank.max_tick_height, (bank.slot + 1) * bank.ticks_per_slot);
         assert_eq!(
-            bank.slots_per_year,
+            *bank.slots_per_year,
             years_as_slots(
                 1.0,
                 &genesis_config.poh_config.target_tick_duration,
                 bank.ticks_per_slot,
             )
         );
-        assert_eq!(bank.epoch_schedule, genesis_config.epoch_schedule);
-        assert_eq!(bank.epoch, bank.epoch_schedule.get_epoch(bank.slot));
+        assert_eq!(*bank.epoch_schedule, genesis_config.epoch_schedule);
+        assert_eq!(*bank.epoch, bank.epoch_schedule.get_epoch(bank.slot));
         if !bank.feature_set.is_active(&disable_fee_calculator::id()) {
             bank.fee_rate_governor.lamports_per_signature =
                 bank.fee_calculator.lamports_per_signature;
             assert_eq!(
                 bank.fee_rate_governor.create_fee_calculator(),
-                bank.fee_calculator
+                *bank.fee_calculator
             );
         }
         bank
@@ -1688,33 +1700,33 @@ impl Bank {
             blockhash_queue: &self.blockhash_queue,
             ancestors,
             hash: *self.hash.read().unwrap(),
-            parent_hash: self.parent_hash,
+            parent_hash: *self.parent_hash,
             parent_slot: self.parent_slot,
             hard_forks: &*self.hard_forks,
             transaction_count: self.transaction_count.load(Relaxed),
             tick_height: self.tick_height.load(Relaxed),
             signature_count: self.signature_count.load(Relaxed),
             capitalization: self.capitalization.load(Relaxed),
-            max_tick_height: self.max_tick_height,
-            hashes_per_tick: self.hashes_per_tick,
+            max_tick_height: *self.max_tick_height,
+            hashes_per_tick: *self.hashes_per_tick,
             ticks_per_slot: self.ticks_per_slot,
             ns_per_slot: self.ns_per_slot,
-            genesis_creation_time: self.genesis_creation_time,
-            slots_per_year: self.slots_per_year,
-            unused: self.unused,
+            genesis_creation_time: *self.genesis_creation_time,
+            slots_per_year: *self.slots_per_year,
+            unused: *self.unused,
             slot: self.slot,
-            epoch: self.epoch,
+            epoch: *self.epoch,
             block_height: self.block_height,
-            collector_id: self.collector_id,
+            collector_id: *self.collector_id,
             collector_fees: self.collector_fees.load(Relaxed),
-            fee_calculator: self.fee_calculator.clone(),
-            fee_rate_governor: self.fee_rate_governor.clone(),
+            fee_calculator: (*self.fee_calculator).clone(),
+            fee_rate_governor: (*self.fee_rate_governor).clone(),
             collected_rent: self.collected_rent.load(Relaxed),
-            rent_collector: self.rent_collector.clone(),
-            epoch_schedule: self.epoch_schedule,
+            rent_collector: (*self.rent_collector).clone(),
+            epoch_schedule: *self.epoch_schedule,
             inflation: *self.inflation.read().unwrap(),
-            stakes: &self.stakes,
-            epoch_stakes: &self.epoch_stakes,
+            stakes: &*self.stakes,
+            epoch_stakes: &*self.epoch_stakes,
             is_delta: self.is_delta.load(Relaxed),
         }
     }
@@ -1724,7 +1736,7 @@ impl Bank {
     }
 
     pub fn genesis_creation_time(&self) -> UnixTimestamp {
-        self.genesis_creation_time
+        *self.genesis_creation_time
     }
 
     pub fn slot(&self) -> Slot {
@@ -1732,11 +1744,11 @@ impl Bank {
     }
 
     pub fn bank_id(&self) -> BankId {
-        self.bank_id
+        *self.bank_id
     }
 
     pub fn epoch(&self) -> Epoch {
-        self.epoch
+        *self.epoch
     }
 
     pub fn first_normal_epoch(&self) -> Epoch {
@@ -1776,7 +1788,8 @@ impl Bank {
 
     /// computed unix_timestamp at this slot height
     pub fn unix_timestamp_from_genesis(&self) -> i64 {
-        self.genesis_creation_time + ((self.slot as u128 * self.ns_per_slot) / 1_000_000_000) as i64
+        *self.genesis_creation_time
+            + ((self.slot as u128 * self.ns_per_slot) / 1_000_000_000) as i64
     }
 
     fn update_sysvar_account<F>(&self, pubkey: &Pubkey, updater: F)
@@ -1949,7 +1962,7 @@ impl Bank {
                 .as_ref()
                 .map(|account| from_account::<SlotHashes, _>(account).unwrap())
                 .unwrap_or_default();
-            slot_hashes.add(self.parent_slot, self.parent_hash);
+            slot_hashes.add(self.parent_slot, *self.parent_hash);
             create_account(
                 &slot_hashes,
                 self.inherit_specially_retained_account_fields(account),
@@ -2031,7 +2044,7 @@ impl Bank {
     fn update_epoch_schedule(&self) {
         self.update_sysvar_account(&sysvar::epoch_schedule::id(), |account| {
             create_account(
-                &self.epoch_schedule,
+                &*self.epoch_schedule,
                 self.inherit_specially_retained_account_fields(account),
             )
         });
@@ -2054,7 +2067,7 @@ impl Bank {
         // period: time that has passed as a fraction of a year, basically the length of
         //  an epoch as a fraction of a year
         //  calculated as: slots_elapsed / (slots / year)
-        self.epoch_schedule.get_slots_in_epoch(prev_epoch) as f64 / self.slots_per_year
+        self.epoch_schedule.get_slots_in_epoch(prev_epoch) as f64 / *self.slots_per_year
     }
 
     // Calculates the starting-slot for inflation from the activation slot.
@@ -2092,7 +2105,7 @@ impl Bank {
         let num_slots = self.get_inflation_num_slots();
 
         // calculated as: num_slots / (slots / year)
-        num_slots as f64 / self.slots_per_year
+        num_slots as f64 / *self.slots_per_year
     }
 
     // update rewards based on the previous epoch
@@ -2849,7 +2862,7 @@ impl Bank {
                 Ok(post_balance) => {
                     if deposit != 0 {
                         self.rewards.write().unwrap().push((
-                            self.collector_id,
+                            *self.collector_id,
                             RewardInfo {
                                 reward_type: RewardType::Fee,
                                 lamports: deposit as i64,
@@ -2862,7 +2875,7 @@ impl Bank {
                 Err(_) => {
                     error!(
                         "Burning {} fee instead of crediting {}",
-                        deposit, self.collector_id
+                        deposit, *self.collector_id
                     );
                     inc_new_counter_error!("bank-burned_fee_lamports", deposit as usize);
                     burn += deposit;
@@ -2981,13 +2994,13 @@ impl Bank {
     }
 
     pub fn parent_hash(&self) -> Hash {
-        self.parent_hash
+        *self.parent_hash
     }
 
     fn process_genesis_config(&mut self, genesis_config: &GenesisConfig) {
         // Bootstrap validator collects fees until `new_from_parent` is called.
-        self.fee_rate_governor = genesis_config.fee_rate_governor.clone();
-        self.fee_calculator = self.fee_rate_governor.create_fee_calculator();
+        self.fee_rate_governor = ManuallyDrop::new(genesis_config.fee_rate_governor.clone());
+        self.fee_calculator = ManuallyDrop::new(self.fee_rate_governor.create_fee_calculator());
 
         for (pubkey, account) in genesis_config.accounts.iter() {
             assert!(
@@ -3012,36 +3025,37 @@ impl Bank {
         }
 
         // highest staked node is the first collector
-        self.collector_id = self
-            .stakes
-            .read()
-            .unwrap()
-            .highest_staked_node()
-            .unwrap_or_default();
+        self.collector_id = ManuallyDrop::new(
+            self.stakes
+                .read()
+                .unwrap()
+                .highest_staked_node()
+                .unwrap_or_default(),
+        );
 
         self.blockhash_queue.write().unwrap().genesis_hash(
             &genesis_config.hash(),
             self.fee_rate_governor.lamports_per_signature,
         );
 
-        self.hashes_per_tick = genesis_config.hashes_per_tick();
+        self.hashes_per_tick = ManuallyDrop::new(genesis_config.hashes_per_tick());
         self.ticks_per_slot = genesis_config.ticks_per_slot();
         self.ns_per_slot = genesis_config.ns_per_slot();
-        self.genesis_creation_time = genesis_config.creation_time;
-        self.unused = genesis_config.unused;
-        self.max_tick_height = (self.slot + 1) * self.ticks_per_slot;
-        self.slots_per_year = genesis_config.slots_per_year();
+        self.genesis_creation_time = ManuallyDrop::new(genesis_config.creation_time);
+        self.unused = ManuallyDrop::new(genesis_config.unused);
+        self.max_tick_height = ManuallyDrop::new((self.slot + 1) * self.ticks_per_slot);
+        self.slots_per_year = ManuallyDrop::new(genesis_config.slots_per_year());
 
-        self.epoch_schedule = genesis_config.epoch_schedule;
+        self.epoch_schedule = ManuallyDrop::new(genesis_config.epoch_schedule);
 
-        self.inflation = Arc::new(RwLock::new(genesis_config.inflation));
+        self.inflation = ManuallyDrop::new(Arc::new(RwLock::new(genesis_config.inflation)));
 
-        self.rent_collector = RentCollector::new(
-            self.epoch,
-            &self.epoch_schedule,
-            self.slots_per_year,
+        self.rent_collector = ManuallyDrop::new(RentCollector::new(
+            *self.epoch,
+            &*self.epoch_schedule,
+            *self.slots_per_year,
             &genesis_config.rent,
-        );
+        ));
 
         // Add additional native programs specified in the genesis config
         for (name, program_id) in &genesis_config.native_instruction_processors {
@@ -3149,7 +3163,7 @@ impl Bank {
     }
 
     pub fn set_hashes_per_tick(&mut self, hashes_per_tick: Option<u64>) {
-        self.hashes_per_tick = hashes_per_tick;
+        self.hashes_per_tick = ManuallyDrop::new(hashes_per_tick);
     }
 
     /// Return the last block hash registered.
@@ -3835,7 +3849,7 @@ impl Bank {
                     (Err(e.clone()), None)
                 }
                 (Ok(loaded_transaction), nonce_rollback) => {
-                    let feature_set = self.feature_set.clone();
+                    let feature_set = (*self.feature_set).clone();
                     signature_count += u64::from(tx.message().header().num_required_signatures);
 
                     let mut compute_budget = self.compute_budget.unwrap_or_else(ComputeBudget::new);
@@ -3964,7 +3978,7 @@ impl Bank {
             self.transaction_log_collector_config.read().unwrap();
 
         for (i, ((r, _nonce_rollback), tx)) in executed.iter().zip(sanitized_txs).enumerate() {
-            if let Some(debug_keys) = &self.transaction_debug_keys {
+            if let Some(debug_keys) = &*self.transaction_debug_keys {
                 for key in tx.message().account_keys_iter() {
                     if debug_keys.contains(key) {
                         info!("slot: {} result: {:?} tx: {:?}", self.slot, r, tx);
@@ -5148,8 +5162,9 @@ impl Bank {
         additional_builtins: Option<&Builtins>,
         debug_do_not_add_builtins: bool,
     ) {
-        self.rewards_pool_pubkeys =
-            Arc::new(genesis_config.rewards_pools.keys().cloned().collect());
+        self.rewards_pool_pubkeys = ManuallyDrop::new(Arc::new(
+            genesis_config.rewards_pools.keys().cloned().collect(),
+        ));
 
         let mut builtins = builtins::get();
         if let Some(additional_builtins) = additional_builtins {
@@ -5174,7 +5189,7 @@ impl Bank {
                 }
             }
         }
-        self.feature_builtins = Arc::new(builtins.feature_builtins);
+        self.feature_builtins = ManuallyDrop::new(Arc::new(builtins.feature_builtins));
 
         self.apply_feature_activations(true, debug_do_not_add_builtins);
     }
@@ -5184,11 +5199,11 @@ impl Bank {
     }
 
     pub fn set_compute_budget(&mut self, compute_budget: Option<ComputeBudget>) {
-        self.compute_budget = compute_budget;
+        self.compute_budget = ManuallyDrop::new(compute_budget);
     }
 
     pub fn hard_forks(&self) -> Arc<RwLock<HardForks>> {
-        self.hard_forks.clone()
+        Arc::clone(&*self.hard_forks)
     }
 
     // Hi! leaky abstraction here....
@@ -5258,7 +5273,7 @@ impl Bank {
     ) -> ScanResult<Vec<(Pubkey, AccountSharedData)>> {
         self.rc
             .accounts
-            .load_by_program(&self.ancestors, self.bank_id, program_id, config)
+            .load_by_program(&self.ancestors, *self.bank_id, program_id, config)
     }
 
     pub fn get_filtered_program_accounts<F: Fn(&AccountSharedData) -> bool>(
@@ -5269,7 +5284,7 @@ impl Bank {
     ) -> ScanResult<Vec<(Pubkey, AccountSharedData)>> {
         self.rc.accounts.load_by_program_with_filter(
             &self.ancestors,
-            self.bank_id,
+            *self.bank_id,
             program_id,
             filter,
             config,
@@ -5284,7 +5299,7 @@ impl Bank {
     ) -> ScanResult<Vec<(Pubkey, AccountSharedData)>> {
         self.rc.accounts.load_by_index_key_with_filter(
             &self.ancestors,
-            self.bank_id,
+            *self.bank_id,
             index_key,
             filter,
             config,
@@ -5298,7 +5313,7 @@ impl Bank {
     pub fn get_all_accounts_with_modified_slots(
         &self,
     ) -> ScanResult<Vec<(Pubkey, AccountSharedData, Slot)>> {
-        self.rc.accounts.load_all(&self.ancestors, self.bank_id)
+        self.rc.accounts.load_all(&self.ancestors, *self.bank_id)
     }
 
     pub fn get_program_accounts_modified_since_parent(
@@ -5356,7 +5371,7 @@ impl Bank {
     ) -> ScanResult<Vec<(Pubkey, u64)>> {
         self.rc.accounts.load_largest_accounts(
             &self.ancestors,
-            self.bank_id,
+            *self.bank_id,
             num,
             filter_by_address,
             filter,
@@ -5713,7 +5728,7 @@ impl Bank {
 
     /// Return the number of slots per year
     pub fn slots_per_year(&self) -> f64 {
-        self.slots_per_year
+        *self.slots_per_year
     }
 
     /// Return the number of ticks since genesis.
@@ -5727,7 +5742,7 @@ impl Bank {
     }
 
     pub fn rent_collector(&self) -> RentCollector {
-        self.rent_collector.clone()
+        (*self.rent_collector).clone()
     }
 
     /// Return the total capitalization of the Bank
@@ -5737,7 +5752,7 @@ impl Bank {
 
     /// Return this bank's max_tick_height
     pub fn max_tick_height(&self) -> u64 {
-        self.max_tick_height
+        *self.max_tick_height
     }
 
     /// Return the block_height of this bank
@@ -6057,14 +6072,14 @@ impl Bank {
         let mut feature_set = Arc::make_mut(&mut self.feature_set).clone();
         feature_set.active.remove(id);
         feature_set.inactive.insert(*id);
-        self.feature_set = Arc::new(feature_set);
+        self.feature_set = ManuallyDrop::new(Arc::new(feature_set));
     }
 
     pub fn activate_feature(&mut self, id: &Pubkey) {
         let mut feature_set = Arc::make_mut(&mut self.feature_set).clone();
         feature_set.inactive.remove(id);
         feature_set.active.insert(*id, 0);
-        self.feature_set = Arc::new(feature_set);
+        self.feature_set = ManuallyDrop::new(Arc::new(feature_set));
     }
 
     pub fn fill_bank_with_ticks(&self) {
@@ -6199,7 +6214,7 @@ impl Bank {
             }
         }
 
-        self.feature_set = Arc::new(FeatureSet { active, inactive });
+        self.feature_set = ManuallyDrop::new(Arc::new(FeatureSet { active, inactive }));
         newly_activated
     }
 

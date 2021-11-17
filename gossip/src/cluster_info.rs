@@ -2505,7 +2505,7 @@ impl ClusterInfo {
             None => (None, Arc::default()),
             Some(bank_forks) => {
                 let bank = bank_forks.read().unwrap().root_bank();
-                let feature_set = bank.feature_set.clone();
+                let feature_set = (*bank.feature_set).clone();
                 (Some(feature_set), bank.staked_nodes())
             }
         };
