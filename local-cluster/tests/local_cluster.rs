@@ -3205,7 +3205,7 @@ fn do_test_optimistic_confirmation_violation_with_or_without_tower(with_tower: b
     let mut cluster = LocalCluster::new(&mut config, SocketAddrSpace::Unspecified);
 
     let base_slot = 26; // S2
-    let next_slot_on_a = 27; // S3
+    let original_fork_slot = 27; // S3
     let truncated_slots = 100; // just enough to purge all following slots after the S2 and S3
 
     let val_a_ledger_path = cluster.ledger_path(&validator_a_pubkey);
@@ -3229,7 +3229,7 @@ fn do_test_optimistic_confirmation_violation_with_or_without_tower(with_tower: b
         sleep(Duration::from_millis(100));
 
         if let Some((last_vote, _)) = last_vote_in_tower(&val_b_ledger_path, &validator_b_pubkey) {
-            if last_vote >= next_slot_on_a {
+            if last_vote >= original_fork_slot {
                 break;
             }
         }
@@ -3238,7 +3238,7 @@ fn do_test_optimistic_confirmation_violation_with_or_without_tower(with_tower: b
     let _validator_b_info = cluster.exit_node(&validator_b_pubkey);
 
     // Step 2:
-    // Stop validator and truncate ledger, copy over B's ledger to A
+    // Stop validator and truncate ledger, copy over B's ledger to C
     info!("truncate validator C's ledger");
     {
         // first copy from validator B's ledger
@@ -3246,12 +3246,15 @@ fn do_test_optimistic_confirmation_violation_with_or_without_tower(with_tower: b
         let mut opt = fs_extra::dir::CopyOptions::new();
         opt.copy_inside = true;
         fs_extra::dir::copy(&val_b_ledger_path, &val_c_ledger_path, &opt).unwrap();
-        // Remove B's tower in the C's new copied ledger
+        
+        // Remove B's tower in C's new copied ledger
         remove_tower(&val_c_ledger_path, &validator_b_pubkey);
 
         let blockstore = open_blockstore(&val_c_ledger_path);
         purge_slots(&blockstore, base_slot + 1, truncated_slots);
     }
+
+    // copy over B's ledger to A
     info!("Create validator A's ledger");
     {
         // Find latest vote in B, and wait for it to reach blockstore
@@ -3264,11 +3267,12 @@ fn do_test_optimistic_confirmation_violation_with_or_without_tower(with_tower: b
         copy_blocks(b_last_vote, &b_blockstore, &a_blockstore);
 
         // Purge uneccessary slots
-        purge_slots(&a_blockstore, next_slot_on_a + 1, truncated_slots);
+        purge_slots(&a_blockstore, original_fork_slot + 1, truncated_slots);
     }
 
     // Step 3:
-    // Restart A so that it can vote for the slots in B's fork
+    // Restart A so that it can vote for the `original_fork_slot`, optimistically
+    // confirming that fork
     info!("Restarting A");
     cluster.restart_node(
         &validator_a_pubkey,
@@ -3282,7 +3286,7 @@ fn do_test_optimistic_confirmation_violation_with_or_without_tower(with_tower: b
         if let Some((last_vote_slot, _)) =
             last_vote_in_tower(&val_a_ledger_path, &validator_a_pubkey)
         {
-            if last_vote_slot >= next_slot_on_a {
+            if last_vote_slot >= original_fork_slot {
                 info!("Validator A has caught up: {}", last_vote_slot);
                 break;
             } else if last_print.elapsed().as_secs() >= 10 {
@@ -3298,18 +3302,18 @@ fn do_test_optimistic_confirmation_violation_with_or_without_tower(with_tower: b
     let validator_a_info = cluster.exit_node(&validator_a_pubkey);
     {
         let blockstore = open_blockstore(&val_a_ledger_path);
-        purge_slots(&blockstore, next_slot_on_a + 1, truncated_slots);
+        purge_slots(&blockstore, original_fork_slot + 1, truncated_slots);
         if !with_tower {
             info!("Removing tower!");
             remove_tower(&val_a_ledger_path, &validator_a_pubkey);
 
-            // Remove next_slot_on_a from ledger to force validator A to select
+            // Remove original_fork_slot from ledger to force validator A to select
             // votes_on_c_fork. Otherwise the validator A will immediately vote
             // for 27 on restart, because it hasn't gotten the heavier fork from
             // validator C yet.
             // Then it will be stuck on 27 unable to switch because C doesn't
             // have enough stake to generate a switching proof
-            purge_slots(&blockstore, next_slot_on_a, truncated_slots);
+            purge_slots(&blockstore, original_fork_slot, truncated_slots);
         } else {
             info!("Not removing tower!");
         }

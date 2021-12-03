@@ -125,8 +125,17 @@ pub fn get_closest_completion(
                 let shred_index = blockstore.get_index(slot).unwrap();
                 let dist = if let Some(shred_index) = shred_index {
                     let shred_count = shred_index.data().num_shreds() as u64;
+                    if last_index < shred_count {
+                        println!("LAST INDEX: {}, SHRED COUNT: {}", last_index, shred_count);
+                    }
                     last_index - shred_count
                 } else {
+                    if last_index < slot_meta.consumed {
+                        println!(
+                            "LAST INDEX: {}, SHRED CONSUMED: {}",
+                            last_index, slot_meta.consumed
+                        );
+                    }
                     last_index - slot_meta.consumed
                 };
                 v.push((slot, dist));
