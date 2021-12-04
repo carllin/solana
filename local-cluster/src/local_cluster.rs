@@ -6,7 +6,10 @@ use {
     },
     itertools::izip,
     log::*,
-    solana_client::thin_client::{create_client, ThinClient},
+    solana_client::{
+        rpc_client::RpcClient,
+        thin_client::{create_client, ThinClient},
+    },
     solana_core::{
         tower_storage::FileTowerStorage,
         validator::{Validator, ValidatorConfig, ValidatorStartProgress},
@@ -348,30 +351,25 @@ impl LocalCluster {
         let contact_info = validator_node.info.clone();
         let (ledger_path, _blockhash) = create_new_tmp_ledger!(&self.genesis_config);
 
-        if validator_config.voting_disabled {
-            // setup as a listener
-            info!("listener {} ", validator_pubkey,);
-        } else {
-            // Give the validator some lamports to setup vote accounts
-            if should_create_vote_pubkey {
-                let validator_balance = Self::transfer_with_client(
-                    &client,
-                    &self.funding_keypair,
-                    &validator_pubkey,
-                    stake * 2 + 2,
-                );
-                info!(
-                    "validator {} balance {}",
-                    validator_pubkey, validator_balance
-                );
-                Self::setup_vote_and_stake_accounts(
-                    &client,
-                    voting_keypair.as_ref().unwrap(),
-                    &validator_keypair,
-                    stake,
-                )
-                .unwrap();
-            }
+        // Give the validator some lamports to setup vote accounts
+        if should_create_vote_pubkey {
+            let validator_balance = Self::transfer_with_client(
+                &client,
+                &self.funding_keypair,
+                &validator_pubkey,
+                stake * 2 + 2,
+            );
+            info!(
+                "validator {} balance {}",
+                validator_pubkey, validator_balance
+            );
+            Self::setup_vote_and_stake_accounts(
+                &client,
+                voting_keypair.as_ref().unwrap(),
+                &validator_keypair,
+                stake,
+            )
+            .unwrap();
         }
 
         let mut config = safe_clone_config(validator_config);
@@ -653,6 +651,12 @@ impl Cluster for LocalCluster {
                 VALIDATOR_PORT_RANGE,
             )
         })
+    }
+
+    fn get_rpc_client(&self, pubkey: &Pubkey) -> Option<RpcClient> {
+        self.validators
+            .get(pubkey)
+            .map(|f| RpcClient::new_socket(f.info.contact_info.rpc))
     }
 
     fn exit_node(&mut self, pubkey: &Pubkey) -> ClusterValidatorInfo {
