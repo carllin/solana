@@ -471,6 +471,7 @@ impl VoteState {
             // cannot verify whether the slot was actually was on this fork, set the root
             // to the current vote state root for safety.
             if earliest_slot_hash_in_history > new_proposed_root {
+                println!("UPDATING TOO OLD ROOT");
                 vote_state_update.root = self.root_slot;
             }
         }
@@ -596,6 +597,7 @@ impl VoteState {
         // Filter out the irrelevant votes
         let mut vote_state_update_index = 0;
         let mut filter_votes_index = 0;
+        println!("FILTERING {} votes", vote_state_update.lockouts.len());
         vote_state_update.lockouts.retain(|_lockout| {
             let should_retain = if filter_votes_index == vote_state_update_indexes_to_filter.len() {
                 true
@@ -741,6 +743,7 @@ impl VoteState {
         timestamp: Option<i64>,
         epoch: Epoch,
     ) -> Result<(), VoteError> {
+        println!("processing new vote state");
         assert!(!new_state.is_empty());
         if new_state.len() > MAX_LOCKOUT_HISTORY {
             return Err(VoteError::TooManyVotes);
@@ -1384,6 +1387,7 @@ mod tests {
     #[test]
     fn test_initialize_vote_account() {
         let vote_account_pubkey = solana_sdk::pubkey::new_rand();
+        println!("{}", VoteState::size_of());
         let vote_account = AccountSharedData::new_ref(100, VoteState::size_of(), &id());
         let vote_account = KeyedAccount::new(&vote_account_pubkey, false, &vote_account);
 
