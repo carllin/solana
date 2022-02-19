@@ -68,6 +68,7 @@ fn recv_loop(
                 return Ok(());
             }
             if let Ok(len) = packet::recv_from(&mut packet_batch, sock, coalesce_ms) {
+                info!("{} Recv loop in listener got {} packets", name, len);
                 if len == NUM_RCVMMSGS {
                     num_max_received += 1;
                 }

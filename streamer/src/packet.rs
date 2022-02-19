@@ -32,20 +32,21 @@ pub fn recv_from(batch: &mut PacketBatch, socket: &UdpSocket, max_wait_ms: u64) 
             Packet::default(),
         );
         match recv_mmsg(socket, &mut batch.packets[i..]) {
-            Err(_) if i > 0 => {
+            Err(e) if i > 0 => {
+                warn!("recv_from err {:?}, i: {}", e, i);
                 if start.elapsed().as_millis() as u64 > max_wait_ms {
                     break;
                 }
             }
             Err(e) => {
-                trace!("recv_from err {:?}", e);
+                warn!("recv_from err {:?}", e);
                 return Err(e);
             }
             Ok(npkts) => {
                 if i == 0 {
                     socket.set_nonblocking(true)?;
                 }
-                trace!("got {} packets", npkts);
+                info!("got {} packets", npkts);
                 i += npkts;
                 // Try to batch into big enough buffers
                 // will cause less re-shuffling later on.

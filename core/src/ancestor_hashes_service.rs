@@ -270,6 +270,8 @@ impl AncestorHashesService {
         stats.dropped_packets += dropped_packets;
         stats.total_packets += total_packets;
 
+
+        info!("Received batch of size {}", packet_batches.len());
         let mut time = Measure::start("ancestor_hashes::handle_packets");
         for packet_batch in packet_batches {
             Self::process_packet_batch(
