@@ -148,7 +148,10 @@ impl AncestorHashesService {
         let outstanding_requests: Arc<RwLock<OutstandingAncestorHashesRepairs>> =
             Arc::new(RwLock::new(OutstandingAncestorHashesRepairs::default()));
         let (response_sender, response_receiver) = channel();
-        info!("ancestor hashes socket: {:?}", ancestor_hashes_request_socket.local_addr());
+        info!(
+            "ancestor hashes socket: {:?}",
+            ancestor_hashes_request_socket.local_addr()
+        );
         let t_receiver = streamer::receiver(
             ancestor_hashes_request_socket.clone(),
             &exit,
