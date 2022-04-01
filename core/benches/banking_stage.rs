@@ -6,6 +6,7 @@ extern crate test;
 use {
     crossbeam_channel::{unbounded, Receiver},
     log::*,
+    min_max_heap::MinMaxHeap,
     rand::{thread_rng, Rng},
     rayon::prelude::*,
     solana_core::{
@@ -442,6 +443,34 @@ fn bench_unprocessed_packet_batches_under_limit(bencher: &mut Bencher) {
         for _ in 0..buffer_max_size {
             unprocessed_packet_batches
                 .insert_batch(deserialized_packet_batch.clone(), buffer_max_size);
+        }
+
+        unprocessed_packet_batches.clear();
+    });
+}
+
+#[bench]
+fn bench_unprocessed_packet_batches_vector(bencher: &mut Bencher) {
+    let buffer_max_size = 100_000;
+    let mut unprocessed_packet_batches = vec![];
+
+    bencher.iter(|| {
+        for i in 0..buffer_max_size {
+            unprocessed_packet_batches.push(i);
+        }
+
+        unprocessed_packet_batches.clear();
+    });
+}
+
+#[bench]
+fn bench_unprocessed_packet_batches_min_max_heap(bencher: &mut Bencher) {
+    let buffer_max_size = 100_000;
+    let mut unprocessed_packet_batches = MinMaxHeap::default();
+
+    bencher.iter(|| {
+        for i in 0..buffer_max_size {
+            unprocessed_packet_batches.push(i);
         }
 
         unprocessed_packet_batches.clear();
