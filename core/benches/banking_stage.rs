@@ -403,7 +403,7 @@ fn packet_with_sender_stake(sender_stake: u64, ip: Option<IpAddr>) -> Packet {
 
 #[bench]
 fn bench_unprocessed_packet_batches_insert_beyond_limit(bencher: &mut Bencher) {
-    let buffer_max_size = 50_000;
+    let buffer_max_size = 5_000;
     let mut unprocessed_packet_batches = UnprocessedPacketBatches::default();
 
     let batch_size = 3;
@@ -427,7 +427,7 @@ fn bench_unprocessed_packet_batches_insert_beyond_limit(bencher: &mut Bencher) {
 
 #[bench]
 fn bench_unprocessed_packet_batches_under_limit(bencher: &mut Bencher) {
-    let buffer_max_size = 100_000;
+    let buffer_max_size = 10_000;
     let mut unprocessed_packet_batches = UnprocessedPacketBatches::default();
 
     let batch_size = 3;
@@ -451,7 +451,7 @@ fn bench_unprocessed_packet_batches_under_limit(bencher: &mut Bencher) {
 
 #[bench]
 fn bench_unprocessed_packet_batches_vector(bencher: &mut Bencher) {
-    let buffer_max_size = 100_000;
+    let buffer_max_size = 10_000;
     let mut unprocessed_packet_batches = vec![];
 
     bencher.iter(|| {
@@ -465,7 +465,7 @@ fn bench_unprocessed_packet_batches_vector(bencher: &mut Bencher) {
 
 #[bench]
 fn bench_unprocessed_packet_batches_min_max_heap(bencher: &mut Bencher) {
-    let buffer_max_size = 100_000;
+    let buffer_max_size = 10_000;
     let mut unprocessed_packet_batches = MinMaxHeap::default();
 
     bencher.iter(|| {
