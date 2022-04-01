@@ -22,7 +22,10 @@ use {
         genesis_utils::{create_genesis_config, GenesisConfigInfo},
         get_tmp_ledger_path,
     },
-    solana_perf::{packet::to_packet_batches, test_tx::test_tx},
+    solana_perf::{
+        packet::{to_packet_batches, Packet, PacketBatch},
+        test_tx::test_tx,
+    },
     solana_poh::poh_recorder::{create_test_recorder, WorkingBankEntry},
     solana_runtime::{bank::Bank, cost_model::CostModel},
     solana_sdk::{
@@ -37,6 +40,7 @@ use {
     },
     solana_streamer::socket::SocketAddrSpace,
     std::{
+        net::IpAddr,
         sync::{atomic::Ordering, Arc, RwLock},
         time::{Duration, Instant},
     },
@@ -379,4 +383,67 @@ fn bench_process_entries_without_order_shuffeling(bencher: &mut Bencher) {
 #[bench]
 fn bench_process_entries_with_order_shuffeling(bencher: &mut Bencher) {
     bench_process_entries(true, bencher);
+}
+
+fn packet_with_sender_stake(sender_stake: u64, ip: Option<IpAddr>) -> Packet {
+    let tx = system_transaction::transfer(
+        &Keypair::new(),
+        &solana_sdk::pubkey::new_rand(),
+        1,
+        Hash::new_unique(),
+    );
+    let mut packet = Packet::from_data(None, &tx).unwrap();
+    packet.meta.sender_stake = sender_stake;
+    if let Some(ip) = ip {
+        packet.meta.addr = ip;
+    }
+    packet
+}
+
+#[bench]
+fn bench_unprocessed_packet_batches_insert_beyond_limit(bencher: &mut Bencher) {
+    let buffer_max_size = 50_000;
+    let mut unprocessed_packet_batches = UnprocessedPacketBatches::default();
+
+    let batch_size = 3;
+    let packet_indexes: Vec<usize> = (0..batch_size).collect();
+    let packets: Vec<Packet> = (200..200 + batch_size)
+        .map(|weight| packet_with_sender_stake(weight as u64, None))
+        .collect();
+    let packet_batch = PacketBatch::new(packets);
+    let deserialized_packet_batch =
+        DeserializedPacketBatch::new(packet_batch, packet_indexes, false);
+
+    bencher.iter(|| {
+        for _ in 0..2 * buffer_max_size {
+            unprocessed_packet_batches
+                .insert_batch(deserialized_packet_batch.clone(), buffer_max_size);
+        }
+
+        unprocessed_packet_batches.clear();
+    });
+}
+
+#[bench]
+fn bench_unprocessed_packet_batches_under_limit(bencher: &mut Bencher) {
+    let buffer_max_size = 100_000;
+    let mut unprocessed_packet_batches = UnprocessedPacketBatches::default();
+
+    let batch_size = 3;
+    let packet_indexes: Vec<usize> = (0..batch_size).collect();
+    let packets: Vec<Packet> = (200..200 + batch_size)
+        .map(|weight| packet_with_sender_stake(weight as u64, None))
+        .collect();
+    let packet_batch = PacketBatch::new(packets);
+    let deserialized_packet_batch =
+        DeserializedPacketBatch::new(packet_batch, packet_indexes, false);
+
+    bencher.iter(|| {
+        for _ in 0..buffer_max_size {
+            unprocessed_packet_batches
+                .insert_batch(deserialized_packet_batch.clone(), buffer_max_size);
+        }
+
+        unprocessed_packet_batches.clear();
+    });
 }

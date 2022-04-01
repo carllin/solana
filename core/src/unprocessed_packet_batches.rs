@@ -24,7 +24,7 @@ use {
 };
 
 /// FeePerCu is valid by up to X slots
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct FeePerCu {
     fee_per_cu: u64,
     slot: Slot,
@@ -39,7 +39,7 @@ impl FeePerCu {
 
 /// Holds deserialized messages, as well as computed message_hash and other things needed to create
 /// SanitizedTransaction
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DeserializedPacket {
     #[allow(dead_code)]
     versioned_transaction: VersionedTransaction,
@@ -57,7 +57,7 @@ pub struct DeserializedPacket {
 /// for forwarding, as well as `forwarded` flag;
 /// Each packet in packet_batch are deserialized upon receiving, the result are stored in
 /// `DeserializedPacket` in the same order as packets in `packet_batch`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DeserializedPacketBatch {
     pub packet_batch: PacketBatch,
     pub forwarded: bool,
