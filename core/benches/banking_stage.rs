@@ -23,6 +23,7 @@ use {
         genesis_utils::{create_genesis_config, GenesisConfigInfo},
         get_tmp_ledger_path,
     },
+    solana_measure::measure::Measure,
     solana_perf::{
         packet::{to_packet_batches, Packet, PacketBatch},
         test_tx::test_tx,
@@ -416,10 +417,13 @@ fn bench_unprocessed_packet_batches_insert_beyond_limit(bencher: &mut Bencher) {
         DeserializedPacketBatch::new(packet_batch, packet_indexes, false);
 
     bencher.iter(|| {
+        let mut time = Measure::start("time");
         for _ in 0..2 * buffer_max_size {
             unprocessed_packet_batches
                 .insert_batch(deserialized_packet_batch.clone(), buffer_max_size);
         }
+        time.stop();
+        println!("time elapsed {}", time.as_ms());
 
         unprocessed_packet_batches.clear();
     });
@@ -440,10 +444,13 @@ fn bench_unprocessed_packet_batches_under_limit(bencher: &mut Bencher) {
         DeserializedPacketBatch::new(packet_batch, packet_indexes, false);
 
     bencher.iter(|| {
+        let mut time = Measure::start("time");
         for _ in 0..buffer_max_size {
             unprocessed_packet_batches
                 .insert_batch(deserialized_packet_batch.clone(), buffer_max_size);
         }
+        time.stop();
+        println!("time elapsed {}", time.as_ms());
 
         unprocessed_packet_batches.clear();
     });
@@ -451,7 +458,7 @@ fn bench_unprocessed_packet_batches_under_limit(bencher: &mut Bencher) {
 
 #[bench]
 fn bench_unprocessed_packet_batches_vector(bencher: &mut Bencher) {
-    let buffer_max_size = 10_000;
+    let buffer_max_size = 100_000;
     let mut unprocessed_packet_batches = vec![];
 
     bencher.iter(|| {
@@ -465,7 +472,7 @@ fn bench_unprocessed_packet_batches_vector(bencher: &mut Bencher) {
 
 #[bench]
 fn bench_unprocessed_packet_batches_min_max_heap(bencher: &mut Bencher) {
-    let buffer_max_size = 10_000;
+    let buffer_max_size = 100_000;
     let mut unprocessed_packet_batches = MinMaxHeap::default();
     let mut weights: Vec<usize> = (0..buffer_max_size).collect();
     weights.shuffle(&mut rand::thread_rng());
