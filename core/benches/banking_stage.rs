@@ -7,7 +7,7 @@ use {
     crossbeam_channel::{unbounded, Receiver},
     log::*,
     min_max_heap::MinMaxHeap,
-    rand::{thread_rng, Rng},
+    rand::{seq::SliceRandom, thread_rng, Rng},
     rayon::prelude::*,
     solana_core::{
         banking_stage::{BankingStage, BankingStageStats},
@@ -467,10 +467,11 @@ fn bench_unprocessed_packet_batches_vector(bencher: &mut Bencher) {
 fn bench_unprocessed_packet_batches_min_max_heap(bencher: &mut Bencher) {
     let buffer_max_size = 10_000;
     let mut unprocessed_packet_batches = MinMaxHeap::default();
-
+    let mut weights: Vec<usize> = (0..buffer_max_size).collect();
+    weights.shuffle(&mut rand::thread_rng());
     bencher.iter(|| {
-        for i in 0..buffer_max_size {
-            unprocessed_packet_batches.push(i);
+        for weight in &weights {
+            unprocessed_packet_batches.push(weight);
         }
 
         unprocessed_packet_batches.clear();
