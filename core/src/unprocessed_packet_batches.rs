@@ -1,10 +1,8 @@
 use {
-    retain_mut::RetainMut,
-    solana_gossip::weighted_shuffle::WeightedShuffle,
+    min_max_heap::MinMaxHeap,
     solana_perf::packet::{limited_deserialize, Packet, PacketBatch},
     solana_runtime::bank::Bank,
     solana_sdk::{
-        clock::Slot,
         feature_set::tx_wide_compute_cap,
         hash::Hash,
         message::{
@@ -16,480 +14,315 @@ use {
         signature::Signature,
         transaction::{AddressLoader, VersionedTransaction},
     },
-    std::{
-        collections::{BTreeMap, HashMap, VecDeque},
-        mem::size_of,
-        sync::Arc,
-    },
+    std::{cmp::Ordering, collections::HashMap, mem::size_of, sync::Arc},
 };
-
-/// FeePerCu is valid by up to X slots
-#[derive(Debug, Default, Clone)]
-struct FeePerCu {
-    fee_per_cu: u64,
-    slot: Slot,
-}
-
-impl FeePerCu {
-    fn too_old(&self, slot: &Slot) -> bool {
-        const MAX_SLOT_AGE: Slot = 1;
-        slot - self.slot >= MAX_SLOT_AGE
-    }
-}
 
 /// Holds deserialized messages, as well as computed message_hash and other things needed to create
 /// SanitizedTransaction
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DeserializedPacket {
-    #[allow(dead_code)]
-    versioned_transaction: VersionedTransaction,
+    pub original_packet: Packet,
 
     #[allow(dead_code)]
-    message_hash: Hash,
+    pub versioned_transaction: VersionedTransaction,
 
     #[allow(dead_code)]
-    is_simple_vote: bool,
+    pub message_hash: Hash,
 
-    fee_per_cu: Option<FeePerCu>,
-}
+    #[allow(dead_code)]
+    pub is_simple_vote: bool,
 
-/// Defines the type of entry in `UnprocessedPacketBatches`, it holds original packet_batch
-/// for forwarding, as well as `forwarded` flag;
-/// Each packet in packet_batch are deserialized upon receiving, the result are stored in
-/// `DeserializedPacket` in the same order as packets in `packet_batch`.
-#[derive(Debug, Default, Clone)]
-pub struct DeserializedPacketBatch {
-    pub packet_batch: PacketBatch,
+    pub fee_per_cu: u64,
+
     pub forwarded: bool,
-    // indexes of valid packets in batch, and their corresponding deserialized_packet
-    pub unprocessed_packets: HashMap<usize, DeserializedPacket>,
 }
 
-/// References to a packet in `UnprocessedPacketBatches`, where
-/// - batch_index references to `DeserializedPacketBatch`,
-/// - packet_index references to `packet` within `DeserializedPacketBatch.packet_batch`
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PacketLocator {
-    #[allow(dead_code)]
-    batch_index: usize,
-    #[allow(dead_code)]
-    packet_index: usize,
-}
-
-/// Currently each banking_stage thread has a `UnprocessedPacketBatches` buffer to store
-/// PacketBatch's received from sigverify. Banking thread continuously scans the buffer
-/// to pick proper packets to add to the block.
-#[derive(Default)]
-pub struct UnprocessedPacketBatches(VecDeque<DeserializedPacketBatch>);
-
-impl std::ops::Deref for UnprocessedPacketBatches {
-    type Target = VecDeque<DeserializedPacketBatch>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for UnprocessedPacketBatches {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl RetainMut<DeserializedPacketBatch> for UnprocessedPacketBatches {
-    fn retain_mut<F>(&mut self, f: F)
-    where
-        F: FnMut(&mut DeserializedPacketBatch) -> bool,
-    {
-        RetainMut::retain_mut(&mut self.0, f);
-    }
-}
-
-impl FromIterator<DeserializedPacketBatch> for UnprocessedPacketBatches {
-    fn from_iter<I: IntoIterator<Item = DeserializedPacketBatch>>(iter: I) -> Self {
-        Self(iter.into_iter().collect())
-    }
-}
-
-impl UnprocessedPacketBatches {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        UnprocessedPacketBatches(VecDeque::with_capacity(capacity))
-    }
-
-    /// Insert new `deserizlized_packet_batch` into inner `VecDeque<DeserializedPacketBatch>`,
-    /// If buffer is at Max limit, packets (not packet_batch) will be dropped, starting from
-    /// the lowest priority until an empty batch is located, then swap it with new batch;
-    /// Otherwise, new_batch will be pushed into the end of VecDeque;
-    /// returns tuple of (number of batch dropped, number of packets dropped)
-    pub fn insert_batch(
-        &mut self,
-        deserialized_packet_batch: DeserializedPacketBatch,
-        batch_limit: usize,
-    ) -> (Option<usize>, Option<usize>) {
-        if deserialized_packet_batch.unprocessed_packets.is_empty() {
-            return (None, None);
-        }
-
-        if self.len() >= batch_limit {
-            let (_, dropped_batches_count, dropped_packets_count) =
-                self.replace_packet_by_priority(deserialized_packet_batch);
-            (dropped_batches_count, dropped_packets_count)
-        } else {
-            self.push_back(deserialized_packet_batch);
-            (None, None)
-        }
-    }
-
-    /// prioritize unprocessed packets by their fee/CU then by sender's stakes
-    pub fn prioritize_by_fee_then_stakes(
-        &mut self,
-        working_bank: Option<Arc<Bank>>,
-    ) -> Vec<PacketLocator> {
-        let (stakes, locators) = self.get_stakes_and_locators();
-
-        let shuffled_packet_locators = Self::weighted_shuffle(&stakes, &locators);
-
-        self.prioritize_by_fee_per_cu(&shuffled_packet_locators, working_bank)
-    }
-
-    /// Returns total number of all packets (including unprocessed and processed) in buffer
-    #[allow(dead_code)]
-    fn get_packets_count(&self) -> usize {
-        self.iter()
-            .map(|deserialized_packet_batch| deserialized_packet_batch.packet_batch.packets.len())
-            .sum()
-    }
-
-    /// Returns total number of unprocessed packets in buffer
-    #[allow(dead_code)]
-    fn get_unprocessed_packets_count(&self) -> usize {
-        self.iter()
-            .map(|deserialized_packet_batch| deserialized_packet_batch.unprocessed_packets.len())
-            .sum()
-    }
-
-    /// Iterates the inner `Vec<DeserializedPacketBatch>`.
-    /// Returns the flattened result of mapping each
-    /// `DeserializedPacketBatch` to a list the batch's inner
-    /// packets' sender's stake and their `PacketLocator`'s within the
-    /// `Vec<DeserializedPacketBatch>`.
-    #[allow(dead_code)]
-    fn get_stakes_and_locators(&self) -> (Vec<u64>, Vec<PacketLocator>) {
-        self.iter()
-            .enumerate()
-            .flat_map(|(batch_index, deserialized_packet_batch)| {
-                let packet_batch = &deserialized_packet_batch.packet_batch;
-                deserialized_packet_batch
-                    .unprocessed_packets
-                    .keys()
-                    .map(move |packet_index| {
-                        let p = &packet_batch.packets[*packet_index];
-                        (
-                            p.meta.sender_stake,
-                            PacketLocator {
-                                batch_index,
-                                packet_index: *packet_index,
-                            },
-                        )
-                    })
-            })
-            .unzip()
-    }
-
-    fn weighted_shuffle(stakes: &[u64], locators: &[PacketLocator]) -> Vec<PacketLocator> {
-        let mut rng = rand::thread_rng();
-        WeightedShuffle::new(stakes)
-            .unwrap()
-            .shuffle(&mut rng)
-            .map(|i| locators[i].clone())
-            .collect()
-    }
-
-    /// Index `locators` by their transaction's fee-per-cu value; For transactions
-    /// have same fee-per-cu, their relative order remains same (eg. in sender_stake order).
-    fn prioritize_by_fee_per_cu(
-        &mut self,
-        locators: &Vec<PacketLocator>,
-        bank: Option<Arc<Bank>>,
-    ) -> Vec<PacketLocator> {
-        let mut fee_buckets = BTreeMap::<u64, Vec<PacketLocator>>::new();
-        for locator in locators {
-            // if unable to compute fee-per-cu for the packet, put it to the `0` bucket
-            let fee_per_cu = self.get_computed_fee_per_cu(locator, &bank).unwrap_or(0);
-
-            let bucket = fee_buckets
-                .entry(fee_per_cu)
-                .or_insert(Vec::<PacketLocator>::new());
-            bucket.push(locator.clone());
-        }
-        fee_buckets
-            .iter()
-            .rev()
-            .flat_map(|(_key, bucket)| bucket.iter().cloned())
-            .collect()
-    }
-
-    /// get cached fee_per_cu for transaction referenced by `locator`, if cached value is
-    /// too old for current `bank`, or no cached value, then (re)compute and cache.
-    fn get_computed_fee_per_cu(
-        &mut self,
-        locator: &PacketLocator,
-        bank: &Option<Arc<Bank>>,
-    ) -> Option<u64> {
-        if bank.is_none() {
-            return None;
-        }
-        let bank = bank.as_ref().unwrap();
-        let deserialized_packet = self.locate_packet_mut(locator)?;
-        if let Some(cached_fee_per_cu) =
-            Self::get_cached_fee_per_cu(deserialized_packet, &bank.slot())
-        {
-            Some(cached_fee_per_cu)
-        } else {
-            let computed_fee_per_cu = Self::compute_fee_per_cu(deserialized_packet, bank);
-            if let Some(computed_fee_per_cu) = computed_fee_per_cu {
-                deserialized_packet.fee_per_cu = Some(FeePerCu {
-                    fee_per_cu: computed_fee_per_cu,
-                    slot: bank.slot(),
-                });
-            }
-            computed_fee_per_cu
-        }
-    }
-
-    #[allow(dead_code)]
-    fn locate_packet(&self, locator: &PacketLocator) -> Option<&DeserializedPacket> {
-        let deserialized_packet_batch = self.get(locator.batch_index)?;
-        deserialized_packet_batch
-            .unprocessed_packets
-            .get(&locator.packet_index)
-    }
-
-    fn locate_packet_mut(&mut self, locator: &PacketLocator) -> Option<&mut DeserializedPacket> {
-        let deserialized_packet_batch = self.get_mut(locator.batch_index)?;
-        deserialized_packet_batch
-            .unprocessed_packets
-            .get_mut(&locator.packet_index)
-    }
-
-    /// Computes `(addition_fee + base_fee / requested_cu)` for packet referenced by `PacketLocator`
-    fn compute_fee_per_cu(deserialized_packet: &DeserializedPacket, bank: &Bank) -> Option<u64> {
-        let sanitized_message =
-            Self::sanitize_message(&deserialized_packet.versioned_transaction.message, bank)?;
-        let (total_fee, max_units) = Bank::calculate_fee(
-            &sanitized_message,
-            bank.get_lamports_per_signature(),
-            &bank.fee_structure,
-            bank.feature_set.is_active(&tx_wide_compute_cap::id()),
-        );
-        Some(total_fee / max_units)
-    }
-
-    fn get_cached_fee_per_cu(deserialized_packet: &DeserializedPacket, slot: &Slot) -> Option<u64> {
-        let cached_fee_per_cu = deserialized_packet.fee_per_cu.as_ref()?;
-        if cached_fee_per_cu.too_old(slot) {
-            None
-        } else {
-            Some(cached_fee_per_cu.fee_per_cu)
-        }
-    }
-
-    fn sanitize_message(
-        versioned_message: &VersionedMessage,
-        address_loader: impl AddressLoader,
-    ) -> Option<SanitizedMessage> {
-        versioned_message.sanitize().ok()?;
-
-        match versioned_message {
-            VersionedMessage::Legacy(message) => Some(SanitizedMessage::Legacy(message.clone())),
-            VersionedMessage::V0(message) => {
-                let loaded_addresses = address_loader
-                    .load_addresses(&message.address_table_lookups)
-                    .ok()?;
-                Some(SanitizedMessage::V0(v0::LoadedMessage::new(
-                    message.clone(),
-                    loaded_addresses,
-                )))
-            }
-        }
-    }
-
-    /// This function is called to put new deserialized_packet_batch into buffer when it is
-    /// at Max capacity.
-    /// It tries to drop lower prioritized transactions in order to find an empty batch to swap
-    /// with new deserialized_packet_batch.
-    /// Returns the dropped deserialized_packet_batch, dropped batch count and dropped packets count.
-    fn replace_packet_by_priority(
-        &mut self,
-        deserialized_packet_batch: DeserializedPacketBatch,
-    ) -> (
-        Option<DeserializedPacketBatch>,
-        Option<usize>,
-        Option<usize>,
-    ) {
-        // push new batch to the end of Vec to join existing batches for prioritizing and selecting
-        self.push_back(deserialized_packet_batch);
-        let new_batch_index = self.len() - 1;
-
-        // Right now, it doesn't have a bank that can be used to calculate fee/cu at
-        // point of packet receiving.
-        let bank_to_compute_fee: Option<Arc<Bank>> = None;
-        // Get locators ordered by fee then sender's stake, the highest priority packet's locator
-        // at the top.
-        let ordered_locators_for_eviction = self.prioritize_by_fee_then_stakes(bank_to_compute_fee);
-
-        // Start from the lowest priority to collect packets as candidates to be dropped, until
-        // find a Batch that would no longer have unprocessed packets.
-        let mut eviction_batch_index: Option<usize> = None;
-        let mut evicting_packets = HashMap::<usize, Vec<usize>>::new();
-        for locator in ordered_locators_for_eviction.iter().rev() {
-            if let Some(batch) = self.get(locator.batch_index) {
-                if batch
-                    .unprocessed_packets
-                    .contains_key(&locator.packet_index)
-                {
-                    let packet_indexes = evicting_packets
-                        .entry(locator.batch_index)
-                        .or_insert(vec![]);
-                    packet_indexes.push(locator.packet_index);
-
-                    if Self::would_be_empty_batch(batch, packet_indexes) {
-                        // found an empty batch can be swapped with new batch
-                        eviction_batch_index = Some(locator.batch_index);
-                        break;
-                    }
-                }
-            }
-        }
-        // remove those evicted packets by removing them from `unprocessed` list
-        let mut dropped_packets_count: Option<usize> = None;
-        evicting_packets
-            .iter()
-            .for_each(|(batch_index, evicted_packet_indexes)| {
-                if let Some(batch) = self.get_mut(*batch_index) {
-                    batch
-                        .unprocessed_packets
-                        .retain(|&k, _| !evicted_packet_indexes.contains(&k));
-                    dropped_packets_count = Some(
-                        dropped_packets_count
-                            .unwrap_or(0usize)
-                            .saturating_add(evicted_packet_indexes.len()),
-                    );
-                }
-            });
-
-        if let Some(eviction_batch_index) = eviction_batch_index {
-            if eviction_batch_index == new_batch_index {
-                // the new batch is identified to be the one for eviction, just pop it out;
-                (self.pop_back(), None, dropped_packets_count)
-            } else {
-                // we have a spot in the queue, swap it with the new batch at end of queue;
-                (
-                    self.swap_remove_back(eviction_batch_index),
-                    Some(1usize),
-                    dropped_packets_count,
-                )
-            }
-        } else {
-            warn!("Cannot find eviction candidate from buffer in single iteration. New packet batch is dropped.");
-            (self.pop_back(), None, dropped_packets_count)
-        }
-    }
-
-    /// Returns True if all unprocessed packets in the batch are in eviction list
-    fn would_be_empty_batch(
-        deserialized_packet_batch: &DeserializedPacketBatch,
-        eviction_list: &[usize],
-    ) -> bool {
-        if deserialized_packet_batch.unprocessed_packets.len() != eviction_list.len() {
-            return false;
-        }
-
-        for (k, _) in deserialized_packet_batch.unprocessed_packets.iter() {
-            if !eviction_list.contains(k) {
-                return false;
-            }
-        }
-
-        true
-    }
-}
-
-impl DeserializedPacketBatch {
-    pub fn new(packet_batch: PacketBatch, packet_indexes: Vec<usize>, forwarded: bool) -> Self {
-        let unprocessed_packets = Self::deserialize_packets(&packet_batch, &packet_indexes);
-        Self {
-            packet_batch,
-            unprocessed_packets,
-            forwarded,
-        }
-    }
-
-    fn deserialize_packets(
-        packet_batch: &PacketBatch,
-        packet_indexes: &[usize],
-    ) -> HashMap<usize, DeserializedPacket> {
-        packet_indexes
-            .iter()
-            .filter_map(|packet_index| {
-                let deserialized_packet =
-                    Self::deserialize_packet(&packet_batch.packets[*packet_index])?;
-                Some((*packet_index, deserialized_packet))
-            })
-            .collect()
-    }
-
-    fn deserialize_packet(packet: &Packet) -> Option<DeserializedPacket> {
+impl DeserializedPacket {
+    fn new(packet: Packet, bank: &Option<Arc<Bank>>) -> Option<Self> {
         let versioned_transaction: VersionedTransaction =
             match limited_deserialize(&packet.data[0..packet.meta.size]) {
                 Ok(tx) => tx,
                 Err(_) => return None,
             };
 
-        if let Some(message_bytes) = Self::packet_message(packet) {
+        if let Some(message_bytes) = packet_message(&packet) {
             let message_hash = Message::hash_raw_message(message_bytes);
             let is_simple_vote = packet.meta.is_simple_vote_tx();
-            Some(DeserializedPacket {
+            let fee_per_cu = bank
+                .as_ref()
+                .and_then(|bank| compute_fee_per_cu(&versioned_transaction.message, &*bank))
+                .unwrap_or(0);
+            Some(Self {
+                original_packet: packet,
                 versioned_transaction,
                 message_hash,
                 is_simple_vote,
-                fee_per_cu: None,
+                forwarded: false,
+                fee_per_cu,
             })
         } else {
             None
         }
     }
+}
 
-    /// Read the transaction message from packet data
-    pub fn packet_message(packet: &Packet) -> Option<&[u8]> {
-        let (sig_len, sig_size) = decode_shortu16_len(&packet.data).ok()?;
-        let msg_start = sig_len
-            .checked_mul(size_of::<Signature>())
-            .and_then(|v| v.checked_add(sig_size))?;
-        let msg_end = packet.meta.size;
-        Some(&packet.data[msg_start..msg_end])
+impl PartialOrd for DeserializedPacket {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
+}
 
-    /// Returns whether the given `PacketBatch` has any more remaining unprocessed
-    /// transactions
-    pub fn update_buffered_packets_with_new_unprocessed(
-        &mut self,
-        _original_unprocessed_indexes: &[usize],
-        new_unprocessed_indexes: &[usize],
-    ) -> bool {
-        let has_more_unprocessed_transactions = !new_unprocessed_indexes.is_empty();
-        if has_more_unprocessed_transactions {
-            self.unprocessed_packets
-                .retain(|index, _| new_unprocessed_indexes.contains(index));
-        } else {
-            self.unprocessed_packets.clear();
+impl Ord for DeserializedPacket {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.fee_per_cu.cmp(&other.fee_per_cu) {
+            Ordering::Equal => self
+                .original_packet
+                .meta
+                .sender_stake
+                .cmp(&other.original_packet.meta.sender_stake),
+            ordering => ordering,
         }
-
-        has_more_unprocessed_transactions
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct PacketPriorityQueueEntry {
+    fee_per_cu: u64,
+    sender_stake: u64,
+    message_hash: Hash,
+}
+
+impl PacketPriorityQueueEntry {
+    fn from_packet(deserialized_packet: &DeserializedPacket) -> Self {
+        Self {
+            fee_per_cu: deserialized_packet.fee_per_cu,
+            sender_stake: deserialized_packet.original_packet.meta.sender_stake,
+            message_hash: deserialized_packet.message_hash,
+        }
+    }
+}
+
+impl PartialOrd for PacketPriorityQueueEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PacketPriorityQueueEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.fee_per_cu.cmp(&other.fee_per_cu) {
+            Ordering::Equal => self.sender_stake.cmp(&other.sender_stake),
+            ordering => ordering,
+        }
+    }
+}
+
+/// Currently each banking_stage thread has a `UnprocessedPacketBatches` buffer to store
+/// PacketBatch's received from sigverify. Banking thread continuously scans the buffer
+/// to pick proper packets to add to the block.
+#[derive(Default)]
+pub struct UnprocessedPacketBatches {
+    packet_priority_queue: MinMaxHeap<PacketPriorityQueueEntry>,
+    message_hash_to_transaction: HashMap<Hash, DeserializedPacket>,
+    batch_limit: usize,
+}
+
+impl UnprocessedPacketBatches {
+    pub fn with_capacity(capacity: usize) -> Self {
+        UnprocessedPacketBatches {
+            packet_priority_queue: MinMaxHeap::with_capacity(capacity),
+            message_hash_to_transaction: HashMap::with_capacity(capacity),
+            batch_limit: capacity,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.packet_priority_queue.clear();
+        self.message_hash_to_transaction.clear();
+    }
+
+    /// Insert new `deserizlized_packet_batch` into inner `MinMaxHeap<DeserializedPacket>`,
+    /// weighted first by the fee-per-cu, then the stake of the sender.
+    /// If buffer is at the max limit, the lowest weighted packet is dropped
+    ///
+    /// Returns tuple of number of packets dropped
+    pub fn insert_batch(
+        &mut self,
+        deserialized_packets: impl Iterator<Item = DeserializedPacket>,
+    ) -> usize {
+        let mut num_dropped_packets = 0;
+        for deserialized_packet in deserialized_packets {
+            if self.push(deserialized_packet).is_some() {
+                num_dropped_packets += 1;
+            }
+        }
+        num_dropped_packets
+    }
+
+    pub fn push(&mut self, deserialized_packet: DeserializedPacket) -> Option<DeserializedPacket> {
+        if self.len() >= self.batch_limit {
+            // Optimized to not allocate by calling `MinMaxHeap::push_pop_min()`
+            Some(self.push_pop_min(deserialized_packet))
+        } else {
+            self.push_internal(deserialized_packet);
+            None
+        }
+    }
+
+    pub fn iter(&mut self) -> impl Iterator<Item = &DeserializedPacket> {
+        self.message_hash_to_transaction.values()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut DeserializedPacket> {
+        self.message_hash_to_transaction.iter_mut().map(|(k, v)| v)
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = DeserializedPacket> {
+        self.message_hash_to_transaction.into_iter().map(|(k, v)| v)
+    }
+
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut DeserializedPacket) -> bool,
+    {
+        // TODO: optimize this only when number of packets
+        // with oudated blockhash is high
+        self.packet_priority_queue.clear();
+        self.message_hash_to_transaction
+            .retain(|_k, deserialized_packet| {
+                let should_retain = f(deserialized_packet);
+                if should_retain {
+                    let priority_queue_entry =
+                        PacketPriorityQueueEntry::from_packet(deserialized_packet);
+                    self.packet_priority_queue.push(priority_queue_entry);
+                }
+                should_retain
+            })
+    }
+
+    pub fn len(&self) -> usize {
+        self.packet_priority_queue.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.packet_priority_queue.is_empty()
+    }
+
+    fn push_internal(&mut self, deserialized_packet: DeserializedPacket) {
+        let priority_queue_entry = PacketPriorityQueueEntry::from_packet(&deserialized_packet);
+
+        // Push into the priority queue
+        self.packet_priority_queue.push(priority_queue_entry);
+
+        // Keep track of the original packet in the tracking hashmap
+        self.message_hash_to_transaction
+            .insert(deserialized_packet.message_hash, deserialized_packet);
+    }
+
+    /// Returns the popped minimum packet from the priority queue.
+    fn push_pop_min(&mut self, deserialized_packet: DeserializedPacket) -> DeserializedPacket {
+        let priority_queue_entry = PacketPriorityQueueEntry::from_packet(&deserialized_packet);
+
+        // Push into the priority queue
+        let popped_priority_queue_entry = self
+            .packet_priority_queue
+            .push_pop_min(priority_queue_entry);
+
+        // Remove the popped entry from the tracking hashmap. Unwrap call is safe
+        // because the priority queue and hashmap are kept consistent at all times.
+        let popped_packet = self
+            .message_hash_to_transaction
+            .remove(&popped_priority_queue_entry.message_hash)
+            .unwrap();
+
+        // Keep track of the original packet in the tracking hashmap
+        self.message_hash_to_transaction
+            .insert(deserialized_packet.message_hash, deserialized_packet);
+
+        popped_packet
+    }
+
+    pub fn pop_max(&mut self) -> Option<DeserializedPacket> {
+        self.packet_priority_queue
+            .pop_max()
+            .map(|priority_queue_entry| {
+                self.message_hash_to_transaction
+                    .remove(&priority_queue_entry.message_hash)
+                    .unwrap()
+            })
+    }
+
+    /// Pop the next `n` highest priority transactions from the queue.
+    /// Returns `None` if the queue is empty
+    pub fn pop_max_n(&mut self, n: usize) -> Option<Vec<DeserializedPacket>> {
+        let current_len = self.len();
+        if current_len == 0 {
+            None
+        } else {
+            let num_to_pop = std::cmp::min(current_len, n);
+            Some(
+                std::iter::repeat_with(|| self.pop_max().unwrap())
+                    .take(num_to_pop)
+                    .collect(),
+            )
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.packet_priority_queue.capacity()
+    }
+}
+
+pub fn deserialize_packets<'a>(
+    packet_batch: &'a PacketBatch,
+    packet_indexes: &'a [usize],
+    bank: &'a Option<Arc<Bank>>,
+) -> impl Iterator<Item = DeserializedPacket> + 'a {
+    packet_indexes.iter().filter_map(|packet_index| {
+        DeserializedPacket::new(packet_batch.packets[*packet_index].clone(), bank)
+    })
+}
+
+/// Read the transaction message from packet data
+pub fn packet_message(packet: &Packet) -> Option<&[u8]> {
+    let (sig_len, sig_size) = decode_shortu16_len(&packet.data).ok()?;
+    let msg_start = sig_len
+        .checked_mul(size_of::<Signature>())
+        .and_then(|v| v.checked_add(sig_size))?;
+    let msg_end = packet.meta.size;
+    Some(&packet.data[msg_start..msg_end])
+}
+
+fn sanitize_message(
+    versioned_message: &VersionedMessage,
+    address_loader: impl AddressLoader,
+) -> Option<SanitizedMessage> {
+    versioned_message.sanitize().ok()?;
+
+    match versioned_message {
+        VersionedMessage::Legacy(message) => Some(SanitizedMessage::Legacy(message.clone())),
+        VersionedMessage::V0(message) => {
+            let loaded_addresses = address_loader
+                .load_addresses(&message.address_table_lookups)
+                .ok()?;
+            Some(SanitizedMessage::V0(v0::LoadedMessage::new(
+                message.clone(),
+                loaded_addresses,
+            )))
+        }
+    }
+}
+
+/// Computes `(addition_fee + base_fee / requested_cu)` for `deserialized_packet`
+fn compute_fee_per_cu(message: &VersionedMessage, bank: &Bank) -> Option<u64> {
+    let sanitized_message = sanitize_message(message, bank)?;
+    let (total_fee, max_units) = Bank::calculate_fee(
+        &sanitized_message,
+        bank.get_lamports_per_signature(),
+        &bank.fee_structure,
+        bank.feature_set.is_active(&tx_wide_compute_cap::id()),
+    );
+    Some(total_fee / max_units)
 }
 
 #[cfg(test)]
@@ -537,36 +370,6 @@ mod tests {
                 .unwrap()
                 .to_vec(),
             transaction.message_data()
-        );
-    }
-
-    #[test]
-    fn test_get_packets_count() {
-        // create a buffer with 3 batches, each has 2 packets but only first one is valid
-        let batch_size = 2usize;
-        let batch_count = 3usize;
-        let unprocessed_packet_batches: UnprocessedPacketBatches = (0..batch_count)
-            .map(|_batch_index| {
-                DeserializedPacketBatch::new(
-                    PacketBatch::new(
-                        (0..batch_size)
-                            .map(|packet_index| packet_with_sender_stake(packet_index as u64, None))
-                            .collect(),
-                    ),
-                    vec![0],
-                    false,
-                )
-            })
-            .collect();
-
-        // Assert total packets count, and unprocessed packets count
-        assert_eq!(
-            batch_size * batch_count,
-            unprocessed_packet_batches.get_packets_count()
-        );
-        assert_eq!(
-            batch_count,
-            unprocessed_packet_batches.get_unprocessed_packets_count()
         );
     }
 

@@ -8,7 +8,7 @@ use {
             LeaderExecuteAndCommitTimings, RecordTransactionsTimings,
         },
         qos_service::QosService,
-        unprocessed_packet_batches::*,
+        unprocessed_packet_batches::{self, *},
     },
     crossbeam_channel::{Receiver as CrossbeamReceiver, RecvTimeoutError},
     histogram::Histogram,
@@ -467,15 +467,15 @@ impl BankingStage {
     }
 
     fn filter_valid_packets_for_forwarding<'a>(
-        packet_batches: impl Iterator<Item = &'a DeserializedPacketBatch>,
+        deserialized_packets: impl Iterator<Item = &'a DeserializedPacket>,
     ) -> Vec<&'a Packet> {
-        packet_batches
-            .filter(|deserialized_packet_batch| !deserialized_packet_batch.forwarded)
-            .flat_map(|deserialized_packet_batch| {
-                deserialized_packet_batch
-                    .unprocessed_packets
-                    .iter()
-                    .map(|(index, _)| &deserialized_packet_batch.packet_batch.packets[*index])
+        deserialized_packets
+            .filter_map(|deserialized_packet| {
+                if !deserialized_packet.forwarded {
+                    Some(&deserialized_packet.original_packet)
+                } else {
+                    None
+                }
             })
             .collect()
     }
@@ -553,11 +553,11 @@ impl BankingStage {
     ) {
         let mut rebuffered_packet_count = 0;
         let mut consumed_buffered_packets_count = 0;
-        let buffered_packet_batches_len = buffered_packet_batches.len();
+        let buffered_packets_len = buffered_packet_batches.len();
         let mut proc_start = Measure::start("consume_buffered_process");
         let mut reached_end_of_slot: Option<EndOfSlot> = None;
 
-        RetainMut::retain_mut(buffered_packet_batches, |deserialized_packet_batch| {
+        /*RetainMut::retain_mut(buffered_packet_batches, |deserialized_packet_batch| {
             let packet_batch = &deserialized_packet_batch.packet_batch;
             let original_unprocessed_indexes = deserialized_packet_batch
                 .unprocessed_packets
@@ -591,6 +591,7 @@ impl BankingStage {
                         .end_of_slot_filtered_invalid_count
                         .fetch_add(end_of_slot_filtered_invalid_count, Ordering::Relaxed);
 
+                    // TODO: no longer need to track batches, can just hand over to threads directly
                     deserialized_packet_batch.update_buffered_packets_with_new_unprocessed(
                         &original_unprocessed_indexes,
                         &new_unprocessed_indexes,
@@ -687,6 +688,7 @@ impl BankingStage {
                     // transactions in this batch for forwarding
                     rebuffered_packet_count += retryable_transaction_indexes.len();
                     let has_more_unprocessed_transactions = deserialized_packet_batch
+                        // TODO: no longer need to track batches, can just hand over to threads directly
                         .update_buffered_packets_with_new_unprocessed(
                             &original_unprocessed_indexes,
                             &retryable_transaction_indexes,
@@ -721,13 +723,13 @@ impl BankingStage {
                     true
                 }
             }
-        });
+        });*/
         proc_start.stop();
 
         debug!(
             "@{:?} done processing buffered batches: {} time: {:?}ms tx count: {} tx/s: {}",
             timestamp(),
-            buffered_packet_batches_len,
+            buffered_packets_len,
             proc_start.as_ms(),
             consumed_buffered_packets_count,
             (consumed_buffered_packets_count as f32) / (proc_start.as_s())
@@ -940,11 +942,8 @@ impl BankingStage {
         }
 
         if hold {
-            buffered_packet_batches.retain(|deserialized_packet_batch| {
-                !deserialized_packet_batch.unprocessed_packets.is_empty()
-            });
-            for deserialized_packet_batch in buffered_packet_batches.iter_mut() {
-                deserialized_packet_batch.forwarded = true;
+            for deserialized_packet in buffered_packet_batches.iter_mut() {
+                deserialized_packet.forwarded = true;
             }
         } else {
             slot_metrics_tracker
@@ -1039,7 +1038,6 @@ impl BankingStage {
                         recv_start,
                         recv_timeout,
                         id,
-                        batch_limit,
                         &mut buffered_packet_batches,
                         &mut banking_stage_stats,
                         &mut slot_metrics_tracker,
@@ -1700,7 +1698,7 @@ impl BankingStage {
                 }
 
                 let tx: VersionedTransaction = limited_deserialize(&p.data[0..p.meta.size]).ok()?;
-                let message_bytes = DeserializedPacketBatch::packet_message(p)?;
+                let message_bytes = unprocessed_packet_batches::packet_message(p)?;
                 let message_hash = Message::hash_raw_message(message_bytes);
                 let tx = SanitizedTransaction::try_create(
                     tx,
@@ -1925,7 +1923,6 @@ impl BankingStage {
         recv_start: &mut Instant,
         recv_timeout: Duration,
         id: u32,
-        batch_limit: usize,
         buffered_packet_batches: &mut UnprocessedPacketBatches,
         banking_stage_stats: &mut BankingStageStats,
         slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
@@ -1962,12 +1959,11 @@ impl BankingStage {
 
             Self::push_unprocessed(
                 buffered_packet_batches,
-                packet_batch,
-                packet_indexes,
+                &packet_batch,
+                &packet_indexes,
                 &mut dropped_packet_batches_count,
                 &mut dropped_packets_count,
                 &mut newly_buffered_packets_count,
-                batch_limit,
                 banking_stage_stats,
                 slot_metrics_tracker,
             )
@@ -2000,27 +1996,20 @@ impl BankingStage {
         banking_stage_stats
             .current_buffered_packet_batches_count
             .swap(buffered_packet_batches.len(), Ordering::Relaxed);
-        banking_stage_stats.current_buffered_packets_count.swap(
-            buffered_packet_batches
-                .iter()
-                .map(|deserialized_packet_batch| {
-                    deserialized_packet_batch.unprocessed_packets.len()
-                })
-                .sum(),
-            Ordering::Relaxed,
-        );
+        banking_stage_stats
+            .current_buffered_packets_count
+            .swap(buffered_packet_batches.len(), Ordering::Relaxed);
         *recv_start = Instant::now();
         Ok(())
     }
 
     fn push_unprocessed(
         unprocessed_packet_batches: &mut UnprocessedPacketBatches,
-        packet_batch: PacketBatch,
-        packet_indexes: Vec<usize>,
+        packet_batch: &PacketBatch,
+        packet_indexes: &[usize],
         dropped_packet_batches_count: &mut usize,
         dropped_packets_count: &mut usize,
         newly_buffered_packets_count: &mut usize,
-        batch_limit: usize,
         banking_stage_stats: &mut BankingStageStats,
         slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
     ) {
@@ -2033,21 +2022,19 @@ impl BankingStage {
             slot_metrics_tracker
                 .increment_newly_buffered_packets_count(packet_indexes.len() as u64);
 
-            let (number_of_dropped_batches, number_of_dropped_packets) = unprocessed_packet_batches
-                .insert_batch(
-                    DeserializedPacketBatch::new(packet_batch, packet_indexes, false),
-                    batch_limit,
-                );
+            let number_of_dropped_packets = unprocessed_packet_batches.insert_batch(
+                // Passing `None` for bank for now will make all packet weights 0
+                unprocessed_packet_batches::deserialize_packets(
+                    packet_batch,
+                    packet_indexes,
+                    &None,
+                ),
+            );
 
-            if let Some(number_of_dropped_batches) = number_of_dropped_batches {
-                saturating_add_assign!(*dropped_packet_batches_count, number_of_dropped_batches);
-            }
-            if let Some(number_of_dropped_packets) = number_of_dropped_packets {
-                saturating_add_assign!(*dropped_packets_count, number_of_dropped_packets);
-                slot_metrics_tracker.increment_exceeded_buffer_limit_dropped_packets_count(
-                    number_of_dropped_packets as u64,
-                );
-            }
+            saturating_add_assign!(*dropped_packets_count, number_of_dropped_packets);
+            slot_metrics_tracker.increment_exceeded_buffer_limit_dropped_packets_count(
+                number_of_dropped_packets as u64,
+            );
         }
     }
 
@@ -4027,6 +4014,8 @@ mod tests {
         let mut heavy_packet = Packet::from_data(None, &tx).unwrap();
         heavy_packet.meta.sender_stake = 1_000_000u64;
         let new_packet_batch = PacketBatch::new(vec![heavy_packet; 2]);
+        // Set the limit to 2
+        let batch_limit = 2;
         let mut unprocessed_packets: UnprocessedPacketBatches = vec![DeserializedPacketBatch::new(
             new_packet_batch,
             vec![0, 1],
@@ -4037,8 +4026,6 @@ mod tests {
         assert_eq!(unprocessed_packets.len(), 1);
         assert_eq!(unprocessed_packets[0].unprocessed_packets.len(), 2);
 
-        // Set the limit to 2
-        let batch_limit = 2;
         // Create new unprocessed packets and add to a batch
         let mut light_packet =
             Packet::from_data(Some(&SocketAddr::from(([10, 10, 10, 1], 9001))), &tx).unwrap();
@@ -4059,7 +4046,6 @@ mod tests {
             &mut dropped_packet_batches_count,
             &mut dropped_packets_count,
             &mut newly_buffered_packets_count,
-            batch_limit,
             &mut banking_stage_stats,
             &mut LeaderSlotMetricsTracker::new(0),
         );
