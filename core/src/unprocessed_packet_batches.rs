@@ -14,26 +14,30 @@ use {
         signature::Signature,
         transaction::{AddressLoader, VersionedTransaction},
     },
-    std::{cmp::Ordering, collections::HashMap, mem::size_of, sync::Arc},
+    std::{cmp::Ordering, collections::HashMap, mem::size_of, rc::Rc, sync::Arc},
 };
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ImmutableDeserializedPacket {
+    original_packet: Packet,
+
+    #[allow(dead_code)]
+    versioned_transaction: VersionedTransaction,
+
+    #[allow(dead_code)]
+    message_hash: Hash,
+
+    #[allow(dead_code)]
+    is_simple_vote: bool,
+
+    fee_per_cu: u64,
+}
 
 /// Holds deserialized messages, as well as computed message_hash and other things needed to create
 /// SanitizedTransaction
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DeserializedPacket {
-    pub original_packet: Packet,
-
-    #[allow(dead_code)]
-    pub versioned_transaction: VersionedTransaction,
-
-    #[allow(dead_code)]
-    pub message_hash: Hash,
-
-    #[allow(dead_code)]
-    pub is_simple_vote: bool,
-
-    pub fee_per_cu: u64,
-
+    immutable_section: Rc<ImmutableDeserializedPacket>,
     pub forwarded: bool,
 }
 
@@ -53,16 +57,38 @@ impl DeserializedPacket {
                 .and_then(|bank| compute_fee_per_cu(&versioned_transaction.message, &*bank))
                 .unwrap_or(0);
             Some(Self {
-                original_packet: packet,
-                versioned_transaction,
-                message_hash,
-                is_simple_vote,
+                immutable_section: Rc::new(ImmutableDeserializedPacket {
+                    original_packet: packet,
+                    versioned_transaction,
+                    message_hash,
+                    is_simple_vote,
+                    fee_per_cu,
+                }),
                 forwarded: false,
-                fee_per_cu,
             })
         } else {
             None
         }
+    }
+
+    pub fn original_packet(&self) -> &Packet {
+        &self.immutable_section.original_packet
+    }
+
+    pub fn versioned_transaction(&self) -> &VersionedTransaction {
+        &self.immutable_section.versioned_transaction
+    }
+
+    pub fn sender_stake(&self) -> u64 {
+        self.immutable_section.original_packet.meta.sender_stake
+    }
+
+    pub fn message_hash(&self) -> Hash {
+        self.immutable_section.message_hash
+    }
+
+    pub fn fee_per_cu(&self) -> u64 {
+        self.immutable_section.fee_per_cu
     }
 }
 
@@ -74,12 +100,8 @@ impl PartialOrd for DeserializedPacket {
 
 impl Ord for DeserializedPacket {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.fee_per_cu.cmp(&other.fee_per_cu) {
-            Ordering::Equal => self
-                .original_packet
-                .meta
-                .sender_stake
-                .cmp(&other.original_packet.meta.sender_stake),
+        match self.fee_per_cu().cmp(&other.fee_per_cu()) {
+            Ordering::Equal => self.sender_stake().cmp(&other.sender_stake()),
             ordering => ordering,
         }
     }
@@ -95,9 +117,9 @@ struct PacketPriorityQueueEntry {
 impl PacketPriorityQueueEntry {
     fn from_packet(deserialized_packet: &DeserializedPacket) -> Self {
         Self {
-            fee_per_cu: deserialized_packet.fee_per_cu,
-            sender_stake: deserialized_packet.original_packet.meta.sender_stake,
-            message_hash: deserialized_packet.message_hash,
+            fee_per_cu: deserialized_packet.fee_per_cu(),
+            sender_stake: deserialized_packet.sender_stake(),
+            message_hash: deserialized_packet.message_hash(),
         }
     }
 }
@@ -216,7 +238,7 @@ impl UnprocessedPacketBatches {
 
         // Keep track of the original packet in the tracking hashmap
         self.message_hash_to_transaction
-            .insert(deserialized_packet.message_hash, deserialized_packet);
+            .insert(deserialized_packet.message_hash(), deserialized_packet);
     }
 
     /// Returns the popped minimum packet from the priority queue.
@@ -237,7 +259,7 @@ impl UnprocessedPacketBatches {
 
         // Keep track of the original packet in the tracking hashmap
         self.message_hash_to_transaction
-            .insert(deserialized_packet.message_hash, deserialized_packet);
+            .insert(deserialized_packet.message_hash(), deserialized_packet);
 
         popped_packet
     }

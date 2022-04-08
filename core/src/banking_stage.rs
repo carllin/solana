@@ -472,7 +472,7 @@ impl BankingStage {
         deserialized_packets
             .filter_map(|deserialized_packet| {
                 if !deserialized_packet.forwarded {
-                    Some(&deserialized_packet.original_packet)
+                    Some(deserialized_packet.original_packet())
                 } else {
                     None
                 }
@@ -1698,12 +1698,12 @@ impl BankingStage {
         votes_only: bool,
         address_loader: impl AddressLoader,
     ) -> Option<SanitizedTransaction> {
-        let p = &deserialized_packet.original_packet;
+        let p = &deserialized_packet.original_packet();
         if votes_only && !p.meta.is_simple_vote_tx() {
             return None;
         }
 
-        let tx: VersionedTransaction = deserialized_packet.versioned_transaction.clone();
+        let tx: VersionedTransaction = deserialized_packet.versioned_transaction().clone();
         let message_bytes = unprocessed_packet_batches::packet_message(p)?;
         let message_hash = Message::hash_raw_message(message_bytes);
         let tx = SanitizedTransaction::try_create(
