@@ -12,7 +12,8 @@ use {
         cluster_slots_service::ClusterSlotsUpdateSender,
         commitment_service::{AggregateCommitmentService, CommitmentAggregationData},
         consensus::{
-            ComputedBankState, Stake, SwitchForkDecision, Tower, VotedStakes, SWITCH_FORK_THRESHOLD,
+            ComputedBankState, Stake, SwitchForkDecision, Tower, VotedStakes,
+            SWITCH_FORK_THRESHOLD, VOTE_THRESHOLD_DEPTH,
         },
         cost_update_service::CostUpdate,
         fork_choice::{ForkChoice, SelectVoteAndResetForkResult},
@@ -64,7 +65,7 @@ use {
         timing::timestamp,
         transaction::Transaction,
     },
-    solana_vote_program::vote_state::VoteTransaction,
+    solana_vote_program::vote_state::{VoteTransaction, MAX_LOCKOUT_HISTORY},
     std::{
         collections::{HashMap, HashSet},
         result,
@@ -596,11 +597,13 @@ impl ReplayStage {
                         .select_forks(&frozen_banks, &tower, &progress, &ancestors, &bank_forks);
                     select_forks_time.stop();
 
+                    let mut my_latest_landed_vote = None;
+
                     if let Some(heaviest_bank_on_same_voted_fork) = heaviest_bank_on_same_voted_fork.as_ref() {
-                        if let Some(my_latest_landed_vote) = progress.my_latest_landed_vote(heaviest_bank_on_same_voted_fork.slot()) {
+                        if let Some(latest_landed_vote) = progress.my_latest_landed_vote(heaviest_bank_on_same_voted_fork.slot()) {
                             Self::refresh_last_vote(&mut tower,
                                                     heaviest_bank_on_same_voted_fork,
-                                                    my_latest_landed_vote,
+                                                    latest_landed_vote,
                                                     &vote_account,
                                                     &identity_keypair,
                                                     &authorized_voter_keypairs.read().unwrap(),
@@ -609,7 +612,13 @@ impl ReplayStage {
                                                     last_vote_refresh_time,
                                                     &voting_sender,
                                                     wait_to_vote_slot,
-                                                    );
+                            );
+                            my_latest_landed_vote = Some(latest_landed_vote);
+                        }
+                        // Workaround for issue 24230: my_latest_landed_vote is not set above because progress_map
+                        // doesn't properly track latest landed vote
+                        else {
+                            my_latest_landed_vote = Tower::last_voted_slot_in_bank(heaviest_bank_on_same_voted_fork, &vote_account);
                         }
                     }
 
@@ -665,35 +674,48 @@ impl ReplayStage {
                             );
                         }
 
-                        Self::handle_votable_bank(
-                            vote_bank,
-                            switch_fork_decision,
-                            &bank_forks,
-                            &mut tower,
-                            &mut progress,
-                            &vote_account,
-                            &identity_keypair,
-                            &authorized_voter_keypairs.read().unwrap(),
-                            &blockstore,
-                            &leader_schedule_cache,
-                            &lockouts_sender,
-                            &accounts_background_request_sender,
-                            &latest_root_senders,
-                            &rpc_subscriptions,
-                            &block_commitment_cache,
-                            &mut heaviest_subtree_fork_choice,
-                            &bank_notification_sender,
-                            &mut duplicate_slots_tracker,
-                            &mut gossip_duplicate_confirmed_slots,
-                            &mut unfrozen_gossip_verified_vote_hashes,
-                            &mut voted_signatures,
-                            &mut has_new_vote_been_rooted,
-                            &mut replay_timing,
-                            &voting_sender,
-                            &mut epoch_slots_frozen_slots,
-                            &drop_bank_sender,
-                            wait_to_vote_slot,
-                        );
+                        // Votable slots may have been skipped over as prior slots were evaluated and found to be too
+                        // far ahead of consensus ("FailedThreshold").  But now that consensus has caught up to the
+                        // currently votable slot, those votes should be cast as well.
+                        let mut vote_banks = vec![];
+                        Self::populate_vote_banks(&mut vote_banks,
+                                                  vote_bank,
+                                                  my_latest_landed_vote.unwrap_or(vote_bank.slot() - 1) + 1,
+                                                  &progress,
+                                                  &tower,
+                                                  &ancestors,
+                                                  false);
+                        if !vote_banks.is_empty() {
+                            Self::handle_votable_banks(
+                                &vote_banks,
+                                switch_fork_decision,
+                                &bank_forks,
+                                &mut tower,
+                                &mut progress,
+                                &vote_account,
+                                &identity_keypair,
+                                &authorized_voter_keypairs.read().unwrap(),
+                                &blockstore,
+                                &leader_schedule_cache,
+                                &lockouts_sender,
+                                &accounts_background_request_sender,
+                                &latest_root_senders,
+                                &rpc_subscriptions,
+                                &block_commitment_cache,
+                                &mut heaviest_subtree_fork_choice,
+                                &bank_notification_sender,
+                                &mut duplicate_slots_tracker,
+                                &mut gossip_duplicate_confirmed_slots,
+                                &mut unfrozen_gossip_verified_vote_hashes,
+                                &mut voted_signatures,
+                                &mut has_new_vote_been_rooted,
+                                &mut replay_timing,
+                                &voting_sender,
+                                &mut epoch_slots_frozen_slots,
+                                &drop_bank_sender,
+                                wait_to_vote_slot,
+                            );
+                        }
                     };
                     voting_time.stop();
 
@@ -890,6 +912,70 @@ impl ReplayStage {
             t_replay,
             commitment_service,
         }
+    }
+
+    fn populate_vote_banks(
+        banks: &mut Vec<Arc<Bank>>,
+        bank: &Arc<Bank>,
+        first_slot: Slot,
+        progress: &ProgressMap,
+        tower: &Tower,
+        ancestors: &HashMap<Slot, HashSet<Slot>>,
+        known_confirmed: bool,
+    ) -> i64 {
+        let bank_slot = bank.slot();
+
+        let distance_from_confirmed: i64 = if known_confirmed {
+            0
+        } else if progress
+            .get_fork_stats(bank_slot)
+            .unwrap()
+            .is_supermajority_confirmed
+        {
+            // This bank is supermajority confirmed.  If we're not at the first slot to vote on yet, then recurse down
+            // so that all slots below this slot that are votable can be voted on too (and they will, because if this
+            // slot is confirmed, then all slots before it are confirmed too)
+            if bank_slot > first_slot {
+                if let Some(parent) = bank.parent() {
+                    Self::populate_vote_banks(
+                        banks, &parent, first_slot, progress, tower, ancestors, true,
+                    );
+                }
+            }
+            0
+        } else if let Some(parent) = bank.parent() {
+            // This slot not supermajority confirmed, so recurse, which will return the distance of bank_slot
+            // from confirmed
+            Self::populate_vote_banks(
+                banks, &parent, first_slot, progress, tower, ancestors, false,
+            )
+        } else {
+            // At the end of the banks and never found a confirmed one
+            -1
+        };
+
+        // Don't stuff more than MAX_LOCKOUT_HISTORY banks in to avoid large votes
+        if banks.len() >= MAX_LOCKOUT_HISTORY {
+            return -1;
+        }
+
+        // If no confirmed banks could be found at all, or banks was already full, then no banks are votable
+        if distance_from_confirmed == -1 {
+            return -1;
+        }
+
+        // If this bank is at or above the first slot that should be voted on, and if this slot is not too far
+        // from consensus, and if this slot wasn't locked out, then it can be voted on so is pushed into banks
+        if (bank_slot >= first_slot)
+            && (distance_from_confirmed < (VOTE_THRESHOLD_DEPTH as i64))
+            && !tower.is_or_was_locked_out(bank_slot, ancestors.get(&bank_slot).unwrap())
+        {
+            banks.push(bank.clone())
+        }
+
+        // Return the distance of the next slot from the first confirmed slot, which is this bank_slot's distance
+        // plus one
+        distance_from_confirmed + 1
     }
 
     fn maybe_retransmit_unpropagated_slots(
@@ -1708,8 +1794,8 @@ impl ReplayStage {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn handle_votable_bank(
-        bank: &Arc<Bank>,
+    fn handle_votable_banks(
+        banks: &Vec<Arc<Bank>>,
         switch_fork_decision: &SwitchForkDecision,
         bank_forks: &Arc<RwLock<BankForks>>,
         tower: &mut Tower,
@@ -1737,11 +1823,17 @@ impl ReplayStage {
         drop_bank_sender: &Sender<Vec<Arc<Bank>>>,
         wait_to_vote_slot: Option<Slot>,
     ) {
-        if bank.is_empty() {
-            inc_new_counter_info!("replay_stage-voted_empty_bank", 1);
+        let mut new_root = None;
+
+        for bank in banks {
+            if bank.is_empty() {
+                inc_new_counter_info!("replay_stage-voted_empty_bank", 1);
+            }
+            trace!("handle votable bank {}", bank.slot());
+            new_root = tower.record_bank_vote(bank, vote_account_pubkey);
         }
-        trace!("handle votable bank {}", bank.slot());
-        let new_root = tower.record_bank_vote(bank, vote_account_pubkey);
+
+        let bank = banks.last().unwrap().clone();
 
         let saved_tower = SavedTower::new(tower, identity_keypair).unwrap_or_else(|err| {
             error!("Unable to create saved tower: {:?}", err);
@@ -1813,7 +1905,7 @@ impl ReplayStage {
         replay_timing.update_commitment_cache_us += update_commitment_cache_time.as_us();
 
         Self::push_vote(
-            bank,
+            &bank,
             vote_account_pubkey,
             identity_keypair,
             authorized_voter_keypairs,
@@ -2025,12 +2117,13 @@ impl ReplayStage {
         wait_to_vote_slot: Option<Slot>,
     ) {
         let mut generate_time = Measure::start("generate_vote");
+        let vote = tower.last_vote();
         let vote_tx = Self::generate_vote_tx(
             identity_keypair,
             bank,
             vote_account_pubkey,
             authorized_voter_keypairs,
-            tower.last_vote(),
+            vote.clone(),
             switch_fork_decision,
             vote_signatures,
             has_new_vote_been_rooted,
@@ -2041,11 +2134,10 @@ impl ReplayStage {
         if let Some(vote_tx) = vote_tx {
             tower.refresh_last_vote_tx_blockhash(vote_tx.message.recent_blockhash);
 
-            let tower_slots = tower.tower_slots();
             voting_sender
                 .send(VoteOp::PushVote {
                     tx: vote_tx,
-                    tower_slots,
+                    tower_slots: vote.slots(),
                     saved_tower: SavedTowerVersions::from(saved_tower),
                 })
                 .unwrap_or_else(|err| warn!("Error: {:?}", err));
@@ -5942,7 +6034,7 @@ pub mod tests {
         // not landing
         tower.record_bank_vote(&bank1, &my_vote_pubkey);
         ReplayStage::push_vote(
-            &bank1,
+            vec![&bank1],
             &my_vote_pubkey,
             &identity_keypair,
             &my_vote_keypair,

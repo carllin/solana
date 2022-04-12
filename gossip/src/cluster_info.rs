@@ -60,7 +60,7 @@ use {
         },
     },
     solana_rayon_threadlimit::get_thread_count,
-    solana_runtime::{bank_forks::BankForks, vote_parser},
+    solana_runtime::bank_forks::BankForks,
     solana_sdk::{
         clock::{Slot, DEFAULT_MS_PER_SLOT, DEFAULT_SLOTS_PER_EPOCH},
         feature_set::FeatureSet,
@@ -1042,17 +1042,10 @@ impl ClusterInfo {
                 .min() // Boot the oldest evicted vote by wallclock.
                 .map(|(_ /*wallclock*/, ix)| ix)
         };
-        let vote_index = vote_index.unwrap_or(num_crds_votes);
-        if (vote_index as usize) >= MAX_LOCKOUT_HISTORY {
-            let (_, vote, hash) = vote_parser::parse_vote_transaction(&vote).unwrap();
-            panic!(
-                "invalid vote index: {}, switch: {}, vote slots: {:?}, tower: {:?}",
-                vote_index,
-                hash.is_some(),
-                vote.slots(),
-                tower
-            );
-        }
+        let vote_index = std::cmp::max(
+            vote_index.unwrap_or(num_crds_votes),
+            (MAX_LOCKOUT_HISTORY - 1) as u8,
+        );
         self.push_vote_at_index(vote, vote_index);
     }
 

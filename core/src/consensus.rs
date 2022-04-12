@@ -585,10 +585,10 @@ impl Tower {
     }
 
     pub fn is_locked_out(&self, slot: Slot, ancestors: &HashSet<Slot>) -> bool {
-        if !self.is_recent(slot) {
-            return true;
-        }
+        !self.is_recent(slot) || self.is_or_was_locked_out(slot, ancestors)
+    }
 
+    pub fn is_or_was_locked_out(&self, slot: Slot, ancestors: &HashSet<Slot>) -> bool {
         // Check if a slot is locked out by simulating adding a vote for that
         // slot to the current lockouts to pop any expired votes. If any of the
         // remaining voted slots are on a different fork from the checked slot,
