@@ -926,6 +926,15 @@ impl ReplayStage {
         let bank_slot = bank.slot();
 
         let distance_from_confirmed: i64 = if known_confirmed {
+            // This slot is known to be confirmed so we can avoid asking the ProgressMap if it is; but still need to
+            // recurse down to the first slot
+            if bank_slot > first_slot {
+                if let Some(parent) = bank.parent() {
+                    Self::populate_vote_banks(
+                        banks, &parent, first_slot, progress, tower, ancestors, true,
+                    );
+                }
+            }
             0
         } else if progress
             .get_fork_stats(bank_slot)
