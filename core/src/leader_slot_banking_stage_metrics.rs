@@ -320,6 +320,7 @@ impl LeaderSlotMetricsTracker {
 
             (None, Some(bank_start)) => {
                 // Our leader slot has begain, time to create a new slot tracker
+                error!("starting slot {}", bank_start.working_bank.slot());
                 self.leader_slot_metrics = Some(LeaderSlotMetrics::new(
                     self.id,
                     bank_start.working_bank.slot(),
@@ -334,6 +335,7 @@ impl LeaderSlotMetricsTracker {
                     leader_slot_metrics.report();
                     // Ensure tests catch that `report()` method was called
                     let reported_slot = leader_slot_metrics.reported_slot();
+                    error!("starting slot {}", bank_start.working_bank.slot());
                     self.leader_slot_metrics = Some(LeaderSlotMetrics::new(
                         self.id,
                         bank_start.working_bank.slot(),

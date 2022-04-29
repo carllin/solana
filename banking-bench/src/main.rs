@@ -49,12 +49,15 @@ fn check_txs(
             total += entry.transactions.len();
         }
         if total >= ref_tx_count {
+            error!("total {} > ref_tx_count: {}", total, ref_tx_count);
             break;
         }
         if now.elapsed().as_secs() > 60 {
+            error!("more than 60s have elapsed");
             break;
         }
         if poh_recorder.lock().unwrap().bank().is_none() {
+            error!("no bank");
             no_bank = true;
             break;
         }
@@ -359,7 +362,7 @@ fn main() {
         let collector = solana_sdk::pubkey::new_rand();
         let mut total_sent = 0;
         for current_iteration_index in 0..iterations {
-            trace!("RUNNING ITERATION {}", current_iteration_index);
+            error!("RUNNING ITERATION {}", current_iteration_index);
             let now = Instant::now();
             let mut sent = 0;
 

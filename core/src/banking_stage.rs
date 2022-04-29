@@ -556,10 +556,18 @@ impl BankingStage {
         let mut reached_end_of_slot: Option<EndOfSlot> = None;
 
         let mut retryable_packets = MinMaxHeap::with_capacity(buffered_packet_batches.capacity());
+
         std::mem::swap(
             &mut buffered_packet_batches.packet_priority_queue,
             &mut retryable_packets,
         );
+
+        if retryable_packets.len() > 0 {
+            error!(
+                "running consume_buffered_packets remaining buffer size: {}",
+                retryable_packets.len()
+            );
+        }
 
         let mut retryable_packets: MinMaxHeap<PacketPriorityQueueEntry> = retryable_packets
             .drain_desc()
@@ -732,7 +740,7 @@ impl BankingStage {
                     end_of_slot.next_slot_leader,
                     banking_stage_stats,
                 );
-
+            error!("filtered count: {}", end_of_slot_filtered_invalid_count);
             inc_new_counter_info!(
                 "banking_stage-dropped_tx_before_forwarding",
                 end_of_slot_filtered_invalid_count
