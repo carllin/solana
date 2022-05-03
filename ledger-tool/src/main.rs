@@ -2190,7 +2190,9 @@ fn main() {
                     })
                     .collect();
                 println!("Found {} transactions to send over", num_txs);
-                verified_sender.send(packet_batches).unwrap();
+                for packet_batch in packet_batches {
+                    verified_sender.send(vec![packet_batch]).unwrap();
+                }
 
                 // Known value from logs
                 let expected_signature_count = 1543;
