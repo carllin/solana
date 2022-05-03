@@ -2065,27 +2065,15 @@ fn main() {
 
                 let slot_of_interest = 131436226;
 
-                let bank_fork_banks_keys: Vec<_> =
-                    bank_forks.banks().keys().map(|slot| *slot).collect();
+                let bank_fork_banks_keys: Vec<_> = bank_forks.banks().keys().copied().collect();
                 println!("Bank Fork banks: {:?}", bank_fork_banks_keys);
 
                 let bank_131436225 = &bank_forks[slot_of_interest - 1];
                 let leader = leader_schedule_cache
-                    .slot_leader_at(slot_of_interest, Some(&bank_131436225))
+                    .slot_leader_at(slot_of_interest, Some(bank_131436225))
                     .unwrap();
-                let known_leader: Pubkey =
+                let id: Pubkey =
                     Pubkey::from_str("1aine15iEqZxYySNwcHtQFt4Sgc75cbEi9wks8YgNCa").unwrap();
-                println!(
-                    "Leader for {}: {:?} {:#?}",
-                    slot_of_interest, leader, known_leader
-                );
-
-                // Create new bank for slot that we'll simulate as leader
-                let mut bank_131436226 =
-                    Bank::new_from_parent(&bank_131436225, &leader, slot_of_interest);
-                bank_131436226.ns_per_slot = std::u128::MAX;
-                let bank_131436226 = Arc::new(bank_131436226);
-
                 // Setup stuff to make a BankingStage
                 let cluster_info = ClusterInfo::new(
                     Node::new_localhost().info,
@@ -2099,36 +2087,29 @@ fn main() {
 
                 // let genesis_config = open_genesis_config_by(&ledger_path, arg_matches);
                 // let poh_config = Arc::new(genesis_config.poh_config.clone());
-                let id = Pubkey::default();
-                let poh_config = Arc::new(PohConfig::default());
-                let (mut poh_recorder, _entry_receiver, record_receiver) = PohRecorder::new(
-                    bank_131436226.tick_height(),
-                    bank_131436226.last_blockhash(),
-                    bank_131436226.clone(),
-                    Some((4, 4)),
-                    /*
-                    leader_schedule_cache.next_leader_slot(
-                        &leader,
-                        bank_131436226.slot(),
-                        &bank_131436226,
-                        Some(&banking_blockstore),
-                        GRACE_TICKS_FACTOR * MAX_GRACE_SLOTS,
-                    ),
-                    */
-                    bank_131436226.ticks_per_slot(),
-                    &known_leader,
-                    &blockstore.clone(),
-                    &leader_schedule_cache,
-                    &poh_config,
-                    exit_signal.clone(),
-                );
-                poh_recorder.set_bank(&bank_131436226);
-                let poh_recorder = Arc::new(Mutex::new(poh_recorder));
-
                 let (verified_sender, verified_receiver) = unbounded();
                 let (gossip_verified_vote_sender, gossip_verified_vote_receiver) = unbounded();
                 let (tpu_vote_sender, tpu_vote_receiver) = unbounded();
                 let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
+
+                let poh_config = Arc::new(PohConfig::default());
+                let mut bank_131436226 =
+                    Bank::new_from_parent(bank_131436225, &leader, slot_of_interest);
+                bank_131436226.ns_per_slot = std::u128::MAX;
+                let mut bank_131436226 = Arc::new(bank_131436226);
+                let (poh_recorder, _entry_receiver, record_receiver) = PohRecorder::new(
+                    bank_131436226.tick_height(),
+                    bank_131436226.last_blockhash(),
+                    bank_131436226.clone(),
+                    Some((4, 4)),
+                    bank_131436226.ticks_per_slot(),
+                    &id,
+                    &blockstore,
+                    &leader_schedule_cache,
+                    &poh_config,
+                    exit_signal.clone(),
+                );
+                let poh_recorder = Arc::new(Mutex::new(poh_recorder));
 
                 let banking_stage = BankingStage::new(
                     &cluster_info,
@@ -2190,56 +2171,88 @@ fn main() {
                     })
                     .collect();
                 println!("Found {} transactions to send over", num_txs);
-                for packet_batch in packet_batches {
-                    verified_sender.send(vec![packet_batch]).unwrap();
-                }
+                poh_recorder.lock().unwrap().set_bank(&bank_131436226);
 
-                // Known value from logs
-                let expected_signature_count = 1543;
-                let mut last_signature_count = bank_131436226.signature_count();
+                loop {
+                    for packet_batch in &packet_batches {
+                        verified_sender.send(vec![packet_batch.clone()]).unwrap();
+                    }
 
-                // Wait for bank to complete all the signatures
-                let now = time::Instant::now();
-                while last_signature_count < expected_signature_count
-                    && now.elapsed().as_secs() < 10
-                {
+                    // Known value from logs
+                    let expected_signature_count = 1543;
+                    let mut last_signature_count = bank_131436226.signature_count();
+
+                    // Wait for bank to complete all the signatures
+                    let now = time::Instant::now();
+                    while last_signature_count < expected_signature_count
+                        && now.elapsed().as_secs() < 10
+                    {
+                        println!(
+                            "Current signature count is {} out of {}",
+                            last_signature_count, expected_signature_count
+                        );
+                        last_signature_count = bank_131436226.signature_count();
+                        thread::sleep(time::Duration::from_millis(500));
+                    }
+
+                    // Advance tick count to complete banks, but last tick must be known value so blockhash matches
                     println!(
-                        "Current signature count is {} out of {}",
-                        last_signature_count, expected_signature_count
+                        "Advancing tick height {} ticks from {} to {}",
+                        bank_131436226.max_tick_height() - bank_131436226.tick_height(),
+                        bank_131436226.tick_height(),
+                        bank_131436226.max_tick_height()
                     );
-                    last_signature_count = bank_131436226.signature_count();
-                    thread::sleep(time::Duration::from_millis(500));
-                }
 
-                // Advance tick count to complete banks, but last tick must be known value so blockhash matches
-                println!(
-                    "Advancing tick height {} ticks from {} to {}",
-                    bank_131436226.max_tick_height() - bank_131436226.tick_height(),
-                    bank_131436226.tick_height(),
-                    bank_131436226.max_tick_height()
-                );
+                    while bank_131436226.tick_height() < bank_131436226.max_tick_height() - 1 {
+                        bank_131436226.register_tick(&Hash::new_unique());
+                    }
 
-                while bank_131436226.tick_height() < bank_131436226.max_tick_height() - 1 {
-                    bank_131436226.register_tick(&Hash::new_unique());
-                }
+                    // Known value from logs
+                    let blockhash_131436226 =
+                        Hash::from_str("FJ2MsXEBtg9kzcqbh3Gohs19YRftmSsK6Toq2dMsuGK1").unwrap();
+                    bank_131436226.register_tick(&blockhash_131436226);
+                    println!("Recording final blockhash as: {:?}", blockhash_131436226);
+                    println!("Tick height advanced to {}", bank_131436226.tick_height());
 
-                // Known value from logs
-                let blockhash_131436226 =
-                    Hash::from_str("FJ2MsXEBtg9kzcqbh3Gohs19YRftmSsK6Toq2dMsuGK1").unwrap();
-                bank_131436226.register_tick(&blockhash_131436226);
-                println!("Recording final blockhash as: {:?}", blockhash_131436226);
-                println!("Tick height advanced to {}", bank_131436226.tick_height());
+                    bank_131436226.freeze();
 
-                bank_131436226.freeze();
-                println!(
-                    "Calculated hash for slot {}: {}",
-                    slot_of_interest,
-                    bank_131436226.hash()
-                );
+                    let correct_hash =
+                        Hash::from_str("7q2ZaPHLnUp2Gegnf5gyF35bQZmwJG6ziZafjshaRvqw").unwrap();
+                    if bank_131436226.hash() != correct_hash {
+                        println!(
+                            "Calculated hash for slot {}: {}",
+                            slot_of_interest,
+                            bank_131436226.hash()
+                        );
+                        if print_accounts_stats {
+                            let working_bank = bank_forks.working_bank();
+                            working_bank.print_accounts_stats();
+                        }
 
-                if print_accounts_stats {
-                    let working_bank = bank_forks.working_bank();
-                    working_bank.print_accounts_stats();
+                        if last_signature_count == expected_signature_count {
+                            break;
+                        } else {
+                            println!("Incorrect hash found due to bad replay");
+                        }
+                    } else {
+                        println!("Found correct hash, retrying");
+                    }
+
+                    bank_131436226.remove_unrooted_slots(&[(
+                        bank_131436226.slot(),
+                        bank_131436226.bank_id(),
+                    )]);
+                    // Clear the slot signatures from status cache for this slot.
+                    // TODO: What about RPC queries that had already cloned the Bank for this slot
+                    // and are looking up the signature for this slot?
+                    bank_131436226.clear_slot_signatures(bank_131436226.slot());
+
+                    // Create new bank for slot that we'll simulate as leader
+                    let mut bank_131436226_ =
+                        Bank::new_from_parent(bank_131436225, &leader, slot_of_interest);
+                    bank_131436226_.ns_per_slot = std::u128::MAX;
+                    bank_131436226 = Arc::new(bank_131436226_);
+                    poh_recorder.lock().unwrap().set_bank(&bank_131436226);
                 }
 
                 // Drop sender so banking threads exit
