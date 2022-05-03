@@ -2152,6 +2152,7 @@ fn main() {
                 assert!(slot_full);
 
                 let mut num_txs = 0;
+                let mut signatures = vec![];
                 let packet_batches: Vec<_> = slot_131436226_entries
                     .iter()
                     .filter_map(|entry| {
@@ -2166,6 +2167,7 @@ fn main() {
                         for (ix, tx) in entry.transactions.iter().enumerate() {
                             Packet::populate_packet(&mut packet_batch.packets[ix], None, &tx)
                                 .unwrap();
+                            signatures.push(tx.signatures[0]);
                         }
                         Some(packet_batch)
                     })
@@ -2178,22 +2180,24 @@ fn main() {
                         verified_sender.send(vec![packet_batch.clone()]).unwrap();
                     }
 
-                    // Known value from logs
-                    let expected_signature_count = 1543;
-                    let mut last_signature_count = bank_131436226.signature_count();
-
                     // Wait for bank to complete all the signatures
                     let now = time::Instant::now();
-                    while last_signature_count < expected_signature_count
-                        && now.elapsed().as_secs() < 10
-                    {
-                        println!(
-                            "Current signature count is {} out of {}",
-                            last_signature_count, expected_signature_count
-                        );
-                        last_signature_count = bank_131436226.signature_count();
-                        thread::sleep(time::Duration::from_millis(500));
+                    for signature in &signatures {
+                        loop {
+                            if let Some(_result) = bank_131436226.get_signature_status(signature) {
+                                break;
+                            } else if now.elapsed().as_secs() >= 10 {
+                                println!("Signature: {} never committed", signature);
+                                break;
+                            } else {
+                                thread::sleep(time::Duration::from_millis(500));
+                            }
+                        }
                     }
+
+                    // Known value from logs
+                    let expected_signature_count = 1543;
+                    let last_signature_count = bank_131436226.signature_count();
 
                     // Advance tick count to complete banks, but last tick must be known value so blockhash matches
                     println!(

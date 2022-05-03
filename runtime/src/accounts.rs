@@ -41,6 +41,7 @@ use {
         native_loader,
         nonce::{state::Versions as NonceVersions, State as NonceState},
         pubkey::Pubkey,
+        signature::Signature,
         system_program,
         sysvar::{self, instructions::construct_instructions_data, slot_hashes::SlotHashes},
         transaction::{
@@ -124,6 +125,7 @@ pub struct LoadedTransaction {
     pub program_indices: TransactionProgramIndices,
     pub rent: TransactionRent,
     pub rent_debits: RentDebits,
+    pub signature: Signature,
 }
 
 pub type TransactionLoadResult = (Result<LoadedTransaction>, Option<NonceFull>);
@@ -444,6 +446,7 @@ impl Accounts {
                     program_indices,
                     rent: tx_rent,
                     rent_debits,
+                    signature: tx.signatures()[0],
                 })
             } else {
                 error_counters.account_not_found += 1;

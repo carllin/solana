@@ -1697,6 +1697,7 @@ impl BankingStage {
         transactions: &[SanitizedTransaction],
         transaction_to_packet_indexes: &[usize],
         pending_indexes: &[usize],
+        log: &str,
     ) -> Vec<usize> {
         let filter =
             Self::prepare_filter_for_pending_transactions(transactions.len(), pending_indexes);
@@ -1722,6 +1723,17 @@ impl BankingStage {
                 .saturating_sub(FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET as usize),
             &mut error_counters,
         );
+
+        for (r, tx) in results.iter().zip(transactions) {
+            if r.0.is_err() {
+                println!(
+                    "TRANSACTION FILTERED: {} {} {:?}",
+                    log,
+                    tx.signatures()[0],
+                    r.0
+                );
+            }
+        }
 
         Self::filter_valid_transaction_indexes(&results, transaction_to_packet_indexes)
     }
@@ -1800,6 +1812,7 @@ impl BankingStage {
                     &transactions,
                     &transaction_to_packet_indexes,
                     retryable_transaction_indexes,
+                    "filter_retryable",
                 )
             },
             (),
@@ -1864,6 +1877,7 @@ impl BankingStage {
             &transactions,
             &transaction_to_packet_indexes,
             &unprocessed_tx_indexes,
+            "filter_end_of_slot",
         );
 
         inc_new_counter_info!(

@@ -126,6 +126,7 @@ impl QosService {
                     Ok(())
                 },
                 Err(e) => {
+                    println!("TRANSACTION FAILED: {}, cost model throttled", tx.signatures()[0]);
                     debug!("slot {:?}, transaction {:?}, cost {:?}, not fit into current block, '{:?}'", bank.slot(), tx, cost, e);
                     match e {
                         CostTrackerError::WouldExceedBlockMaxLimit => {

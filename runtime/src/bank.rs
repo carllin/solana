@@ -152,6 +152,7 @@ use {
         path::PathBuf,
         ptr,
         rc::Rc,
+        str::FromStr,
         sync::{
             atomic::{
                 AtomicBool, AtomicU64,
@@ -4119,53 +4120,73 @@ impl Bank {
         let mut execution_time = Measure::start("execution_time");
         let mut signature_count: u64 = 0;
 
+        let signature_of_interest = Signature::from_str(
+            "3kNtRCQ3xsjKTAhM6rm2HQFdkrWnx2QLpEjBzgQut3Srery1vFsZRMLd94vSf8p7H1ZHLhqRXmtxV9nCGJE59t7R",
+        )
+        .unwrap();
         let execution_results: Vec<TransactionExecutionResult> = loaded_transactions
             .iter_mut()
             .zip(sanitized_txs.iter())
-            .map(|(accs, tx)| match accs {
-                (Err(e), _nonce) => TransactionExecutionResult::NotExecuted(e.clone()),
-                (Ok(loaded_transaction), nonce) => {
-                    let mut feature_set_clone_time = Measure::start("feature_set_clone");
-                    let feature_set = self.feature_set.clone();
-                    feature_set_clone_time.stop();
-                    saturating_add_assign!(
-                        timings.execute_accessories.feature_set_clone_us,
-                        feature_set_clone_time.as_us()
-                    );
-
-                    let tx_wide_compute_cap = feature_set.is_active(&tx_wide_compute_cap::id());
-                    let mut compute_budget = self
-                        .compute_budget
-                        .unwrap_or_else(|| ComputeBudget::new(tx_wide_compute_cap));
-                    if tx_wide_compute_cap {
-                        let mut compute_budget_process_transaction_time =
-                            Measure::start("compute_budget_process_transaction_time");
-                        let process_transaction_result = compute_budget.process_message(
-                            tx.message(),
-                            feature_set.is_active(&requestable_heap_size::id()),
+            .map(|(accs, tx)| {
+                if tx.signatures()[0] == signature_of_interest {
+                    println!("Signature of interest result: {:?}", accs.0);
+                }
+                match accs {
+                    (Err(e), _nonce) => {
+                        println!(
+                            "TRANSACTION FAILED: {}, not executed error: {:?}",
+                            tx.signatures()[0],
+                            e
                         );
-                        compute_budget_process_transaction_time.stop();
-                        saturating_add_assign!(
-                            timings
-                                .execute_accessories
-                                .compute_budget_process_transaction_us,
-                            compute_budget_process_transaction_time.as_us()
-                        );
-                        if let Err(err) = process_transaction_result {
-                            return TransactionExecutionResult::NotExecuted(err);
-                        }
+                        TransactionExecutionResult::NotExecuted(e.clone())
                     }
+                    (Ok(loaded_transaction), nonce) => {
+                        let mut feature_set_clone_time = Measure::start("feature_set_clone");
+                        let feature_set = self.feature_set.clone();
+                        feature_set_clone_time.stop();
+                        saturating_add_assign!(
+                            timings.execute_accessories.feature_set_clone_us,
+                            feature_set_clone_time.as_us()
+                        );
 
-                    self.execute_loaded_transaction(
-                        tx,
-                        loaded_transaction,
-                        compute_budget,
-                        nonce.as_ref().map(DurableNonceFee::from),
-                        enable_cpi_recording,
-                        enable_log_recording,
-                        timings,
-                        &mut error_counters,
-                    )
+                        let tx_wide_compute_cap = feature_set.is_active(&tx_wide_compute_cap::id());
+                        let mut compute_budget = self
+                            .compute_budget
+                            .unwrap_or_else(|| ComputeBudget::new(tx_wide_compute_cap));
+                        if tx_wide_compute_cap {
+                            let mut compute_budget_process_transaction_time =
+                                Measure::start("compute_budget_process_transaction_time");
+                            let process_transaction_result = compute_budget.process_message(
+                                tx.message(),
+                                feature_set.is_active(&requestable_heap_size::id()),
+                            );
+                            compute_budget_process_transaction_time.stop();
+                            saturating_add_assign!(
+                                timings
+                                    .execute_accessories
+                                    .compute_budget_process_transaction_us,
+                                compute_budget_process_transaction_time.as_us()
+                            );
+                            if let Err(err) = process_transaction_result {
+                                println!(
+                                    "TRANSACTION FAILED: {}, execution error: {:?}",
+                                    loaded_transaction.signature, err
+                                );
+                                return TransactionExecutionResult::NotExecuted(err);
+                            }
+                        }
+
+                        self.execute_loaded_transaction(
+                            tx,
+                            loaded_transaction,
+                            compute_budget,
+                            nonce.as_ref().map(DurableNonceFee::from),
+                            enable_cpi_recording,
+                            enable_log_recording,
+                            timings,
+                            &mut error_counters,
+                        )
+                    }
                 }
             })
             .collect();
