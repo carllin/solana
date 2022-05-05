@@ -1807,13 +1807,14 @@ impl BankingStage {
         // Filter out transactions that can't be retried
         let (filtered_retryable_transaction_indexes, filter_retryable_packets_time) = Measure::this(
             |_| {
-                Self::filter_pending_packets_from_pending_txs(
+                /*Self::filter_pending_packets_from_pending_txs(
                     bank,
                     &transactions,
                     &transaction_to_packet_indexes,
                     retryable_transaction_indexes,
                     "filter_retryable",
-                )
+                )*/
+                retryable_transaction_indexes.to_vec()
             },
             (),
             "filter_pending_packets_time",
