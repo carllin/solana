@@ -21,7 +21,7 @@ bitflags! {
         const FORWARDED      = 0b00000010;
         const REPAIR         = 0b00000100;
         const SIMPLE_VOTE_TX = 0b00001000;
-        const TRACER_TX      = 0b00010000;
+        const TRACER_PACKET      = 0b00010000;
     }
 }
 
@@ -134,8 +134,8 @@ impl Meta {
     }
 
     #[inline]
-    pub fn is_tracer_tx(&self) -> bool {
-        self.flags.contains(PacketFlags::TRACER_TX)
+    pub fn is_tracer_packet(&self) -> bool {
+        self.flags.contains(PacketFlags::TRACER_PACKET)
     }
 }
 
