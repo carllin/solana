@@ -25,17 +25,20 @@ fn test_packet_with_size(size: usize, rng: &mut ThreadRng) -> Vec<u8> {
 fn do_bench_dedup_packets(bencher: &mut Bencher, mut batches: Vec<PacketBatch>) {
     // verify packets
     let mut deduper = sigverify::Deduper::new(1_000_000, Duration::from_millis(2_000));
+    let mut increment = 0;
     bencher.iter(|| {
-        let _ans = deduper.dedup_packets_and_count_discards(&mut batches, |_| ());
+        let _ans = deduper.dedup_packets_and_count_discards(&mut batches, |_| {
+            increment += 1;
+        });
         deduper.reset();
         batches
             .iter_mut()
             .for_each(|b| b.packets.iter_mut().for_each(|p| p.meta.set_discard(false)));
+        increment = 0;
     });
 }
 
 #[bench]
-#[ignore]
 fn bench_dedup_same_small_packets(bencher: &mut Bencher) {
     let mut rng = rand::thread_rng();
     let small_packet = test_packet_with_size(128, &mut rng);
