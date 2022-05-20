@@ -190,6 +190,99 @@ pub fn count_valid_packets(
         .sum()
 }
 
+fn do_get_pubkey_start(packet: &Packet) -> Result<usize, PacketError> {
+    // read the length of Transaction.signatures (serialized with short_vec)
+    let (sig_len_untrusted, sig_size) =
+        decode_shortu16_len(&packet.data).map_err(|_| PacketError::InvalidShortVec)?;
+
+    // Using msg_start_offset which is based on sig_len_untrusted introduces uncertainty.
+    // Ultimately, the actual sigverify will determine the uncertainty.
+    let msg_start_offset = sig_len_untrusted
+        .checked_mul(size_of::<Signature>())
+        .and_then(|v| v.checked_add(sig_size))
+        .ok_or(PacketError::InvalidLen)?;
+
+    // Determine the start of the message header by checking the message prefix bit.
+    let msg_header_offset = {
+        // Packet should have data for prefix bit
+        if msg_start_offset >= packet.meta.size {
+            return Err(PacketError::InvalidSignatureLen);
+        }
+
+        // next byte indicates if the transaction is versioned. If the top bit
+        // is set, the remaining bits encode a version number. If the top bit is
+        // not set, this byte is the first byte of the message header.
+        let message_prefix = packet.data[msg_start_offset];
+        if message_prefix & MESSAGE_VERSION_PREFIX != 0 {
+            let version = message_prefix & !MESSAGE_VERSION_PREFIX;
+            match version {
+                0 => {
+                    // header begins immediately after prefix byte
+                    msg_start_offset
+                        .checked_add(1)
+                        .ok_or(PacketError::InvalidLen)?
+                }
+
+                // currently only v0 is supported
+                _ => return Err(PacketError::UnsupportedVersion),
+            }
+        } else {
+            msg_start_offset
+        }
+    };
+
+    let msg_header_offset_plus_one = msg_header_offset
+        .checked_add(1)
+        .ok_or(PacketError::InvalidLen)?;
+
+    // Packet should have data at least for MessageHeader and 1 byte for Message.account_keys.len
+    let _ = msg_header_offset_plus_one
+        .checked_add(MESSAGE_HEADER_LENGTH)
+        .filter(|v| *v <= packet.meta.size)
+        .ok_or(PacketError::InvalidSignatureLen)?;
+
+    // read MessageHeader.num_required_signatures (serialized with u8)
+    let sig_len_maybe_trusted = packet.data[msg_header_offset];
+
+    let message_account_keys_len_offset = msg_header_offset
+        .checked_add(MESSAGE_HEADER_LENGTH)
+        .ok_or(PacketError::InvalidSignatureLen)?;
+
+    // This reads and compares the MessageHeader num_required_signatures and
+    // num_readonly_signed_accounts bytes. If num_required_signatures is not larger than
+    // num_readonly_signed_accounts, the first account is not debitable, and cannot be charged
+    // required transaction fees.
+    let readonly_signer_offset = msg_header_offset_plus_one;
+    if sig_len_maybe_trusted <= packet.data[readonly_signer_offset] {
+        return Err(PacketError::PayerNotWritable);
+    }
+
+    if usize::from(sig_len_maybe_trusted) != sig_len_untrusted {
+        return Err(PacketError::MismatchSignatureLen);
+    }
+
+    // read the length of Message.account_keys (serialized with short_vec)
+    let (pubkey_len, pubkey_len_size) =
+        decode_shortu16_len(&packet.data[message_account_keys_len_offset..])
+            .map_err(|_| PacketError::InvalidShortVec)?;
+
+    let pubkey_start = message_account_keys_len_offset
+        .checked_add(pubkey_len_size)
+        .ok_or(PacketError::InvalidPubkeyLen)?;
+
+    let _ = pubkey_len
+        .checked_mul(size_of::<Pubkey>())
+        .and_then(|v| v.checked_add(pubkey_start))
+        .filter(|v| *v <= packet.meta.size)
+        .ok_or(PacketError::InvalidPubkeyLen)?;
+
+    if pubkey_len < sig_len_untrusted {
+        return Err(PacketError::InvalidPubkeyLen);
+    }
+
+    Ok(pubkey_start)
+}
+
 // internal function to be unit-tested; should be used only by get_packet_offsets
 fn do_get_packet_offsets(
     packet: &Packet,
@@ -307,6 +400,23 @@ fn do_get_packet_offsets(
         u32::try_from(pubkey_start)?,
         u32::try_from(pubkey_len)?,
     ))
+}
+
+pub fn check_for_tracer_packet(packet: &mut Packet) -> bool {
+    let first_pubkey_start = do_get_pubkey_start(packet);
+    if let Ok(first_pubkey_start) = first_pubkey_start {
+        // Check if the first key is the tracer key
+        let first_pubkey_end = first_pubkey_start.saturating_add(size_of::<Pubkey>());
+
+        // Check for tracer pubkey
+        if &packet.data[first_pubkey_start..first_pubkey_end] == TRACER_KEY.as_ref() {
+            packet.meta.flags |= PacketFlags::TRACER_PACKET;
+        }
+    } else {
+        // Should we mark these transactions as dropped, current code in `get_packet_offsets()`
+        // just returning all zeroed `PacketOffsets`
+    }
+    true
 }
 
 fn get_packet_offsets(
