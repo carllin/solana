@@ -55,15 +55,12 @@ impl TransactionSigVerifier {
 
 impl SigVerifier for TransactionSigVerifier {
     type SendType = BankingPacketBatch;
-    fn process_received_packet(&mut self, packet: &mut Packet) {
+    fn process_received_packet(&mut self, packet: &mut Packet, is_dup: bool) {
         if packet.meta.is_tracer_packet() {
             self.tracer_packet_stats.total_tracer_packets_received += 1;
-        }
-    }
-
-    fn process_deduped_packet(&mut self, packet: &Packet) {
-        if packet.meta.is_tracer_packet() {
-            self.tracer_packet_stats.total_tracer_packets_deduped += 1;
+            if is_dup {
+                self.tracer_packet_stats.total_tracer_packets_deduped += 1;
+            }
         }
     }
 
