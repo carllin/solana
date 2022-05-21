@@ -31,13 +31,16 @@ fn do_bench_dedup_packets(
     let mut deduper = sigverify::Deduper::new(1_000_000, Duration::from_millis(2_000));
     let mut total_deduped = 0;
     bencher.iter(|| {
-        let _ans =
-            deduper.dedup_packets_and_count_discards(&mut batches, |received_packet, _is_dup| {
+        let _ans = deduper.dedup_packets_and_count_discards(
+            &mut batches,
+            #[inline]
+            |received_packet, _is_dup| {
                 if should_check_for_tracer {
                     check_for_tracer_packet(received_packet);
                     total_deduped += 1;
                 }
-            });
+            },
+        );
         deduper.reset();
         total_deduped = 0;
         batches

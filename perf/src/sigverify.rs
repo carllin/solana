@@ -402,6 +402,7 @@ fn do_get_packet_offsets(
     ))
 }
 
+#[inline]
 pub fn check_for_tracer_packet(packet: &mut Packet) -> bool {
     /*let first_pubkey_start = do_get_pubkey_start(packet);
     if let Ok(first_pubkey_start) = first_pubkey_start {
@@ -424,7 +425,7 @@ pub fn check_for_tracer_packet(packet: &mut Packet) -> bool {
             &packet.data[first_pubkey_start..first_pubkey_end] == TRACER_KEY.as_ref();
         if is_tracer_packet {
             packet.meta.flags |= PacketFlags::TRACER_PACKET;
-        }
+        }   
         is_tracer_packet
     } else {
         false

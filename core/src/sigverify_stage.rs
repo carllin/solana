@@ -262,19 +262,25 @@ impl SigVerifyStage {
         );
 
         let mut dedup_time = Measure::start("sigverify_dedup_time");
-        let discard_or_dedup_fail =
-            deduper.dedup_packets_and_count_discards(&mut batches, |received_packet, is_dup| {
+        let discard_or_dedup_fail = deduper.dedup_packets_and_count_discards(
+            &mut batches,
+            #[inline]
+            |received_packet, is_dup| {
                 verifier.process_received_packet(received_packet, is_dup);
-            }) as usize;
+            },
+        ) as usize;
         dedup_time.stop();
         let num_unique = num_packets.saturating_sub(discard_or_dedup_fail as usize);
 
         let mut discard_time = Measure::start("sigverify_discard_time");
         let mut num_valid_packets = num_unique;
         if num_unique > MAX_SIGVERIFY_BATCH {
-            Self::discard_excess_packets(&mut batches, MAX_SIGVERIFY_BATCH, |excess_packet| {
-                verifier.process_excess_packet(excess_packet)
-            });
+            Self::discard_excess_packets(
+                &mut batches,
+                MAX_SIGVERIFY_BATCH,
+                #[inline]
+                |excess_packet| verifier.process_excess_packet(excess_packet),
+            );
             num_valid_packets = MAX_SIGVERIFY_BATCH;
         }
         let excess_fail = num_unique.saturating_sub(MAX_SIGVERIFY_BATCH);
@@ -285,9 +291,11 @@ impl SigVerifyStage {
         verify_time.stop();
 
         let mut shrink_time = Measure::start("sigverify_shrink_time");
-        let num_valid_packets = count_valid_packets(&batches, |valid_packet| {
-            verifier.process_passed_sigverify_packet(valid_packet)
-        });
+        let num_valid_packets = count_valid_packets(
+            &batches,
+            #[inline]
+            |valid_packet| verifier.process_passed_sigverify_packet(valid_packet),
+        );
         let start_len = batches.len();
         const MAX_EMPTY_BATCH_RATIO: usize = 4;
         if num_packets > num_valid_packets.saturating_mul(MAX_EMPTY_BATCH_RATIO) {
