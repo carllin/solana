@@ -403,7 +403,7 @@ fn do_get_packet_offsets(
 }
 
 pub fn check_for_tracer_packet(packet: &mut Packet) -> bool {
-    let first_pubkey_start = do_get_pubkey_start(packet);
+    /*let first_pubkey_start = do_get_pubkey_start(packet);
     if let Ok(first_pubkey_start) = first_pubkey_start {
         // Check if the first key is the tracer key
         let first_pubkey_end = first_pubkey_start.saturating_add(size_of::<Pubkey>());
@@ -415,8 +415,20 @@ pub fn check_for_tracer_packet(packet: &mut Packet) -> bool {
     } else {
         // Should we mark these transactions as dropped, current code in `get_packet_offsets()`
         // just returning all zeroed `PacketOffsets`
+    }*/
+    let first_pubkey_start: usize = 15;
+    let first_pubkey_end = first_pubkey_start.saturating_add(size_of::<Pubkey>());
+    // Check for tracer pubkey
+    if packet.meta.size > first_pubkey_start {
+        let is_tracer_packet =
+            &packet.data[first_pubkey_start..first_pubkey_end] == TRACER_KEY.as_ref();
+        if is_tracer_packet {
+            packet.meta.flags |= PacketFlags::TRACER_PACKET;
+        }
+        is_tracer_packet
+    } else {
+        false
     }
-    true
 }
 
 fn get_packet_offsets(
