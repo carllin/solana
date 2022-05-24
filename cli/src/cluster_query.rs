@@ -49,7 +49,7 @@ use {
         pubkey::Pubkey,
         rent::Rent,
         rpc_port::DEFAULT_RPC_PORT_STR,
-        signature::Signature,
+        signature::{Signature, SignerError},
         slot_history,
         stake::{self, state::StakeState},
         system_instruction,
@@ -248,12 +248,12 @@ impl ClusterQuerySubCommands for App<'_, '_> {
                         .help("Wait interval seconds between submitting the next transaction"),
                 )
                 .arg(
-                    Arg::with_name("count")
-                        .short("c")
-                        .long("count")
+                    Arg::with_name("num_batches")
+                        .short("n")
+                        .long("num-batches")
                         .value_name("NUMBER")
                         .takes_value(true)
-                        .help("Stop after submitting count transactions"),
+                        .help("Stop after submitting num_batches batches each of size 'batch_size' transactions"),
                 )
                 .arg(
                     Arg::with_name("print_timestamp")
@@ -277,6 +277,15 @@ impl ClusterQuerySubCommands for App<'_, '_> {
                         .value_name("MICRO-LAMPORTS")
                         .takes_value(true)
                         .help("Set the price in micro-lamports of each transaction compute unit"),
+                )
+                .arg(
+                    Arg::with_name("batch_size")
+                        .long("batch-size")
+                        .value_name("BATCH-SIZE")
+                        .takes_value(true)
+                        .default_value("1")
+                        .required(true)
+                        .help("Pings per batch"),
                 )
                 .arg(blockhash_arg()),
         )
@@ -515,8 +524,8 @@ pub fn parse_cluster_ping(
     wallet_manager: &mut Option<Arc<RemoteWalletManager>>,
 ) -> Result<CliCommandInfo, CliError> {
     let interval = Duration::from_secs(value_t_or_exit!(matches, "interval", u64));
-    let count = if matches.is_present("count") {
-        Some(value_t_or_exit!(matches, "count", u64))
+    let num_batches = if matches.is_present("num_batches") {
+        Some(value_t_or_exit!(matches, "num_batches", u64))
     } else {
         None
     };
@@ -524,14 +533,16 @@ pub fn parse_cluster_ping(
     let blockhash = value_of(matches, BLOCKHASH_ARG.name);
     let print_timestamp = matches.is_present("print_timestamp");
     let compute_unit_price = value_of(matches, "compute_unit_price");
+    let batch_size = value_of(matches, "batch_size").unwrap();
     Ok(CliCommandInfo {
         command: CliCommand::Ping {
             interval,
-            count,
+            num_batches,
             timeout,
             blockhash,
             print_timestamp,
             compute_unit_price,
+            batch_size,
         },
         signers: vec![default_signer.signer_from_path(matches, wallet_manager)?],
     })
@@ -1360,11 +1371,12 @@ pub fn process_ping(
     rpc_client: &RpcClient,
     config: &CliConfig,
     interval: &Duration,
-    count: &Option<u64>,
+    num_batches: &Option<u64>,
     timeout: &Duration,
     fixed_blockhash: &Option<Hash>,
     print_timestamp: bool,
     compute_unit_price: &Option<u64>,
+    batch_size: u64,
 ) -> ProcessResult {
     let (signal_sender, signal_receiver) = unbounded();
     ctrlc::set_handler(move || {
@@ -1390,7 +1402,7 @@ pub fn process_ping(
         }
     }
 
-    'mainloop: for seq in 0..count.unwrap_or(std::u64::MAX) {
+    'mainloop: for seq in 0..num_batches.unwrap_or(std::u64::MAX) {
         let now = Instant::now();
         if fixed_blockhash.is_none() && now.duration_since(blockhash_acquired).as_secs() > 60 {
             // Fetch a new blockhash every minute
@@ -1401,22 +1413,27 @@ pub fn process_ping(
         }
 
         let to = config.signers[0].pubkey();
-        lamports += 1;
 
-        let build_message = |lamports| {
-            let mut ixs = vec![system_instruction::transfer(
-                &config.signers[0].pubkey(),
-                &to,
-                lamports,
-            )];
-            if let Some(compute_unit_price) = compute_unit_price {
-                ixs.push(ComputeBudgetInstruction::set_compute_unit_price(
-                    *compute_unit_price,
-                ));
-            }
-            Message::new(&ixs, Some(&config.signers[0].pubkey()))
-        };
-        let (message, _) = resolve_spend_tx_and_check_account_balance(
+        let mut total_batch_lamports = 0;
+        let batch_messages: Vec<Message> = (0..batch_size)
+            .map(|_i| {
+                let mut ixs = vec![system_instruction::transfer(
+                    &config.signers[0].pubkey(),
+                    &to,
+                    lamports,
+                )];
+                if let Some(compute_unit_price) = compute_unit_price {
+                    ixs.push(ComputeBudgetInstruction::set_compute_unit_price(
+                        *compute_unit_price,
+                    ));
+                }
+                total_batch_lamports += lamports;
+                lamports += 1;
+                Message::new(&ixs, Some(&config.signers[0].pubkey()))
+            })
+            .collect();
+
+        /*let (message, _) = resolve_spend_tx_and_check_account_balance(
             rpc_client,
             false,
             SpendAmount::Some(lamports),
@@ -1424,9 +1441,17 @@ pub fn process_ping(
             &config.signers[0].pubkey(),
             build_message,
             config.commitment,
-        )?;
-        let mut tx = Transaction::new_unsigned(message);
-        tx.try_sign(&config.signers, blockhash)?;
+        )?;*/
+
+        let transactions: Result<Vec<Transaction>, SignerError> = batch_messages
+            .into_iter()
+            .map(|message| {
+                let mut tx = Transaction::new_unsigned(message);
+                tx.try_sign(&config.signers, blockhash).map(|_| tx)
+            })
+            .collect();
+
+        let transactions = transactions?;
 
         let timestamp = || {
             let micros = SystemTime::now()
@@ -1436,90 +1461,96 @@ pub fn process_ping(
             format!("[{}.{:06}] ", micros / 1_000_000, micros % 1_000_000)
         };
 
-        match rpc_client.send_transaction(&tx) {
-            Ok(signature) => {
-                let transaction_sent = Instant::now();
-                loop {
-                    let signature_status = rpc_client.get_signature_status(&signature)?;
-                    let elapsed_time = Instant::now().duration_since(transaction_sent);
-                    if let Some(transaction_status) = signature_status {
-                        match transaction_status {
-                            Ok(()) => {
-                                let elapsed_time_millis = elapsed_time.as_millis() as u64;
-                                confirmation_time.push_back(elapsed_time_millis);
-                                let cli_ping_data = CliPingData {
-                                    success: true,
-                                    signature: Some(signature.to_string()),
-                                    ms: Some(elapsed_time_millis),
-                                    error: None,
-                                    timestamp: timestamp(),
-                                    print_timestamp,
-                                    sequence: seq,
-                                    lamports: Some(lamports),
-                                };
-                                eprint!("{}", cli_ping_data);
-                                cli_pings.push(cli_ping_data);
-                                confirmed_count += 1;
-                            }
-                            Err(err) => {
-                                let cli_ping_data = CliPingData {
-                                    success: false,
-                                    signature: Some(signature.to_string()),
-                                    ms: None,
-                                    error: Some(err.to_string()),
-                                    timestamp: timestamp(),
-                                    print_timestamp,
-                                    sequence: seq,
-                                    lamports: None,
-                                };
-                                eprint!("{}", cli_ping_data);
-                                cli_pings.push(cli_ping_data);
-                            }
+        let valid_signatures: Vec<Signature> = transactions
+            .iter()
+            .filter_map(|tx| {
+                let send_result = rpc_client.send_transaction(tx);
+                if let Err(err) = &send_result {
+                    let cli_ping_data = CliPingData {
+                        success: false,
+                        signature: None,
+                        ms: None,
+                        error: Some(err.to_string()),
+                        timestamp: timestamp(),
+                        print_timestamp,
+                        sequence: seq,
+                        lamports: None,
+                    };
+                    eprint!("{}", cli_ping_data);
+                    cli_pings.push(cli_ping_data);
+                }
+                send_result.ok()
+            })
+            .collect();
+
+        let transaction_sent = Instant::now();
+        for signature in valid_signatures {
+            loop {
+                let signature_status = rpc_client.get_signature_status(&signature)?;
+                let elapsed_time = Instant::now().duration_since(transaction_sent);
+                if let Some(transaction_status) = signature_status {
+                    match transaction_status {
+                        Ok(()) => {
+                            let elapsed_time_millis = elapsed_time.as_millis() as u64;
+                            confirmation_time.push_back(elapsed_time_millis);
+                            let cli_ping_data = CliPingData {
+                                success: true,
+                                signature: Some(signature.to_string()),
+                                ms: Some(elapsed_time_millis),
+                                error: None,
+                                timestamp: timestamp(),
+                                print_timestamp,
+                                sequence: seq,
+                                lamports: Some(lamports),
+                            };
+                            eprint!("{}", cli_ping_data);
+                            cli_pings.push(cli_ping_data);
+                            confirmed_count += 1;
                         }
-                        break;
+                        Err(err) => {
+                            let cli_ping_data = CliPingData {
+                                success: false,
+                                signature: Some(signature.to_string()),
+                                ms: None,
+                                error: Some(err.to_string()),
+                                timestamp: timestamp(),
+                                print_timestamp,
+                                sequence: seq,
+                                lamports: None,
+                            };
+                            eprint!("{}", cli_ping_data);
+                            cli_pings.push(cli_ping_data);
+                        }
                     }
+                    break;
+                }
 
-                    if elapsed_time >= *timeout {
-                        let cli_ping_data = CliPingData {
-                            success: false,
-                            signature: Some(signature.to_string()),
-                            ms: None,
-                            error: None,
-                            timestamp: timestamp(),
-                            print_timestamp,
-                            sequence: seq,
-                            lamports: None,
-                        };
-                        eprint!("{}", cli_ping_data);
-                        cli_pings.push(cli_ping_data);
-                        break;
-                    }
+                if elapsed_time >= *timeout {
+                    let cli_ping_data = CliPingData {
+                        success: false,
+                        signature: Some(signature.to_string()),
+                        ms: None,
+                        error: None,
+                        timestamp: timestamp(),
+                        print_timestamp,
+                        sequence: seq,
+                        lamports: None,
+                    };
+                    eprint!("{}", cli_ping_data);
+                    cli_pings.push(cli_ping_data);
+                    break;
+                }
 
-                    // Sleep for half a slot
-                    if signal_receiver
-                        .recv_timeout(Duration::from_millis(clock::DEFAULT_MS_PER_SLOT / 2))
-                        .is_ok()
-                    {
-                        break 'mainloop;
-                    }
+                // Sleep for half a slot
+                if signal_receiver
+                    .recv_timeout(Duration::from_millis(clock::DEFAULT_MS_PER_SLOT / 2))
+                    .is_ok()
+                {
+                    break 'mainloop;
                 }
             }
-            Err(err) => {
-                let cli_ping_data = CliPingData {
-                    success: false,
-                    signature: None,
-                    ms: None,
-                    error: Some(err.to_string()),
-                    timestamp: timestamp(),
-                    print_timestamp,
-                    sequence: seq,
-                    lamports: None,
-                };
-                eprint!("{}", cli_ping_data);
-                cli_pings.push(cli_ping_data);
-            }
         }
-        submit_count += 1;
+        submit_count += batch_size as u32;
 
         if signal_receiver.recv_timeout(*interval).is_ok() {
             break 'mainloop;

@@ -85,11 +85,12 @@ pub enum CliCommand {
     },
     Ping {
         interval: Duration,
-        count: Option<u64>,
+        num_batches: Option<u64>,
         timeout: Duration,
         blockhash: Option<Hash>,
         print_timestamp: bool,
         compute_unit_price: Option<u64>,
+        batch_size: u64,
     },
     Rent {
         data_length: usize,
@@ -873,20 +874,22 @@ pub fn process_command(config: &CliConfig) -> ProcessResult {
         CliCommand::Logs { filter } => process_logs(config, filter),
         CliCommand::Ping {
             interval,
-            count,
+            num_batches,
             timeout,
             blockhash,
             print_timestamp,
             compute_unit_price,
+            batch_size,
         } => process_ping(
             &rpc_client,
             config,
             interval,
-            count,
+            num_batches,
             timeout,
             blockhash,
             *print_timestamp,
             compute_unit_price,
+            *batch_size,
         ),
         CliCommand::Rent {
             data_length,
