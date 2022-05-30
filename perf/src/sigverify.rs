@@ -27,15 +27,16 @@ use {
         convert::TryFrom,
         hash::Hasher,
         mem::size_of,
+        str::FromStr,
         sync::atomic::{AtomicBool, AtomicU64, Ordering},
         time::{Duration, Instant},
     },
 };
 
-// Representing key tKeYE4wtowRb8yRroZShTipE18YVnqwXjsSAoNsFU6g
+// Representing key 7TXUq35MCNudwe2jvFhFC5Ao4zXKpbgmdWyqsgF13u7J
 const TRACER_KEY_BYTES: [u8; 32] = [
-    13, 37, 180, 170, 252, 137, 36, 194, 183, 143, 161, 193, 201, 207, 211, 23, 189, 93, 33, 110,
-    155, 90, 30, 39, 116, 115, 238, 38, 126, 21, 232, 133,
+    95, 241, 175, 171, 116, 171, 230, 150, 98, 210, 184, 250, 98, 58, 13, 196, 187, 30, 57, 82,
+    202, 121, 164, 132, 34, 205, 210, 141, 128, 224, 228, 141,
 ];
 const TRACER_KEY: Pubkey = Pubkey::new_from_array(TRACER_KEY_BYTES);
 const TRACER_KEY_OFFSET_IN_TRANSACTION: usize = 69;
