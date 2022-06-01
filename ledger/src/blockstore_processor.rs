@@ -14,7 +14,7 @@ use {
     },
     solana_measure::measure::Measure,
     solana_metrics::{datapoint_error, inc_new_counter_debug},
-    solana_program_runtime::timings::{ExecuteTimingType, ExecuteTimings},
+    solana_program_runtime::timings::{ExecuteTimingType, ExecuteTimings, ThreadExecuteTimings},
     solana_rayon_threadlimit::{get_max_thread_count, get_thread_count},
     solana_runtime::{
         accounts_background_service::AbsRequestSender,
@@ -262,40 +262,100 @@ fn execute_batches_internal(
     entry_callback: Option<&ProcessCallback>,
     transaction_status_sender: Option<&TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    timings: &mut ExecuteTimings,
+    cumulative_timings: &mut ExecuteTimings,
+    end_to_end_timings: &mut ThreadExecuteTimings,
     cost_capacity_meter: Arc<RwLock<BlockCostCapacityMeter>>,
     tx_costs: &[u64],
 ) -> Result<()> {
     inc_new_counter_debug!("bank-par_execute_entries-count", batches.len());
-    let (results, new_timings): (Vec<Result<()>>, Vec<ExecuteTimings>) =
-        PAR_THREAD_POOL.install(|| {
-            batches
-                .into_par_iter()
-                .enumerate()
-                .map(|(index, batch)| {
-                    let mut timings = ExecuteTimings::default();
-                    let result = execute_batch(
-                        batch,
-                        bank,
-                        transaction_status_sender,
-                        replay_vote_sender,
-                        &mut timings,
-                        cost_capacity_meter.clone(),
-                        tx_costs[index],
-                    );
-                    if let Some(entry_callback) = entry_callback {
-                        entry_callback(bank);
-                    }
-                    (result, timings)
-                })
-                .unzip()
-        });
-    timings.saturating_add_in_place(ExecuteTimingType::TotalBatchesLen, batches.len() as u64);
-    timings.saturating_add_in_place(ExecuteTimingType::NumExecuteBatches, 1);
-    for timing in new_timings {
-        timings.accumulate(&timing);
+    let execution_timings_per_thread: RwLock<HashMap<usize, ThreadExecuteTimings>> =
+        RwLock::new(HashMap::new());
+
+    let results: Vec<Result<()>> = PAR_THREAD_POOL.install(|| {
+        batches
+            .into_par_iter()
+            .enumerate()
+            .map(|(index, batch)| {
+                let transaction_count = batch.sanitized_transactions().len() as u64;
+                let mut timings = ExecuteTimings::default();
+                let (result, execute_batches_time) = Measure::this(
+                    |_| {
+                        let result = execute_batch(
+                            batch,
+                            bank,
+                            transaction_status_sender,
+                            replay_vote_sender,
+                            &mut timings,
+                            cost_capacity_meter.clone(),
+                            tx_costs[index],
+                        );
+                        if let Some(entry_callback) = entry_callback {
+                            entry_callback(bank);
+                        }
+                        result
+                    },
+                    (),
+                    "execute_batch",
+                );
+
+                let thread_index = PAR_THREAD_POOL.current_thread_index().unwrap();
+                execution_timings_per_thread
+                    .write()
+                    .unwrap()
+                    .entry(thread_index)
+                    .and_modify(|thread_execution_time| {
+                        let ThreadExecuteTimings {
+                            total_thread_us,
+                            total_transactions_executed,
+                            execute_timings: total_thread_execute_timings,
+                        } = thread_execution_time;
+                        *total_thread_us += execute_batches_time.as_us();
+                        *total_transactions_executed += transaction_count;
+                        total_thread_execute_timings
+                            .saturating_add_in_place(ExecuteTimingType::TotalBatchesLen, 1);
+                        total_thread_execute_timings.accumulate(&timings);
+                    })
+                    .or_insert(ThreadExecuteTimings {
+                        total_thread_us: execute_batches_time.as_us(),
+                        total_transactions_executed: transaction_count,
+                        execute_timings: timings,
+                    });
+                result
+            })
+            .collect()
+    });
+    cumulative_timings
+        .saturating_add_in_place(ExecuteTimingType::TotalBatchesLen, batches.len() as u64);
+    cumulative_timings.saturating_add_in_place(ExecuteTimingType::NumExecuteBatches, 1);
+
+    let mut current_max_thread_execution_time: Option<ThreadExecuteTimings> = None;
+    for (_, thread_execution_time) in execution_timings_per_thread
+        .into_inner()
+        .unwrap()
+        .into_iter()
+    {
+        let ThreadExecuteTimings {
+            total_thread_us,
+            execute_timings,
+            ..
+        } = &thread_execution_time;
+        cumulative_timings.accumulate(execute_timings);
+        if *total_thread_us
+            > current_max_thread_execution_time
+                .as_ref()
+                .map(|thread_execution_time| thread_execution_time.total_thread_us)
+                .unwrap_or(0)
+        {
+            current_max_thread_execution_time = Some(thread_execution_time);
+        }
     }
 
+    if let Some(current_max_thread_execution_time) = current_max_thread_execution_time {
+        end_to_end_timings.accumulate(&current_max_thread_execution_time);
+        end_to_end_timings
+            .execute_timings
+            .saturating_add_in_place(ExecuteTimingType::NumExecuteBatches, 1);
+    };
     first_err(&results)
 }
 
@@ -320,7 +380,8 @@ fn execute_batches(
     entry_callback: Option<&ProcessCallback>,
     transaction_status_sender: Option<&TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
-    timings: &mut ExecuteTimings,
+    cumulative_timings: &mut ExecuteTimings,
+    end_to_end_timings: &mut ThreadExecuteTimings,
     cost_capacity_meter: Arc<RwLock<BlockCostCapacityMeter>>,
     cost_model: &CostModel,
 ) -> Result<()> {
@@ -400,7 +461,8 @@ fn execute_batches(
         entry_callback,
         transaction_status_sender,
         replay_vote_sender,
-        timings,
+        cumulative_timings,
+        end_to_end_timings,
         cost_capacity_meter,
         &tx_batch_costs,
     )
@@ -426,6 +488,7 @@ pub fn process_entries_for_tests(
     };
 
     let mut timings = ExecuteTimings::default();
+    let mut end_to_end_execute_timings = ThreadExecuteTimings::default();
     let mut entries = entry::verify_transactions(entries, Arc::new(verify_transaction))?;
     let result = process_entries_with_callback(
         bank,
@@ -436,6 +499,7 @@ pub fn process_entries_for_tests(
         replay_vote_sender,
         None,
         &mut timings,
+        &mut end_to_end_execute_timings,
         Arc::new(RwLock::new(BlockCostCapacityMeter::default())),
     );
 
@@ -444,6 +508,7 @@ pub fn process_entries_for_tests(
 }
 
 // Note: If randomize is true this will shuffle entries' transactions in-place.
+#[allow(clippy::too_many_arguments)]
 fn process_entries_with_callback(
     bank: &Arc<Bank>,
     entries: &mut [EntryType],
@@ -452,7 +517,8 @@ fn process_entries_with_callback(
     transaction_status_sender: Option<&TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     transaction_cost_metrics_sender: Option<&TransactionCostMetricsSender>,
-    timings: &mut ExecuteTimings,
+    cumulative_timings: &mut ExecuteTimings,
+    end_to_end_timings: &mut ThreadExecuteTimings,
     cost_capacity_meter: Arc<RwLock<BlockCostCapacityMeter>>,
 ) -> Result<()> {
     // accumulator for entries that can be processed in parallel
@@ -475,7 +541,8 @@ fn process_entries_with_callback(
                         entry_callback,
                         transaction_status_sender,
                         replay_vote_sender,
-                        timings,
+                        cumulative_timings,
+                        end_to_end_timings,
                         cost_capacity_meter.clone(),
                         &cost_model,
                     )?;
@@ -533,7 +600,8 @@ fn process_entries_with_callback(
                             entry_callback,
                             transaction_status_sender,
                             replay_vote_sender,
-                            timings,
+                            cumulative_timings,
+                            end_to_end_timings,
                             cost_capacity_meter.clone(),
                             &cost_model,
                         )?;
@@ -549,7 +617,8 @@ fn process_entries_with_callback(
         entry_callback,
         transaction_status_sender,
         replay_vote_sender,
-        timings,
+        cumulative_timings,
+        end_to_end_timings,
         cost_capacity_meter,
         &cost_model,
     )?;
@@ -877,6 +946,7 @@ pub struct ConfirmationTiming {
     pub fetch_elapsed: u64,
     pub fetch_fail_elapsed: u64,
     pub execute_timings: ExecuteTimings,
+    pub end_to_end_execute_timings: ThreadExecuteTimings,
 }
 
 impl Default for ConfirmationTiming {
@@ -889,6 +959,7 @@ impl Default for ConfirmationTiming {
             fetch_elapsed: 0,
             fetch_fail_elapsed: 0,
             execute_timings: ExecuteTimings::default(),
+            end_to_end_execute_timings: ThreadExecuteTimings::default(),
         }
     }
 }
@@ -1036,7 +1107,6 @@ fn confirm_slot_entries(
             assert!(entries.is_some());
 
             let mut replay_elapsed = Measure::start("replay_elapsed");
-            let mut execute_timings = ExecuteTimings::default();
             let cost_capacity_meter = Arc::new(RwLock::new(BlockCostCapacityMeter::default()));
             // Note: This will shuffle entries' transactions in-place.
             let process_result = process_entries_with_callback(
@@ -1047,14 +1117,13 @@ fn confirm_slot_entries(
                 transaction_status_sender,
                 replay_vote_sender,
                 transaction_cost_metrics_sender,
-                &mut execute_timings,
+                &mut timing.execute_timings,
+                &mut timing.end_to_end_execute_timings,
                 cost_capacity_meter,
             )
             .map_err(BlockstoreProcessorError::from);
             replay_elapsed.stop();
             timing.replay_elapsed += replay_elapsed.as_us();
-
-            timing.execute_timings.accumulate(&execute_timings);
 
             // If running signature verification on the GPU, wait for that
             // computation to finish, and get the result of it. If we did the
