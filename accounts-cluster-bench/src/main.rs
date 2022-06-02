@@ -13,7 +13,7 @@ use {
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
-        thread::sleep,
+        thread::{sleep, spawn},
         time::Duration,
     },
 };
@@ -40,6 +40,14 @@ fn main() {
                 .help("Transactions per second!")
                 .required(true),
         )
+        .arg(
+            Arg::with_name("num_threads")
+                .long("num_threads")
+                .takes_value(true)
+                .value_name("NUM_THREADS")
+                .help("Number of threads to run the DOS!")
+                .required(true),
+        )
         .get_matches();
 
     let tpu = matches
@@ -53,24 +61,37 @@ fn main() {
     let keypair = Arc::new(Keypair::generate(&mut thread_rng()));
     let key = Pubkey::new_unique();
 
-    let mut counter = 0;
-    let client = ThinClient::new(tpu, tpu, UdpSocket::bind(format!("0.0.0.0:{}", 50000)).unwrap());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let thread_count = value_t!(matches, "num_threads", u32).unwrap();
+    let mut threads = Vec::new();
 
-    loop {
-        for _ in 0..tps / 10 {
-            let transaction = Transaction::new_with_compiled_instructions(
-                &[keypair.as_ref()],
-                &[],
-                Hash::new(&[0; 32]),
-                vec![key],
-                vec![],
-            );
-            let _ = client.async_send_transaction(transaction).unwrap();
-            counter += 1;
-            if counter % 1000 == 0 {
-                println!("sent {}", counter);
+    for i in 0..thread_count {
+        let counter = Arc::clone(&counter);
+        let keypair = keypair.clone();
+        let client = ThinClient::new(
+            tpu,
+            tpu,
+            UdpSocket::bind(format!("0.0.0.0:{}", 50000 + i)).unwrap(),
+        );
+        threads.push(spawn(move || loop {
+            for _ in 0..tps / thread_count as usize{
+                let transaction = Transaction::new_with_compiled_instructions(
+                    &[keypair.as_ref()],
+                    &[],
+                    Hash::new(&[0; 32]),
+                    vec![key],
+                    vec![],
+                );
+                let _ = client.async_send_transaction(transaction).unwrap();
+                if counter.fetch_add(1, Ordering::Relaxed) % 0x1000 == 0 {
+                    println!("sent {}", counter.load(Ordering::Relaxed));
+                }
             }
-        }
-        sleep(Duration::from_millis(100));
+            sleep(Duration::from_millis(1000));
+        }));
+    }
+
+    for thread in threads {
+        thread.join().unwrap();
     }
 }
