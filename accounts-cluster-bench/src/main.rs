@@ -78,7 +78,7 @@ fn main() {
                 let transaction = Transaction::new_with_compiled_instructions(
                     &[keypair.as_ref()],
                     &[],
-                    Hash::new(&[0; 32]),
+                    Hash::new_unique(),
                     vec![key],
                     vec![],
                 );
