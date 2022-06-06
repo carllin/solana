@@ -4979,9 +4979,15 @@ impl Bank {
             update_stakes_cache_time.as_us(),
         );
 
+        let mut update_transaction_statuses_time = Measure::start("update_transaction_statuses");
         self.update_transaction_statuses(sanitized_txs, &execution_results);
         let fee_collection_results =
             self.filter_program_errors_and_collect_fee(sanitized_txs, &execution_results);
+        update_transaction_statuses_time.stop();
+        timings.saturating_add_in_place(
+            ExecuteTimingType::UpdateTransactionStatuses,
+            update_transaction_statuses_time.as_us(),
+        );
 
         TransactionResults {
             fee_collection_results,
@@ -5969,12 +5975,19 @@ impl Bank {
         enable_return_data_recording: bool,
         timings: &mut ExecuteTimings,
     ) -> (TransactionResults, TransactionBalancesSet) {
+        let mut collect_balances_time = Measure::start("collect_balances");
         let pre_balances = if collect_balances {
             self.collect_balances(batch)
         } else {
             vec![]
         };
+        collect_balances_time.stop();
+        timings.saturating_add_in_place(
+            ExecuteTimingType::CollectBalancesUs,
+            collect_balances_time.as_us(),
+        );
 
+        let mut total_load_and_execute_time = Measure::start("commit_time");
         let LoadAndExecuteTransactionsOutput {
             mut loaded_transactions,
             execution_results,
@@ -5991,9 +6004,16 @@ impl Bank {
             timings,
             None,
         );
+        total_load_and_execute_time.stop();
+        timings.saturating_add_in_place(
+            ExecuteTimingType::TotalLoadAndExecuteUs,
+            total_load_and_execute_time.as_us(),
+        );
 
         let (last_blockhash, lamports_per_signature) =
             self.last_blockhash_and_lamports_per_signature();
+
+        let mut total_commit_time = Measure::start("commit_time");
         let results = self.commit_transactions(
             batch.sanitized_transactions(),
             &mut loaded_transactions,
@@ -6009,11 +6029,22 @@ impl Bank {
             },
             timings,
         );
+        total_commit_time.stop();
+        timings
+            .saturating_add_in_place(ExecuteTimingType::TotalCommitUs, total_commit_time.as_us());
+
+        let mut collect_balances_time = Measure::start("collect_balances");
         let post_balances = if collect_balances {
             self.collect_balances(batch)
         } else {
             vec![]
         };
+        collect_balances_time.stop();
+        timings.saturating_add_in_place(
+            ExecuteTimingType::CollectBalancesUs,
+            collect_balances_time.as_us(),
+        );
+
         (
             results,
             TransactionBalancesSet::new(pre_balances, post_balances),
