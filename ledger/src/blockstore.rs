@@ -1546,6 +1546,7 @@ impl Blockstore {
         self.slots_stats.record_shred(
             shred.slot(),
             shred.index(),
+            shred.is_data(),
             shred.fec_set_index(),
             shred_source,
             None,
@@ -1972,6 +1973,7 @@ impl Blockstore {
         self.slots_stats.record_shred(
             shred.slot(),
             shred.index(),
+            shred.is_data(),
             shred.fec_set_index(),
             shred_source,
             Some(slot_meta),
