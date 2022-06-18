@@ -34,9 +34,9 @@ use {
     solana_sdk::{clock::Slot, epoch_schedule::EpochSchedule, pubkey::Pubkey, timing::timestamp},
     solana_streamer::sendmmsg::{multi_target_send, SendPktsError},
     std::{
-        collections::{HashMap, HashSet},
+        collections::{BTreeSet, HashMap, HashSet},
         net::{SocketAddr, UdpSocket},
-        ops::AddAssign,
+        ops::{AddAssign, DerefMut},
         sync::{
             atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
             Arc, Mutex, RwLock,
@@ -232,7 +232,7 @@ fn retransmit(
 
     let socket_addr_space = cluster_info.socket_addr_space();
     let retransmit_shred = |shred: &Shred, sender_addr: Option<SocketAddr>, socket: &UdpSocket| {
-        if should_skip_retransmit(shred, shreds_received, packet_hasher) {
+        if should_skip_retransmit(shred, shreds_received) {
             stats.num_shreds_skipped.fetch_add(1, Ordering::Relaxed);
             return None;
         }
