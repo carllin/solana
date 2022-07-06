@@ -52,6 +52,7 @@ struct CpuInfo {
 
 impl UdpStats {
     fn from_map(udp_stats: &HashMap<String, usize>) -> Self {
+        println!("udp_stats: {:?}", udp_stats);
         Self {
             in_datagrams: *udp_stats.get("InDatagrams").unwrap_or(&0),
             no_ports: *udp_stats.get("NoPorts").unwrap_or(&0),
