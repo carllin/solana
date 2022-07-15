@@ -215,6 +215,10 @@ fn check_update_vote_state_slots_are_valid(
                     prev_slot = lockout.slot;
                 }
             }
+            info!(
+                "Proposed root is too old {} compared to earliest slot {}",
+                new_proposed_root, earliest_slot_hash_in_history
+            );
         }
     }
 
@@ -612,6 +616,14 @@ pub fn process_new_vote_state(
         match current_vote.slot.cmp(&new_vote.slot) {
             Ordering::Less => {
                 if current_vote.last_locked_out_slot() >= new_vote.slot {
+                    info!(
+                        "{} Lockout conflict {:?} {:?} {:?} {:?}",
+                        vote_state.node_pubkey,
+                        current_vote,
+                        current_vote.lockout(),
+                        current_vote.last_locked_out_slot(),
+                        new_vote.slot
+                    );
                     return Err(VoteError::LockoutConflict);
                 }
                 current_vote_state_index += 1;
@@ -958,13 +970,20 @@ pub fn process_vote_state_update<S: std::hash::BuildHasher>(
     feature_set: &FeatureSet,
 ) -> Result<(), InstructionError> {
     let mut vote_state = verify_and_get_vote_state(vote_account, clock, signers)?;
-    do_process_vote_state_update(
+    if let Err(e) = do_process_vote_state_update(
         &mut vote_state,
         slot_hashes,
         clock.epoch,
         vote_state_update,
         Some(feature_set),
-    )?;
+    ) {
+        warn!(
+            "{} process_new_vote_state_failed {:#?}",
+            vote_account.get_key(),
+            e
+        );
+        return Err(e.into());
+    }
     vote_account.set_state(&VoteStateVersions::new_current(vote_state))
 }
 

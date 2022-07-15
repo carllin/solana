@@ -1656,6 +1656,23 @@ fn process_single_slot(
     })?;
 
     bank.freeze(); // all banks handled by this routine are created from complete slots
+    let vote_accounts = bank.vote_accounts();
+    for v in vote_accounts.keys() {
+        let vote_account = bank.get_vote_account(v).unwrap();
+        let vote_state = if let Ok(vote_state) = vote_account.vote_state() {
+            vote_state.clone()
+        } else {
+            panic!("shouldn't happen");
+        };
+
+        info!(
+            "bank {}, {} vote account: {:?}, root: {:?}",
+            bank.slot(),
+            v,
+            vote_state.votes,
+            vote_state.root_slot
+        );
+    }
     if blockstore.is_primary_access() {
         blockstore.insert_bank_hash(bank.slot(), bank.hash(), false);
     }
