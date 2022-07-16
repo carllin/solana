@@ -50,6 +50,7 @@ use {
             DEFAULT_MAX_FULL_SNAPSHOT_ARCHIVES_TO_RETAIN,
             DEFAULT_MAX_INCREMENTAL_SNAPSHOT_ARCHIVES_TO_RETAIN, SUPPORTED_ARCHIVE_COMPRESSION,
         },
+        vote_parser,
     },
     solana_sdk::{
         account::{AccountSharedData, ReadableAccount, WritableAccount},
@@ -1276,6 +1277,19 @@ fn main() {
             .arg(&allow_dead_slots_arg)
         )
         .subcommand(
+            SubCommand::with_name("latest-votes")
+            .arg(
+                Arg::with_name("start_slot")
+                    .index(1)
+                    .value_name("SLOTS")
+                    .validator(is_slot)
+                    .takes_value(true)
+                    .required(true)
+                    .help("starting slot to parse from"),
+            )
+            .arg(&allow_dead_slots_arg)
+        )
+        .subcommand(
             SubCommand::with_name("dead-slots")
             .arg(&starting_slot_arg)
             .about("Print all the dead slots in the ledger")
@@ -2090,6 +2104,61 @@ fn main() {
                         &mut HashMap::new(),
                     ) {
                         eprintln!("{}", err);
+                    }
+                }
+            }
+            ("latest-votes", Some(arg_matches)) => {
+                struct LatestVote {
+                    latest_slot: Slot,
+                    landed_slot: Slot,
+                }
+
+                let start_slot = value_t_or_exit!(arg_matches, "start_slot", Slot);
+                let blockstore =
+                    open_blockstore(&ledger_path, AccessType::Secondary, wal_recovery_mode);
+                let slot_meta_iterator = blockstore.slot_meta_iterator(start_slot).unwrap();
+                let mut latest_votes_by_pubkey = HashMap::new();
+                for (slot, slot_meta) in slot_meta_iterator {
+                    let result = blockstore
+                    .get_slot_entries_with_shred_info(slot, 0, true);
+                    match result {
+                        Ok((entries, num_shreds, is_full)) => {
+                            for entry in entries {
+                                for transaction in entry.transactions {
+                                    let message = tx.message();
+                                    let first_instruction = message.instructions.first()?;
+                                    let program_id_index = usize::from(first_instruction.program_id_index);
+                                    let program_id = message.account_keys.get(program_id_index)?;
+                                    if !solana_vote_program::check_id(program_id) {
+                                        return None;
+                                    }
+                                    let first_account = usize::from(*first_instruction.accounts.first()?);
+                                    let key = message.account_keys.get(first_account)?;
+                                    let (vote, switch_proof_hash) = parse_vote_instruction_data(&first_instruction.data)?;
+                                    let signature = tx.signatures.get(0).cloned().unwrap_or_default();
+                                    Some((*key, vote, switch_proof_hash, signature))
+
+                                    if let Ok(sanitized_transaction) = SanitizedVersionedTransaction::try_from(transaction) {
+                                        if sanitized_transaction.is_simple_vote_transaction() {
+                                            if let Ok((vote_pubkey, vote_transaction, _, _)) = vote_parser::parse_vote_transaction(&transaction) {
+                                                let latest_vote = vote_transaction.last_voted_slot();
+                                                *latest_votes_by_pubkey.entry(vote_pubkey).and_modify(|e| {
+                                                    if latest_vote > e.latest_slot {
+                                                        *e = LatestVote {
+                                                            latest_slot,
+                                                            landed_slot: slot,
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            println!("Failed to load entries for slot {}: {:?}", slot, err);
+                        }
                     }
                 }
             }
