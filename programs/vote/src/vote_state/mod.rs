@@ -189,9 +189,7 @@ fn check_update_vote_state_slots_are_valid(
     }
 
     // Check if the proposed root is too old
-    let is_root_fix_enabled = feature_set
-        .map(|feature_set| feature_set.is_active(&feature_set::vote_state_update_root_fix::id()))
-        .unwrap_or(false);
+    let is_root_fix_enabled = true;
 
     let original_proposed_root = vote_state_update.root;
     if let Some(new_proposed_root) = original_proposed_root {
