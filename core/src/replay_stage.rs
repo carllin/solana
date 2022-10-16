@@ -2479,6 +2479,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn process_replay_results(
+        pubkey: &Pubkey,
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
         progress: &mut ProgressMap,
@@ -2556,7 +2557,7 @@ impl ReplayStage {
                     r_replay_stats.execute_timings
                     );
                 did_complete_bank = true;
-                info!("bank frozen: {}", bank.slot());
+                info!("{} bank frozen: {}", pubkey, bank.slot());
                 let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 if let Some(transaction_status_sender) = transaction_status_sender {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);
@@ -2738,6 +2739,7 @@ impl ReplayStage {
             };
 
             Self::process_replay_results(
+                my_pubkey,
                 blockstore,
                 bank_forks,
                 progress,
