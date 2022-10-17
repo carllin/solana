@@ -22,7 +22,7 @@ use {
     solana_metrics::inc_new_counter_error,
     solana_perf::packet::{Packet, PacketBatch},
     solana_rayon_threadlimit::get_thread_count,
-    solana_sdk::clock::Slot,
+    solana_sdk::{clock::Slot, pubkey::Pubkey},
     std::{
         cmp::Reverse,
         collections::{HashMap, HashSet},
@@ -138,6 +138,13 @@ fn run_check_duplicate(
 ) -> Result<()> {
     let check_duplicate = |shred: Shred| -> Result<()> {
         let shred_slot = shred.slot();
+        info!(
+            "run_check_dup {} received shred slot: {}, index: {}, sig: {}",
+            cluster_info.id(),
+            shred_slot,
+            shred.index(),
+            shred.signature()
+        );
         if !blockstore.has_duplicate_shreds_in_slot(shred_slot) {
             if let Some(existing_shred_payload) =
                 blockstore.is_shred_duplicate(shred.id(), shred.payload().clone())
@@ -150,6 +157,14 @@ fn run_check_duplicate(
                 )?;
 
                 duplicate_slots_sender.send(shred_slot)?;
+            } else {
+                info!(
+                    "run_check_dup {} shred slot: {}, index: {}, sig: {} is not dup",
+                    cluster_info.id(),
+                    shred_slot,
+                    shred.index(),
+                    shred.signature()
+                );
             }
         }
 
@@ -210,6 +225,7 @@ fn prune_shreds_invalid_repair(
 
 #[allow(clippy::too_many_arguments)]
 fn run_insert<F>(
+    id: &Pubkey,
     thread_pool: &ThreadPool,
     verified_receiver: &Receiver<Vec<PacketBatch>>,
     blockstore: &Blockstore,
@@ -320,6 +336,7 @@ impl WindowService {
     ) -> WindowService {
         let outstanding_requests = Arc::<RwLock<OutstandingShredRepairs>>::default();
 
+        let id = repair_info.cluster_info.id();
         let cluster_info = repair_info.cluster_info.clone();
 
         let repair_service = RepairService::new(
@@ -344,6 +361,7 @@ impl WindowService {
         );
 
         let t_insert = Self::start_window_insert_thread(
+            id,
             exit,
             blockstore,
             leader_schedule_cache,
@@ -391,6 +409,7 @@ impl WindowService {
     }
 
     fn start_window_insert_thread(
+        id: Pubkey,
         exit: Arc<AtomicBool>,
         blockstore: Arc<Blockstore>,
         leader_schedule_cache: Arc<LeaderScheduleCache>,
@@ -415,11 +434,13 @@ impl WindowService {
                 let handle_duplicate = |shred| {
                     let _ = check_duplicate_sender.send(shred);
                 };
+
                 let mut metrics = BlockstoreInsertionMetrics::default();
                 let mut ws_metrics = WindowServiceMetrics::default();
                 let mut last_print = Instant::now();
                 while !exit.load(Ordering::Relaxed) {
                     if let Err(e) = run_insert(
+                        &id,
                         &thread_pool,
                         &verified_receiver,
                         &blockstore,

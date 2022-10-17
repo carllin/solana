@@ -316,6 +316,7 @@ impl BroadcastRun for BroadcastDuplicatesRun {
             .iter()
             .filter_map(|shred| {
                 let node = cluster_nodes.get_broadcast_peer(&shred.id())?;
+                info!("broadcasting shred slot {}, index: {} to {}", shred.slot(), shred.index(), node.id);
                 if !ContactInfo::is_valid_address(&node.tvu, socket_addr_space) {
                     return None;
                 }
@@ -327,12 +328,21 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                 {
                     if cluster_partition.contains(&node.id) {
                         info!(
-                            "Not broadcasting original shred index {}, slot {} to partition node {}",
+                            "Not broadcasting original shred index {}, slot {}, sig {} to partition node {}",
                             shred.index(),
                             shred.slot(),
+                            shred.signature(),
                             node.id,
                         );
                         return None;
+                    } else {
+                        info!(
+                            "Not broadcasting original shred index {}, slot {}, sig {} to partition node {}",
+                            shred.index(),
+                            shred.slot(),
+                            shred.signature(),
+                            node.id,
+                        );
                     }
                 } else if self
                     .partition_last_data_shreds
