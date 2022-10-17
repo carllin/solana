@@ -461,7 +461,8 @@ fn test_duplicate_shreds_switch_failure() {
     // 2) Wait for `duplicate_fork_validator_pubkey` to vote on a duplicate fork and
     // fork off from `target_switch_fork_validator_pubkey`
 
-    // 3) Ensure `target_switch_fork_validator_pubkey` is not built off a duplicate fork
+    // 3) Ensure `target_switch_fork_validator_pubkey` does not vote on the same duplicate
+    // fork as 2) and instead builds his own fork from an earlier ancestor
 
     // 4) Check that the cluster is making progress
     cluster.check_for_new_roots(

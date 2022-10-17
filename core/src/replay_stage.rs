@@ -2474,7 +2474,7 @@ impl ReplayStage {
                 if let Some(transaction_status_sender) = transaction_status_sender {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);
                 }
-                bank.freeze();
+                bank.freeze2(pubkey);
                 datapoint_info!(
                     "bank_frozen",
                     ("slot", bank_slot, i64),
