@@ -1493,7 +1493,7 @@ fn load_frozen_forks(
                 }
             };
 
-            if let Some(new_root_bank) = new_root_bank {
+            /*if let Some(new_root_bank) = new_root_bank {
                 root = new_root_bank.slot();
 
                 leader_schedule_cache.set_root(new_root_bank);
@@ -1507,7 +1507,7 @@ fn load_frozen_forks(
                 pending_slots
                     .retain(|(_, pending_bank, _)| pending_bank.ancestors.contains_key(&root));
                 all_banks.retain(|_, bank| bank.ancestors.contains_key(&root));
-            }
+            }*/
 
             slots_elapsed += 1;
             total_slots_elapsed += 1;
