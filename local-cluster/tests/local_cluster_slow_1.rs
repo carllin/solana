@@ -488,6 +488,7 @@ fn test_duplicate_shreds_switch_failure() {
 
     // Ensure all the slots <= dup_slot are also full so we know we can replay up to dup_slot
     // on restart
+    info!("Waiting to receive entire duplicate fork with tip {}", dup_slot);
     loop {
         let duplicate_fork_validator_blockstore =
             open_blockstore(&cluster.ledger_path(&duplicate_fork_validator_pubkey));

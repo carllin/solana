@@ -239,6 +239,7 @@ fn output_slot(
                     meta.next_slots,
                     entries.len(),
                     is_full,
+                    blockstore.is_connected(slot),
                 );
             }
         }
