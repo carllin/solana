@@ -328,6 +328,12 @@ impl RepairService {
                 repairs
                     .iter()
                     .filter_map(|repair_request| {
+                        info!(
+                            "{} making repair request for slot {}, {:?}",
+                            id,
+                            repair_request.slot(),
+                            repair_request
+                        );
                         let (to, req) = serve_repair
                             .repair_request(
                                 &repair_info.cluster_slots,

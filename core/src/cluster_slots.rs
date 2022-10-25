@@ -1,5 +1,6 @@
 use {
     itertools::Itertools,
+    rand::Rng,
     solana_gossip::{
         cluster_info::ClusterInfo, contact_info::ContactInfo, crds::Cursor, epoch_slots::EpochSlots,
     },
@@ -172,6 +173,7 @@ impl ClusterSlots {
         if repair_peers.is_empty() {
             return Vec::default();
         }
+
         let stakes = {
             let validator_stakes = self.validator_stakes.read().unwrap();
             repair_peers
@@ -189,12 +191,24 @@ impl ClusterSlots {
             None => return stakes,
             Some(slot_peers) => slot_peers,
         };
+
+        let should_include_non_complete = if slot_peers.read().unwrap().is_empty() {
+            1
+        } else {
+            let mut rng = rand::thread_rng();
+            if rng.gen::<u32>() % 2 == 0 {
+                1
+            } else {
+                0
+            }
+        };
+
         let slot_peers = slot_peers.read().unwrap();
         repair_peers
             .iter()
             .map(|peer| slot_peers.get(&peer.id).cloned().unwrap_or(0))
             .zip(stakes)
-            .map(|(a, b)| a + b)
+            .map(|(a, b)| a + b * should_include_non_complete)
             .collect()
     }
 
