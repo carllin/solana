@@ -52,7 +52,7 @@ pub struct ClusterNodes<T> {
     pubkey: Pubkey, // The local node itself.
     // All staked nodes + other known tvu-peers + the node itself;
     // sorted by (stake, pubkey) in descending order.
-    nodes: Vec<Node>,
+    pub nodes: Vec<Node>,
     // Reverse index from nodes pubkey to their index in self.nodes.
     index: HashMap<Pubkey, /*index:*/ usize>,
     weighted_shuffle: WeightedShuffle</*stake:*/ u64>,
@@ -136,7 +136,15 @@ impl ClusterNodes<BroadcastStage> {
     pub(crate) fn get_broadcast_peer(&self, shred: &ShredId) -> Option<&ContactInfo> {
         let shred_seed = shred.seed(&self.pubkey);
         let mut rng = ChaChaRng::from_seed(shred_seed);
-        let index = self.weighted_shuffle.first(&mut rng)?;
+        let index = self.weighted_shuffle.first(&mut rng);
+        info!(
+            "get_broadcast_peer slot {:?}, len: {} zeroes: {}, index: {:?}",
+            shred.slot(),
+            self.weighted_shuffle.arr.len(),
+            self.weighted_shuffle.zeros.len(),
+            index,
+        );
+        let index = index?;
         self.nodes[index].contact_info()
     }
 }
@@ -283,6 +291,7 @@ pub fn new_cluster_nodes<T: 'static>(
     if broadcast {
         weighted_shuffle.remove_index(index[&self_pubkey]);
     }
+    info!("weighted shuffle length: {}", weighted_shuffle.arr.len());
     ClusterNodes {
         pubkey: self_pubkey,
         nodes,
@@ -404,9 +413,18 @@ impl<T: 'static> ClusterNodesCache<T> {
         let epoch_staked_nodes = [root_bank, working_bank]
             .iter()
             .find_map(|bank| bank.epoch_staked_nodes(epoch));
+        info!(
+            "CLUSTER_NODES epoch_staked_nodes len: {:?}",
+            epoch_staked_nodes.as_ref().map(|e| e.len())
+        );
         if epoch_staked_nodes.is_none() {
             inc_new_counter_info!("cluster_nodes-unknown_epoch_staked_nodes", 1);
             if epoch != root_bank.get_leader_schedule_epoch(root_bank.slot()) {
+                info!(
+                    "CLUSTER_NODES epoch {:?}, rble: {}",
+                    epoch,
+                    root_bank.get_leader_schedule_epoch(root_bank.slot())
+                );
                 return self.get(root_bank.slot(), root_bank, working_bank, cluster_info);
             }
             inc_new_counter_info!("cluster_nodes-unknown_epoch_staked_nodes_root", 1);

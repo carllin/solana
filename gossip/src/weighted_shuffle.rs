@@ -18,9 +18,9 @@ use {
 ///     non-zero weighted indices.
 #[derive(Clone)]
 pub struct WeightedShuffle<T> {
-    arr: Vec<T>,       // Underlying array implementing binary indexed tree.
-    sum: T,            // Current sum of weights, excluding already selected indices.
-    zeros: Vec<usize>, // Indices of zero weighted entries.
+    pub arr: Vec<T>,       // Underlying array implementing binary indexed tree.
+    sum: T,                // Current sum of weights, excluding already selected indices.
+    pub zeros: Vec<usize>, // Indices of zero weighted entries.
 }
 
 // The implementation uses binary indexed tree:
