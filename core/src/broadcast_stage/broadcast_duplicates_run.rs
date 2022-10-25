@@ -315,8 +315,9 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         let packets: Vec<_> = shreds
             .iter()
             .filter_map(|shred| {
-                let node = cluster_nodes.get_broadcast_peer(&shred.id())?;
-                info!("broadcasting shred slot {}, index: {} to {}", shred.slot(), shred.index(), node.id);
+                let node = cluster_nodes.get_broadcast_peer(&shred.id());
+                info!("broadcasting shred slot {}, index: {} to {:?}, nodes len: {}", shred.slot(), shred.index(), node.map(|node| node.id), cluster_nodes.nodes.len());
+                let node = node?;
                 if !ContactInfo::is_valid_address(&node.tvu, socket_addr_space) {
                     return None;
                 }
