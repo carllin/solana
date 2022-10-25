@@ -911,6 +911,11 @@ impl ServeRepair {
             _ => {
                 peers_cache.pop(&slot);
                 let repair_peers = self.repair_peers(repair_validators, slot);
+                info!(
+                    "repair peers for slot {}, {:?}",
+                    slot,
+                    repair_peers.iter().map(|r| r.id)
+                );
                 let weights = cluster_slots.compute_weights(slot, &repair_peers);
                 let repair_peers = RepairPeers::new(Instant::now(), &repair_peers, &weights)?;
                 peers_cache.put(slot, repair_peers);
