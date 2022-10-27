@@ -885,6 +885,10 @@ impl HeaviestSubtreeForkChoice {
                     heaviest_slot_hash_on_same_voted_fork.unwrap();
 
                 if heaviest_slot_hash_on_same_voted_fork == last_voted_slot_hash {
+                    info!(
+                        "heaviest_slot_on_same_voted_fork: {:?}, last_voted_slot_hash: {:?}",
+                        heaviest_slot_hash_on_same_voted_fork, last_voted_slot_hash
+                    );
                     None
                 } else {
                     Some(heaviest_slot_hash_on_same_voted_fork)

@@ -685,9 +685,16 @@ impl ReplayStage {
                     select_vote_and_reset_forks_time.stop();
 
                     let mut heaviest_fork_failures_time = Measure::start("heaviest_fork_failures_time");
+                    info!(
+                        "{} vote bank: {:?}, reset bank: {:?}",
+                        my_pubkey,
+                        vote_bank.as_ref().map(|(b, _)| b.slot()),
+                        reset_bank.as_ref().map(|b| b.slot()),
+                    );
                     if tower.is_recent(heaviest_bank.slot()) && !heaviest_fork_failures.is_empty() {
                         info!(
-                            "Couldn't vote on heaviest fork: {:?}, heaviest_fork_failures: {:?}",
+                            "{} Couldn't vote on heaviest fork: {:?}, heaviest_fork_failures: {:?}",
+                            my_pubkey,
                             heaviest_bank.slot(),
                             heaviest_fork_failures
                         );
@@ -1674,8 +1681,8 @@ impl ReplayStage {
             let root_slot = bank_forks.read().unwrap().root();
             datapoint_info!("replay_stage-my_leader_slot", ("slot", poh_slot, i64),);
             info!(
-                "new fork:{} parent:{} (leader) root:{}",
-                poh_slot, parent_slot, root_slot
+                "{} new fork:{} parent:{} (leader) root:{}",
+                my_pubkey, poh_slot, parent_slot, root_slot
             );
 
             let root_distance = poh_slot - root_slot;
