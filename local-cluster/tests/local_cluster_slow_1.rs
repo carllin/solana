@@ -33,7 +33,7 @@ use {
         clock::{Slot, MAX_PROCESSING_AGE},
         hash::Hash,
         pubkey::Pubkey,
-        signature::Signer,
+        signature::{Keypair, Signer},
         vote::state::VoteStateUpdate,
     },
     solana_streamer::socket::SocketAddrSpace,

@@ -3184,34 +3184,6 @@ impl Bank {
         }
     }
 
-    pub fn freeze2(&self, id: &Pubkey) {
-        // This lock prevents any new commits from BankingStage
-        // `process_and_record_transactions_locked()` from coming
-        // in after the last tick is observed. This is because in
-        // BankingStage, any transaction successfully recorded in
-        // `record_transactions()` is recorded after this `hash` lock
-        // is grabbed. At the time of the successful record,
-        // this means the PoH has not yet reached the last tick,
-        // so this means freeze() hasn't been called yet. And because
-        // BankingStage doesn't release this hash lock until both
-        // record and commit are finished, those transactions will be
-        // committed before this write lock can be obtained here.
-        let mut hash = self.hash.write().unwrap();
-        if *hash == Hash::default() {
-            // finish up any deferred changes to account state
-            self.collect_rent_eagerly(false);
-            self.collect_fees();
-            self.distribute_rent();
-            self.update_slot_history();
-            self.run_incinerator();
-
-            // freeze is a one-way trip, idempotent
-            self.freeze_started.store(true, Relaxed);
-            *hash = self.hash_internal_state2(id);
-            self.rc.accounts.accounts_db.mark_slot_frozen(self.slot());
-        }
-    }
-
     pub fn freeze(&self) {
         // This lock prevents any new commits from BankingStage
         // `process_and_record_transactions_locked()` from coming
@@ -6690,58 +6662,6 @@ impl Bank {
 
     pub fn has_signature(&self, signature: &Signature) -> bool {
         self.get_signature_status_slot(signature).is_some()
-    }
-
-    fn hash_internal_state2(&self, id: &Pubkey) -> Hash {
-        // If there are no accounts, return the hash of the previous state and the latest blockhash
-        let accounts_delta_hash = self
-            .rc
-            .accounts
-            .bank_hash_info_at(self.slot(), &self.rewrites_skipped_this_slot);
-        let mut signature_count_buf = [0u8; 8];
-        LittleEndian::write_u64(&mut signature_count_buf[..], self.signature_count() as u64);
-
-        let mut hash = hashv(&[
-            self.parent_hash.as_ref(),
-            accounts_delta_hash.hash.as_ref(),
-            &signature_count_buf,
-            self.last_blockhash().as_ref(),
-        ]);
-
-        let buf = self
-            .hard_forks
-            .read()
-            .unwrap()
-            .get_hash_data(self.slot(), self.parent_slot());
-        if let Some(buf) = buf {
-            let hard_forked_hash = extend_and_hash(&hash, &buf);
-            warn!(
-                "hard fork at slot {} by hashing {:?}: {} => {}",
-                self.slot(),
-                buf,
-                hash,
-                hard_forked_hash
-            );
-            hash = hard_forked_hash;
-        }
-
-        info!(
-            "{} bank frozen: {} hash: {} accounts_delta: {} signature_count: {} last_blockhash: {} capitalization: {}",
-            id,
-            self.slot(),
-            hash,
-            accounts_delta_hash.hash,
-            self.signature_count(),
-            self.last_blockhash(),
-            self.capitalization(),
-        );
-
-        info!(
-            "accounts hash slot: {} stats: {:?}",
-            self.slot(),
-            accounts_delta_hash.stats,
-        );
-        hash
     }
 
     /// Hash the `accounts` HashMap. This represents a validator's interpretation

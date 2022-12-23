@@ -1745,8 +1745,8 @@ impl ReplayStage {
             let root_slot = bank_forks.read().unwrap().root();
             datapoint_info!("replay_stage-my_leader_slot", ("slot", poh_slot, i64),);
             info!(
-                "{} new fork:{} parent:{} (leader) root:{}",
-                my_pubkey, poh_slot, parent_slot, root_slot
+                "new fork:{} parent:{} (leader) root:{}",
+                poh_slot, parent_slot, root_slot
             );
 
             let root_distance = poh_slot - root_slot;
@@ -2479,7 +2479,6 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn process_replay_results(
-        pubkey: &Pubkey,
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
         progress: &mut ProgressMap,
@@ -2557,12 +2556,12 @@ impl ReplayStage {
                     r_replay_stats.execute_timings
                     );
                 did_complete_bank = true;
-                info!("{} bank frozen: {}", pubkey, bank.slot());
+                info!("bank frozen: {}", bank.slot());
                 let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 if let Some(transaction_status_sender) = transaction_status_sender {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);
                 }
-                bank.freeze2(pubkey);
+                bank.freeze();
                 datapoint_info!(
                     "bank_frozen",
                     ("slot", bank_slot, i64),
@@ -2739,7 +2738,6 @@ impl ReplayStage {
             };
 
             Self::process_replay_results(
-                my_pubkey,
                 blockstore,
                 bank_forks,
                 progress,
