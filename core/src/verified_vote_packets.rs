@@ -135,10 +135,13 @@ impl<'a> Iterator for ValidatorGossipVotesIterator<'a> {
                                         packet_batch,
                                         signature,
                                         ..
-                                    }) => self
+                                    }) => { 
+                                        let result = self
                                         .filter_vote(slot, hash, packet_batch, signature)
-                                        .map(|packet| vec![packet])
-                                        .unwrap_or_default(),
+                                        .map(|packet| vec![packet]);
+                                        info!("Sending gossip vote to banking stage for vote account: {}, slot: {}, last vote: {}, new vote: {}, result: {}", vote_account_key, self.my_leader_bank.slot(), start_vote_slot, slot, result.is_some());
+                                        result.unwrap_or_default()
+                                    },
                                     IncrementalVotes(validator_gossip_votes) => {
                                         validator_gossip_votes
                                             .range((start_vote_slot, Hash::default())..)

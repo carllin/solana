@@ -354,6 +354,10 @@ impl ClusterInfoVoteListener {
             .filter_map(|(tx, packet_batch)| {
                 let (vote_account_key, vote, ..) = vote_parser::parse_vote_transaction(&tx)?;
                 let slot = vote.last_voted_slot()?;
+                info!(
+                    "gossip got vote from {} for slot {}",
+                    vote_account_key, slot
+                );
                 let epoch = epoch_schedule.get_epoch(slot);
                 let authorized_voter = root_bank
                     .epoch_stakes(epoch)?
@@ -369,6 +373,10 @@ impl ClusterInfoVoteListener {
                     packet_batch,
                     signature: *tx.signatures.first()?,
                 };
+                info!(
+                    "gossip got valid vote from {} for slot {}",
+                    vote_account_key, slot
+                );
                 Some((tx, verified_vote_metadata))
             })
             .unzip()
