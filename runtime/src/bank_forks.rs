@@ -353,14 +353,20 @@ impl BankForks {
                 .accounts_db
                 .epoch_accounts_hash_manager
                 .set_in_flight(eah_bank.slot());
-            accounts_background_request_sender
-                .send_snapshot_request(SnapshotRequest {
+            if let Err(e) =
+                accounts_background_request_sender.send_snapshot_request(SnapshotRequest {
                     snapshot_root_bank: Arc::clone(eah_bank),
                     status_cache_slot_deltas: Vec::default(),
                     request_kind: SnapshotRequestKind::EpochAccountsHash,
                     enqueued: Instant::now(),
                 })
-                .expect("send epoch accounts hash request");
+            {
+                warn!(
+                    "Error sending snapshot request for bank: {}, err: {:?}",
+                    eah_bank.slot(),
+                    e
+                );
+            }
         }
         drop(eah_banks);
 
