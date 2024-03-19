@@ -1045,30 +1045,9 @@ impl ClusterInfo {
         }
     }
 
-    pub fn push_vote(&self, tower: &[Slot], vote: Transaction) {
-        debug_assert!(tower.iter().tuple_windows().all(|(a, b)| a < b));
-        // Find a crds vote which is evicted from the tower, and recycle its
-        // vote-index. This can be either an old vote which is popped off the
-        // deque, or recent vote which has expired before getting enough
-        // confirmations.
-        // If all votes are still in the tower, add a new vote-index. If more
-        // than one vote is evicted, the oldest one by wallclock is returned in
-        // order to allow more recent votes more time to propagate through
-        // gossip.
-        // TODO: When there are more than one vote evicted from the tower, only
-        // one crds vote is overwritten here. Decide what to do with the rest.
-        let mut num_crds_votes = 0;
+    fn find_oldest_vote_index(&self, should_evict_vote: impl Fn(&Vote) -> bool) -> u8 {
         let self_pubkey = self.id();
-        // Returns true if the tower does not contain the vote.slot.
-        let should_evict_vote = |vote: &Vote| -> bool {
-            match vote.slot() {
-                Some(slot) => !tower.contains(&slot),
-                None => {
-                    error!("crds vote with no slots!");
-                    true
-                }
-            }
-        };
+        let mut num_crds_votes = 0;
         let vote_index = {
             let gossip_crds =
                 self.time_gossip_read_lock("gossip_read_push_vote", &self.stats.push_vote_read);
@@ -1088,7 +1067,33 @@ impl ClusterInfo {
                 .min() // Boot the oldest evicted vote by wallclock.
                 .map(|(_ /*wallclock*/, ix)| ix)
         };
-        let vote_index = vote_index.unwrap_or(num_crds_votes);
+        vote_index.unwrap_or(num_crds_votes)
+    }
+
+    pub fn push_vote(&self, tower: &[Slot], vote: Transaction) {
+        debug_assert!(tower.iter().tuple_windows().all(|(a, b)| a < b));
+        // Find a crds vote which is evicted from the tower, and recycle its
+        // vote-index. This can be either an old vote which is popped off the
+        // deque, or recent vote which has expired before getting enough
+        // confirmations.
+        // If all votes are still in the tower, add a new vote-index. If more
+        // than one vote is evicted, the oldest one by wallclock is returned in
+        // order to allow more recent votes more time to propagate through
+        // gossip.
+        // TODO: When there are more than one vote evicted from the tower, only
+        // one crds vote is overwritten here. Decide what to do with the rest.
+
+        // Returns true if the tower does not contain the vote.slot.
+        let should_evict_vote = |vote: &Vote| -> bool {
+            match vote.slot() {
+                Some(slot) => !tower.contains(&slot),
+                None => {
+                    error!("crds vote with no slots!");
+                    true
+                }
+            }
+        };
+        let vote_index = self.find_oldest_vote_index(should_evict_vote);
         if (vote_index as usize) >= MAX_LOCKOUT_HISTORY {
             let (_, vote, hash, _) = vote_parser::parse_vote_transaction(&vote).unwrap();
             panic!(
@@ -1125,12 +1130,15 @@ impl ClusterInfo {
             })
         };
 
-        // If you don't see a vote with the same slot yet, this means you probably
-        // restarted, and need to wait for your oldest vote to propagate back to you.
-        //
         // We don't write to an arbitrary index, because it may replace one of this validator's
         // existing votes on the network.
         if let Some(vote_index) = vote_index {
+            self.push_vote_at_index(vote, vote_index);
+        } else {
+            // If you don't see a vote with the same slot yet, this means you probably
+            // restarted, and need to repush and evict the oldest vote
+            let should_evict_vote = |_vote: &Vote| -> bool { true };
+            let vote_index = self.find_oldest_vote_index(should_evict_vote);
             self.push_vote_at_index(vote, vote_index);
         }
     }
