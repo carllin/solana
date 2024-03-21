@@ -108,6 +108,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
             .retry_transfer_until_confirmed(funding_keypair, &mut transaction, 10, confs)
             .unwrap();
         for validator in &cluster_nodes {
+            info!("spend and verify checking {} for signature {:?}", validator.pubkey(), sig);
             if ignore_nodes.contains(validator.pubkey()) {
                 continue;
             }
