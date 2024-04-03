@@ -2937,6 +2937,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn process_replay_results(
+        my_pubkey: &Pubkey,
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
         progress: &mut ProgressMap,
@@ -3103,6 +3104,7 @@ impl ReplayStage {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);
                 }
                 bank.freeze();
+                info!("{} bank frozen: {}", my_pubkey, bank_slot);
                 datapoint_info!(
                     "bank_frozen",
                     ("slot", bank_slot, i64),
@@ -3321,6 +3323,7 @@ impl ReplayStage {
         };
 
         Self::process_replay_results(
+            my_pubkey,
             blockstore,
             bank_forks,
             progress,

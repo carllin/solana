@@ -1738,6 +1738,9 @@ fn load_frozen_forks(
             timing.details.per_program_timings.clear();
             let (meta, bank, last_entry_hash) = pending_slots.pop().unwrap();
             let slot = bank.slot();
+            if slot > 1500 {
+                continue;
+            }
             if last_status_report.elapsed() > STATUS_REPORT_INTERVAL {
                 let secs = last_status_report.elapsed().as_secs() as f32;
                 let slots_per_sec = slots_processed as f32 / secs;
