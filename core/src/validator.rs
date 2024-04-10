@@ -2103,7 +2103,7 @@ fn maybe_warp_slot(
                 accounts_background_request_sender,
                 Some(warp_slot),
             )
-            .unwrap();
+            .map_err(|err| err.to_string())?;
         leader_schedule_cache.set_root(&bank_forks.root_bank());
 
         let full_snapshot_archive_info = match snapshot_bank_utils::bank_to_full_snapshot_archive(

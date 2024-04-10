@@ -1008,7 +1008,7 @@ impl ReplayStage {
                         &drop_bank_sender,
                         wait_to_vote_slot,
                     ) {
-                        error!("Unable to set root: {:?}", e);
+                        error!("Unable to set root: {e}");
                         return;
                     }
                 }

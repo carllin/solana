@@ -32,7 +32,7 @@ use {
     solana_runtime::{
         accounts_background_service::{AbsRequestSender, SnapshotRequestKind},
         bank::{Bank, TransactionBalancesSet},
-        bank_forks::BankForks,
+        bank_forks::{BankForks, SetRootError},
         bank_utils,
         commitment::VOTE_THRESHOLD_SIZE,
         installed_scheduler_pool::BankWithScheduler,
@@ -685,6 +685,9 @@ pub enum BlockstoreProcessorError {
 
     #[error("root bank with mismatched capitalization at {0}")]
     RootBankWithMismatchedCapitalization(Slot),
+
+    #[error("set root error {0}")]
+    SetRootError(#[from] SetRootError),
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
@@ -1681,11 +1684,11 @@ fn load_frozen_forks(
 
                 leader_schedule_cache.set_root(new_root_bank);
                 new_root_bank.prune_program_cache(root, new_root_bank.epoch());
-                let _ = bank_forks
-                    .write()
-                    .unwrap()
-                    .set_root(root, accounts_background_request_sender, None)
-                    .unwrap();
+                let _ = bank_forks.write().unwrap().set_root(
+                    root,
+                    accounts_background_request_sender,
+                    None,
+                )?;
                 m.stop();
                 set_root_us += m.as_us();
 
