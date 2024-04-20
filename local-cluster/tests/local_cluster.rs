@@ -199,7 +199,6 @@ fn test_spend_and_verify_all_nodes_3() {
 
 #[test]
 #[serial]
-#[ignore]
 fn test_local_cluster_signature_subscribe() {
     solana_logger::setup_with_default(RUST_LOG_FILTER);
     let num_nodes = 2;
