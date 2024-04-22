@@ -1483,7 +1483,6 @@ fn test_snapshots_restart_validity() {
 #[test]
 #[serial]
 #[allow(unused_attributes)]
-#[ignore]
 fn test_fail_entry_verification_leader() {
     solana_logger::setup_with_default(RUST_LOG_FILTER);
     let leader_stake = (DUPLICATE_THRESHOLD * 100.0) as u64 + 1;
