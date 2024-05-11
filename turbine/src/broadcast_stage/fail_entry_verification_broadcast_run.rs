@@ -116,7 +116,7 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             self.next_code_index = index + 1;
         }
         let last_shreds = last_entries.map(|(good_last_entry, bad_last_entry)| {
-            let (good_last_data_shred, _) = shredder.entries_to_shreds(
+            let (good_last_data_shreds, _) = shredder.entries_to_shreds(
                 keypair,
                 &[good_last_entry],
                 true,
@@ -130,7 +130,7 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             // Don't mark the last shred as last so that validators won't know
             // that they've gotten all the shreds, and will continue trying to
             // repair.
-            let (bad_last_data_shred, _) = shredder.entries_to_shreds(
+            let (bad_last_data_shreds, _) = shredder.entries_to_shreds(
                 keypair,
                 &[bad_last_entry],
                 false,
@@ -141,24 +141,28 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
                 &self.reed_solomon_cache,
                 &mut ProcessShredsStats::default(),
             );
-            assert_eq!(good_last_data_shred.len(), 1);
-            self.chained_merkle_root = good_last_data_shred.last().unwrap().merkle_root().unwrap();
+            self.chained_merkle_root = good_last_data_shreds.last().unwrap().merkle_root().unwrap();
             self.next_shred_index += 1;
-            (good_last_data_shred, bad_last_data_shred)
+            // Everything should be the same except the last data shred
+            assert_eq!(
+                good_last_data_shreds[..good_last_data_shreds.len() - 1],
+                bad_last_data_shreds[..bad_last_data_shreds.len() - 1]
+            );
+            (good_last_data_shreds, bad_last_data_shreds)
         });
 
         let data_shreds = Arc::new(data_shreds);
         blockstore_sender.send((data_shreds.clone(), None))?;
         // 4) Start broadcast step
         socket_sender.send((data_shreds, None))?;
-        if let Some((good_last_data_shred, bad_last_data_shred)) = last_shreds {
+        if let Some((good_last_data_shreds, bad_last_data_shreds)) = last_shreds {
             // Stash away the good shred so we can rewrite them later
-            self.good_shreds.extend(good_last_data_shred.clone());
-            let good_last_data_shred = Arc::new(good_last_data_shred);
-            let bad_last_data_shred = Arc::new(bad_last_data_shred);
+            self.good_shreds.extend(good_last_data_shreds.clone());
+            let good_last_data_shreds = Arc::new(good_last_data_shreds);
+            let bad_last_data_shreds = Arc::new(bad_last_data_shreds);
             // Store the good shred so that blockstore will signal ClusterSlots
             // that the slot is complete
-            blockstore_sender.send((good_last_data_shred, None))?;
+            blockstore_sender.send((good_last_data_shreds, None))?;
             loop {
                 // Wait for slot to be complete
                 if blockstore.is_full(bank.slot()) {
@@ -167,9 +171,13 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
                 sleep(Duration::from_millis(10));
             }
             // Store the bad shred so we serve bad repairs to validators catching up
-            blockstore_sender.send((bad_last_data_shred.clone(), None))?;
+            info!(
+                "sending bad shreds for slot {}",
+                bad_last_data_shred.last().unwrap().slot()
+            );
+            blockstore_sender.send((bad_last_data_shreds.clone(), None))?;
             // Send bad shreds to rest of network
-            socket_sender.send((bad_last_data_shred, None))?;
+            socket_sender.send((bad_last_data_shreds, None))?;
         }
         Ok(())
     }

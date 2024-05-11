@@ -961,7 +961,12 @@ impl Blockstore {
         let mut index_meta_time_us = 0;
         let mut newly_completed_data_sets: Vec<CompletedDataSetInfo> = vec![];
         for (shred, is_repaired) in shreds.into_iter().zip(is_repaired) {
-            info!("got shred slot: {}, index: {}, is_trusted: {}", shred.slot(), shred.index(), is_trusted);
+            info!(
+                "got shred slot: {}, index: {}, is_trusted: {}",
+                shred.slot(),
+                shred.index(),
+                is_trusted
+            );
             let shred_source = if is_repaired {
                 ShredSource::Repaired
             } else {
