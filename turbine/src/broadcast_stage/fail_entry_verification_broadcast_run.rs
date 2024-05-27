@@ -112,6 +112,23 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             self.chained_merkle_root = shred.merkle_root().unwrap();
         }
         self.next_shred_index += data_shreds.len() as u32;
+        let max_data_index = data_shreds
+            .iter()
+            .max_by_key(|shred| shred.index())
+            .map(|shred| shred.index());
+        info!(
+            "slot: {} created {} shreds, next shred index: {}, max data shred index: {:?}",
+            bank.slot(),
+            data_shreds.len(),
+            self.next_shred_index,
+            max_data_index,
+        );
+        info!(
+            "slot: {}, index: {}, signature: {}",
+            data_shreds.first().unwrap().slot(),
+            data_shreds.first().unwrap().index(),
+            data_shreds.first().unwrap().signature()
+        );
         if let Some(index) = coding_shreds.iter().map(Shred::index).max() {
             self.next_code_index = index + 1;
         }
@@ -127,13 +144,11 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
                 &self.reed_solomon_cache,
                 &mut ProcessShredsStats::default(),
             );
-            // Don't mark the last shred as last so that validators won't know
-            // that they've gotten all the shreds, and will continue trying to
-            // repair.
+
             let (bad_last_data_shreds, _) = shredder.entries_to_shreds(
                 keypair,
                 &[bad_last_entry],
-                false,
+                true,
                 Some(self.chained_merkle_root),
                 self.next_shred_index,
                 self.next_code_index,
@@ -143,11 +158,6 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             );
             self.chained_merkle_root = good_last_data_shreds.last().unwrap().merkle_root().unwrap();
             self.next_shred_index += 1;
-            // Everything should be the same except the last data shred
-            assert_eq!(
-                good_last_data_shreds[..good_last_data_shreds.len() - 1],
-                bad_last_data_shreds[..bad_last_data_shreds.len() - 1]
-            );
             (good_last_data_shreds, bad_last_data_shreds)
         });
 
@@ -156,6 +166,22 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
         // 4) Start broadcast step
         socket_sender.send((data_shreds, None))?;
         if let Some((good_last_data_shreds, bad_last_data_shreds)) = last_shreds {
+            let max_bad_data_index = bad_last_data_shreds
+                .iter()
+                .max_by_key(|shred| shred.index())
+                .map(|shred| shred.index());
+            let max_good_data_index = good_last_data_shreds
+                .iter()
+                .max_by_key(|shred| shred.index())
+                .map(|shred| shred.index());
+            info!(
+                "slot: {} created bad last {} shreds, good last {} shreds, max bad index: {:?}, max good index: {:?}",
+                bank.slot(),
+                bad_last_data_shreds.len(),
+                good_last_data_shreds.len(),
+                max_bad_data_index,
+                max_good_data_index,
+            );
             // Stash away the good shred so we can rewrite them later
             self.good_shreds.extend(good_last_data_shreds.clone());
             let good_last_data_shreds = Arc::new(good_last_data_shreds);
@@ -172,8 +198,9 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             }
             // Store the bad shred so we serve bad repairs to validators catching up
             info!(
-                "sending bad shreds for slot {}",
-                bad_last_data_shred.last().unwrap().slot()
+                "sending bad shreds for slot {}, count: {}",
+                bad_last_data_shreds.last().unwrap().slot(),
+                bad_last_data_shreds.len(),
             );
             blockstore_sender.send((bad_last_data_shreds.clone(), None))?;
             // Send bad shreds to rest of network
@@ -190,6 +217,12 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
         quic_endpoint_sender: &AsyncSender<(SocketAddr, Bytes)>,
     ) -> Result<()> {
         let (shreds, _) = receiver.recv()?;
+        let last_shred = shreds.last().unwrap();
+        info!(
+            "Transmitting up to slot: {}, index: {}",
+            last_shred.slot(),
+            last_shred.index()
+        );
         broadcast_shreds(
             sock,
             &shreds,
@@ -204,6 +237,14 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
     }
     fn record(&mut self, receiver: &RecordReceiver, blockstore: &Blockstore) -> Result<()> {
         let (all_shreds, _) = receiver.recv()?;
+        if all_shreds.is_empty() {
+            return Ok(());
+        }
+        let slot = all_shreds.last().unwrap().slot();
+        if blockstore.is_full(slot) {
+            blockstore.clear_unconfirmed_slot(slot);
+        }
+
         blockstore
             .insert_shreds(all_shreds.to_vec(), None, true)
             .expect("Failed to insert shreds in blockstore");

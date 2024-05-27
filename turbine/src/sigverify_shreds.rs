@@ -119,11 +119,17 @@ fn run_shred_sigverify<const K: usize>(
             .par_iter_mut()
             .flatten()
             .filter(|packet| {
-                !packet.meta().discard()
-                    && packet
-                        .data(..)
-                        .map(|data| deduper.dedup(data))
-                        .unwrap_or(true)
+                let should_dedup = packet
+                    .data(..)
+                    .map(|data| deduper.dedup(data))
+                    .unwrap_or(true);
+                let shred = shred::layout::get_shred(packet).unwrap();
+                let signature = shred::layout::get_signature(shred).unwrap();
+                info!("got shred with signature {} in dedup", signature);
+                if should_dedup {
+                    panic!("got duplicate signature: {}", signature);
+                }
+                !packet.meta().discard() && should_dedup
             })
             .map(|packet| packet.meta_mut().set_discard(true))
             .count()
@@ -226,7 +232,10 @@ fn get_slot_leaders(
                 })
                 .is_none()
         })
-        .for_each(|packet| packet.meta_mut().set_discard(true));
+        .for_each(|packet| {
+            panic!("set discard true");
+            packet.meta_mut().set_discard(true)
+        });
     leaders
 }
 

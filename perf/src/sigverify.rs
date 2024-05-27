@@ -526,6 +526,7 @@ pub fn ed25519_verify_cpu(batches: &mut [PacketBatch], reject_non_vote: bool, pa
             .for_each(|packets| {
                 for packet in packets.iter_mut() {
                     if !packet.meta().discard() && !verify_packet(packet, reject_non_vote) {
+                        panic!("discarding packet");
                         packet.meta_mut().set_discard(true);
                     }
                 }

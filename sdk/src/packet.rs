@@ -123,7 +123,7 @@ impl Packet {
         if self.meta.discard() {
             None
         } else {
-            self.buffer.get(..self.meta.size)?.get(index)
+            self.buffer.get(..self.meta.size).unwrap().get(index)
         }
     }
 
