@@ -1107,7 +1107,6 @@ pub fn should_discard_shred(
     debug_assert!(root < max_slot);
     let shred = match layout::get_shred(packet) {
         None => {
-            panic!("1");
             stats.index_overrun += 1;
             return true;
         }
@@ -1116,26 +1115,22 @@ pub fn should_discard_shred(
     match layout::get_version(shred) {
         None => {
             stats.index_overrun += 1;
-            panic!("2");
             return true;
         }
         Some(version) => {
             if version != shred_version {
-                panic!("3");
                 stats.shred_version_mismatch += 1;
                 return true;
             }
         }
     }
     let Ok(shred_variant) = layout::get_shred_variant(shred) else {
-        panic!("4");
         stats.bad_shred_type += 1;
         return true;
     };
     let slot = match layout::get_slot(shred) {
         Some(slot) => {
             if slot > max_slot {
-                panic!("4");
                 stats.slot_out_of_range += 1;
                 return true;
             }
@@ -1148,40 +1143,33 @@ pub fn should_discard_shred(
     };
     let Some(index) = layout::get_index(shred) else {
         stats.index_bad_deserialize += 1;
-        panic!("5");
         return true;
     };
     match ShredType::from(shred_variant) {
         ShredType::Code => {
             if index >= shred_code::MAX_CODE_SHREDS_PER_SLOT as u32 {
-                panic!("6");
                 stats.index_out_of_bounds += 1;
                 return true;
             }
             if slot <= root {
-                panic!("7");
                 stats.slot_out_of_range += 1;
                 return true;
             }
         }
         ShredType::Data => {
             if index >= MAX_DATA_SHREDS_PER_SLOT as u32 {
-                panic!("8");
                 stats.index_out_of_bounds += 1;
                 return true;
             }
             let Some(parent_offset) = layout::get_parent_offset(shred) else {
-                panic!("9");
                 stats.bad_parent_offset += 1;
                 return true;
             };
             let Some(parent) = slot.checked_sub(Slot::from(parent_offset)) else {
-                panic!("10");
                 stats.bad_parent_offset += 1;
                 return true;
             };
             if !blockstore::verify_shred_slots(slot, parent, root) {
-                panic!("11");
                 stats.slot_out_of_range += 1;
                 return true;
             }
@@ -1189,7 +1177,6 @@ pub fn should_discard_shred(
     }
     match shred_variant {
         ShredVariant::LegacyCode | ShredVariant::LegacyData => {
-            panic!("12");
             return true;
         }
         ShredVariant::MerkleCode { chained: false, .. } => {
@@ -1197,7 +1184,6 @@ pub fn should_discard_shred(
         }
         ShredVariant::MerkleCode { chained: true, .. } => {
             if !enable_chained_merkle_shreds(slot) {
-                panic!("13");
                 return true;
             }
             stats.num_shreds_merkle_code_chained =
@@ -1208,7 +1194,6 @@ pub fn should_discard_shred(
         }
         ShredVariant::MerkleData { chained: true, .. } => {
             if !enable_chained_merkle_shreds(slot) {
-                panic!("14");
                 return true;
             }
             stats.num_shreds_merkle_data_chained =

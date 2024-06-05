@@ -37,17 +37,12 @@ pub fn verify_shred_cpu(
     slot_leaders: &HashMap<Slot, Pubkey>,
     cache: &RwLock<LruCache>,
 ) -> bool {
-    let Some(shred) = shred::layout::get_shred(packet) else {
-        panic!("Couldn't get shred from packet");
-        return false;
-    };
-    let Some(signature) = shred::layout::get_signature(shred) else {
-        return false;
-    };
     if packet.meta().discard() {
-        info!("sigverify got shred with signature {} discarded", signature);
         return false;
     }
+    let Some(shred) = shred::layout::get_shred(packet) else {
+        return false;
+    };
     let Some(slot) = shred::layout::get_slot(shred) else {
         return false;
     };
@@ -55,6 +50,10 @@ pub fn verify_shred_cpu(
     let Some(pubkey) = slot_leaders.get(&slot) else {
         return false;
     };
+    let Some(signature) = shred::layout::get_signature(shred) else {
+        return false;
+    };
+    trace!("signature {}", signature);
     let Some(data) = shred::layout::get_signed_data(shred) else {
         return false;
     };
@@ -68,10 +67,6 @@ pub fn verify_shred_cpu(
                 cache.write().unwrap().put(key, ());
                 true
             } else {
-                info!(
-                    "sigverify got shred with signature {} failed merkle verification",
-                    signature
-                );
                 false
             }
         }

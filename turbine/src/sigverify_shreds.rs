@@ -123,11 +123,12 @@ fn run_shred_sigverify<const K: usize>(
                     .data(..)
                     .map(|data| deduper.dedup(data))
                     .unwrap_or(true);
-                let shred = shred::layout::get_shred(packet).unwrap();
-                let signature = shred::layout::get_signature(shred).unwrap();
-                info!("got shred with signature {} in dedup", signature);
-                if should_dedup {
-                    panic!("got duplicate signature: {}", signature);
+                if let Some(shred) = shred::layout::get_shred(packet) {
+                    let signature = shred::layout::get_signature(shred).unwrap();
+                    info!("got shred with signature {} in dedup", signature);
+                    if should_dedup {
+                        panic!("got duplicate signature: {}", signature);
+                    }
                 }
                 !packet.meta().discard() && should_dedup
             })

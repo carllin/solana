@@ -474,7 +474,7 @@ pub fn broadcast_shreds(
 
     let mut send_mmsg_time = Measure::start("send_mmsg");
     match batch_send(s, &packets[..]) {
-        Ok(()) => (),
+        Ok(()) => {info!("batch sending {} packets", packets.len()); ()},
         Err(SendPktsError::IoError(ioerr, num_failed)) => {
             transmit_stats.dropped_packets_udp += num_failed;
             result = Err(Error::Io(ioerr));

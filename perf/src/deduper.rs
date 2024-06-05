@@ -103,7 +103,6 @@ pub fn dedup_packets_and_count_discards<const K: usize>(
                 .map(|data| deduper.dedup(data))
                 .unwrap_or(true)
             {
-                panic!("discarding dup");
                 packet.meta_mut().set_discard(true);
                 process_received_packet(packet, false, true);
             } else {

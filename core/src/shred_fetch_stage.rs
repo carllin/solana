@@ -130,7 +130,6 @@ impl ShredFetchStage {
                         &mut stats,
                     )
                 {
-                    panic!("shred fetch discarding shred");
                     packet.meta_mut().set_discard(true);
                 } else {
                     packet.meta_mut().flags.insert(flags);

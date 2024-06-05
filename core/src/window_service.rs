@@ -318,7 +318,7 @@ where
         if packet.meta().discard() {
             return None;
         }
-        let shred = shred::layout::get_shred(packet).unwrap();
+        let shred = shred::layout::get_shred(packet)?;
         let shred = Shred::new_from_serialized_shred(shred.to_vec()).ok()?;
         info!(
             "got window service shred slot: {}, index: {}",
