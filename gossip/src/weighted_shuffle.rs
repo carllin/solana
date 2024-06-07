@@ -182,7 +182,7 @@ where
 
 impl<T> WeightedShuffle<T>
 where
-    T: Copy + Default + PartialOrd + AddAssign + SampleUniform + SubAssign + Sub<Output = T>,
+    T: Copy + Default + PartialOrd + AddAssign + SampleUniform + SubAssign + Sub<Output = T> + std::fmt::Debug,
 {
     // Equivalent to weighted_shuffle.shuffle(&mut rng).next()
     pub fn first<R: Rng>(&self, rng: &mut R) -> Option<usize> {
@@ -191,6 +191,8 @@ where
             let sample = <T as SampleUniform>::Sampler::sample_single(zero, self.weight, rng);
             let (index, _weight) = WeightedShuffle::search(self, sample);
             return Some(index);
+        } else {
+            info!("weight is not greater than zero, {:?} {:?}", self.weight, zero);
         }
         if self.zeros.is_empty() {
             return None;

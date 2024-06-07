@@ -125,7 +125,7 @@ fn run_shred_sigverify<const K: usize>(
                     .unwrap_or(true);
                 if let Some(shred) = shred::layout::get_shred(packet) {
                     let signature = shred::layout::get_signature(shred).unwrap();
-                    info!("got shred with signature {} in dedup", signature);
+                    info!("{} got shred with signature {} in dedup", self_pubkey, signature);
                     if should_dedup {
                         panic!("got duplicate signature: {}", signature);
                     }

@@ -66,10 +66,10 @@ pub struct ClusterNodes<T> {
     pubkey: Pubkey, // The local node itself.
     // All staked nodes + other known tvu-peers + the node itself;
     // sorted by (stake, pubkey) in descending order.
-    nodes: Vec<Node>,
+    pub nodes: Vec<Node>,
     // Reverse index from nodes pubkey to their index in self.nodes.
     index: HashMap<Pubkey, /*index:*/ usize>,
-    weighted_shuffle: WeightedShuffle</*stake:*/ u64>,
+    pub weighted_shuffle: WeightedShuffle</*stake:*/ u64>,
     _phantom: PhantomData<T>,
 }
 
@@ -292,6 +292,7 @@ pub fn new_cluster_nodes<T: 'static>(
         .collect();
     let broadcast = TypeId::of::<T>() == TypeId::of::<BroadcastStage>();
     let stakes: Vec<u64> = nodes.iter().map(|node| node.stake).collect();
+    info!("new cluster nodes stakes: {:?}, nodes: {:?}, stakes: {:?}", stakes.len(), nodes.len(), stakes);
     let mut weighted_shuffle = WeightedShuffle::new("cluster-nodes", &stakes);
     if broadcast {
         weighted_shuffle.remove_index(index[&self_pubkey]);
@@ -322,6 +323,7 @@ fn get_nodes(
         let capacity = if should_dedup_addrs { stakes.len() } else { 0 };
         HashMap::<IpAddr, usize>::with_capacity(capacity)
     };
+    info!("tvu peers: {}", cluster_info.tvu_peers().len());
     // The local node itself.
     std::iter::once({
         let stake = stakes.get(&self_pubkey).copied().unwrap_or_default();
@@ -330,6 +332,7 @@ fn get_nodes(
     })
     // All known tvu-peers from gossip.
     .chain(cluster_info.tvu_peers().into_iter().map(|node| {
+        info!("got node: {:?} from gossip", node.pubkey());
         let stake = stakes.get(node.pubkey()).copied().unwrap_or_default();
         let node = NodeId::from(node);
         Node { node, stake }
@@ -363,6 +366,7 @@ fn get_nodes(
         {
             Some(node)
         } else {
+            info!("dropping node");
             // If the node is not staked, drop it entirely. Otherwise, keep the
             // pubkey for deterministic shuffle, but strip the contact-info so
             // that no more packets are sent to this node.
@@ -488,6 +492,8 @@ impl<T: 'static> ClusterNodesCache<T> {
             }
             inc_new_counter_info!("cluster_nodes-unknown_epoch_staked_nodes_root", 1);
         }
+
+
         let nodes = Arc::new(new_cluster_nodes::<T>(
             cluster_info,
             root_bank.cluster_type(),

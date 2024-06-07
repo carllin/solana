@@ -455,8 +455,15 @@ pub fn broadcast_shreds(
             shreds.filter_map(move |shred| {
                 let key = shred.id();
                 let protocol = cluster_nodes::get_broadcast_protocol(&key);
-                cluster_nodes
-                    .get_broadcast_peer(&key)?
+                let peer = cluster_nodes
+                    .get_broadcast_peer(&key);
+
+                if peer.is_none() {
+                    info!("peer key {:?} doesn't exist, cluster nodes len {}", key, cluster_nodes.nodes.len());
+                }
+
+                let peer = peer?;
+                    peer
                     .tvu(protocol)
                     .ok()
                     .filter(|addr| socket_addr_space.check(addr))
@@ -473,11 +480,14 @@ pub fn broadcast_shreds(
     transmit_stats.shred_select += shred_select.as_us();
 
     let mut send_mmsg_time = Measure::start("send_mmsg");
-    match batch_send(s, &packets[..]) {
-        Ok(()) => {info!("batch sending {} packets", packets.len()); ()},
-        Err(SendPktsError::IoError(ioerr, num_failed)) => {
-            transmit_stats.dropped_packets_udp += num_failed;
-            result = Err(Error::Io(ioerr));
+    if packets.len() > 0 {
+        let slot = shreds.first().unwrap().slot();
+        match batch_send(s, &packets[..]) {
+            Ok(()) => {info!("batch sending {} packets for slot: {}", packets.len(), slot); ()},
+            Err(SendPktsError::IoError(ioerr, num_failed)) => {
+                transmit_stats.dropped_packets_udp += num_failed;
+                result = Err(Error::Io(ioerr));
+            }
         }
     }
     send_mmsg_time.stop();

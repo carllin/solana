@@ -123,8 +123,13 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             self.next_shred_index,
             max_data_index,
         );
+
+        for shred in &data_shreds {
+            info!("sending shred slot: {}, index: {}, signature: {}", shred.slot(), shred.index(), shred.signature());
+        }
+
         info!(
-            "slot: {}, index: {}, signature: {}",
+            "sending shred slot: {}, index: {}, signature: {}",
             data_shreds.first().unwrap().slot(),
             data_shreds.first().unwrap().index(),
             data_shreds.first().unwrap().signature()
@@ -174,6 +179,22 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
                 .iter()
                 .max_by_key(|shred| shred.index())
                 .map(|shred| shred.index());
+            for shred in &good_last_data_shreds {
+                info!(
+                    "sending good last shred slot: {}, index: {}, signature: {}",
+                    shred.slot(),
+                    shred.index(),
+                    shred.signature()
+                );
+            }
+            for shred in &bad_last_data_shreds {
+                info!(
+                    "sending bad last shred slot: {}, index: {}, signature: {}",
+                    shred.slot(),
+                    shred.index(),
+                    shred.signature()
+                );
+            }
             info!(
                 "slot: {} created bad last {} shreds, good last {} shreds, max bad index: {:?}, max good index: {:?}",
                 bank.slot(),
