@@ -502,6 +502,7 @@ impl Shred {
     pub fn sign(&mut self, keypair: &Keypair) {
         let data = self.signed_data().unwrap();
         let signature = keypair.sign_message(data.as_ref());
+        info!("shred signature with slot: {}, index: {} has signature: {}", self.slot(), self.index(), signature);
         self.set_signature(signature);
     }
 
@@ -639,7 +640,7 @@ pub mod layout {
     }
 
     #[inline]
-    pub(super) fn get_index(shred: &[u8]) -> Option<u32> {
+    pub fn get_index(shred: &[u8]) -> Option<u32> {
         <[u8; 4]>::try_from(shred.get(OFFSET_OF_SHRED_INDEX..)?.get(..4)?)
             .map(u32::from_le_bytes)
             .ok()

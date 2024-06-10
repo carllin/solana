@@ -133,6 +133,7 @@ fn recv_loop(
             }
 
             if let Ok(len) = packet::recv_from(&mut packet_batch, socket, coalesce) {
+                info!("{} streamer receiver got {} packets", socket.local_addr().unwrap(), len);
                 if len > 0 {
                     let StreamerReceiveStats {
                         packets_count,
@@ -151,7 +152,12 @@ fn recv_loop(
                     packet_batch
                         .iter_mut()
                         .for_each(|p| p.meta_mut().set_from_staked_node(is_staked_service));
-                    packet_batch_sender.send(packet_batch)?;
+                    let res = packet_batch_sender.send(packet_batch);
+                    if let Err(e) = &res {
+                        info!("Error sending packets from streamer with socket {}: {:?}", socket.local_addr().unwrap(), e);
+                        panic!("Error sending packets from streamer with socket {}: {:?}", socket.local_addr().unwrap(), e);
+                    }
+                    res?;
                 }
                 break;
             }

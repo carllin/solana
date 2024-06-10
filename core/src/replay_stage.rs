@@ -2937,7 +2937,6 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn process_replay_results(
-        my_pubkey: &Pubkey,
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
         progress: &mut ProgressMap,
@@ -3323,7 +3322,6 @@ impl ReplayStage {
         };
 
         Self::process_replay_results(
-            my_pubkey,
             blockstore,
             bank_forks,
             progress,

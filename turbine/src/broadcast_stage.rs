@@ -463,8 +463,9 @@ pub fn broadcast_shreds(
                 }
 
                 let peer = peer?;
-                    peer
-                    .tvu(protocol)
+                let tvu = peer
+                    .tvu(protocol);
+                tvu
                     .ok()
                     .filter(|addr| socket_addr_space.check(addr))
                     .map(|addr| {
@@ -482,9 +483,15 @@ pub fn broadcast_shreds(
     let mut send_mmsg_time = Measure::start("send_mmsg");
     if packets.len() > 0 {
         let slot = shreds.first().unwrap().slot();
+        let mut send_results: HashMap<&SocketAddr, usize> = HashMap::new();
+        for (packets, addr) in &packets {
+            *send_results.entry(addr).or_default() += 1;
+        }
+        info!("batch sending packets {:?} for slot: {}", send_results, slot);
         match batch_send(s, &packets[..]) {
-            Ok(()) => {info!("batch sending {} packets for slot: {}", packets.len(), slot); ()},
+            Ok(()) => (),
             Err(SendPktsError::IoError(ioerr, num_failed)) => {
+                info!("error sending {} packets, {:?}", num_failed, ioerr);
                 transmit_stats.dropped_packets_udp += num_failed;
                 result = Err(Error::Io(ioerr));
             }
@@ -493,6 +500,7 @@ pub fn broadcast_shreds(
     send_mmsg_time.stop();
     transmit_stats.send_mmsg_elapsed += send_mmsg_time.as_us();
     transmit_stats.total_packets += packets.len() + quic_packets.len();
+    info!("broadcasting {} quic packets", quic_packets.len());
     for (shred, addr) in quic_packets {
         let shred = Bytes::from(shred.clone());
         if let Err(err) = quic_endpoint_sender.blocking_send((addr, shred)) {

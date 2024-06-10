@@ -34,12 +34,13 @@ impl From<SendPktsError> for TransportError {
 pub fn batch_send<S, T>(sock: &UdpSocket, packets: &[(T, S)]) -> Result<(), SendPktsError>
 where
     S: Borrow<SocketAddr>,
-    T: AsRef<[u8]>,
+    T: AsRef<[u8]>
 {
     let mut num_failed = 0;
     let mut erropt = None;
     for (p, a) in packets {
         if let Err(e) = sock.send_to(p.as_ref(), a.borrow()) {
+            info!("Error sending packet: {:?}", e);
             num_failed += 1;
             if erropt.is_none() {
                 erropt = Some(e);

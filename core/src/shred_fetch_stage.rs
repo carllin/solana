@@ -15,7 +15,7 @@ use {
         feature_set::{self, FeatureSet},
         genesis_config::ClusterType,
         packet::{Meta, PACKET_DATA_SIZE},
-        pubkey::Pubkey,
+        pubkey::Pubkey, signer::Signer,
     },
     solana_streamer::streamer::{self, PacketBatchReceiver, StreamerReceiveStats},
     std::{
@@ -119,6 +119,8 @@ impl ShredFetchStage {
                     )
             };
             let turbine_disabled = turbine_disabled.load(Ordering::Relaxed);
+            let original_len = packet_batch.len();
+            let mut remaining = 0;
             for packet in packet_batch.iter_mut().filter(|p| !p.meta().discard()) {
                 if turbine_disabled
                     || should_discard_shred(
@@ -132,11 +134,16 @@ impl ShredFetchStage {
                 {
                     packet.meta_mut().set_discard(true);
                 } else {
+                    remaining += 1;
                     packet.meta_mut().flags.insert(flags);
                 }
             }
+
+            info!("fetch stage original len: {}, filtered len: {}", original_len, remaining);
             stats.maybe_submit(name, STATS_SUBMIT_CADENCE);
-            if sendr.send(packet_batch).is_err() {
+            if let Err(e) = sendr.send(packet_batch) {
+                info!("error sending {} packets: {:?}", e, remaining);
+                panic!("error sending {} packets: {:?}", e, remaining);
                 break;
             }
         }
@@ -156,12 +163,14 @@ impl ShredFetchStage {
         flags: PacketFlags,
         repair_context: Option<(Arc<UdpSocket>, Arc<ClusterInfo>)>,
         turbine_disabled: Arc<AtomicBool>,
+        pubkey: &Pubkey,
     ) -> (Vec<JoinHandle<()>>, JoinHandle<()>) {
         let (packet_sender, packet_receiver) = unbounded();
         let streamers = sockets
             .into_iter()
             .enumerate()
             .map(|(i, socket)| {
+                info!("{} creating socket addr: {:?}", pubkey, socket.local_addr());
                 streamer::receiver(
                     format!("{receiver_thread_name}{i:02}"),
                     socket,
@@ -225,8 +234,10 @@ impl ShredFetchStage {
             PacketFlags::empty(),
             None, // repair_context
             turbine_disabled.clone(),
+            &cluster_info.keypair().pubkey(),
         );
 
+        let pubkey = cluster_info.keypair().pubkey();
         let (repair_receiver, repair_handler) = Self::packet_modifier(
             "solRcvrShredRep",
             "solTvuRepPktMod",
@@ -240,6 +251,7 @@ impl ShredFetchStage {
             PacketFlags::REPAIR,
             Some((repair_socket, cluster_info)),
             turbine_disabled.clone(),
+            &pubkey,
         );
 
         tvu_threads.extend(repair_receiver);

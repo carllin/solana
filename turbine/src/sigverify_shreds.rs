@@ -78,8 +78,8 @@ pub fn spawn_shred_sigverify(
             ) {
                 Ok(()) => (),
                 Err(Error::RecvTimeout) => (),
-                Err(Error::RecvDisconnected) => break,
-                Err(Error::SendError) => break,
+                Err(Error::RecvDisconnected) => {info!("shred sigverify breaking"); break},
+                Err(Error::SendError) => {info!("shred sigverify 2 breaking"); break},
             }
             stats.maybe_submit();
         }
@@ -110,6 +110,8 @@ fn run_shred_sigverify<const K: usize>(
         .chain(shred_fetch_receiver.try_iter())
         .collect();
     let now = Instant::now();
+    let total_packets = packets.iter().map(PacketBatch::len).sum::<usize>();
+    info!("{} shred sigverify got {} packets", keypair.pubkey(), total_packets);
     stats.num_iters += 1;
     stats.num_batches += packets.len();
     stats.num_packets += packets.iter().map(PacketBatch::len).sum::<usize>();
@@ -125,10 +127,14 @@ fn run_shred_sigverify<const K: usize>(
                     .unwrap_or(true);
                 if let Some(shred) = shred::layout::get_shred(packet) {
                     let signature = shred::layout::get_signature(shred).unwrap();
-                    info!("{} got shred with signature {} in dedup", self_pubkey, signature);
+                    let slot = shred::layout::get_slot(shred).unwrap();
+                    let index = shred::layout::get_index(shred).unwrap();
+                    info!("{} got shred with signature {} in dedup", keypair.pubkey(), signature);
                     if should_dedup {
-                        panic!("got duplicate signature: {}", signature);
+                        info!("got duplicate shred for slot: {}, index: {}", slot, index);
                     }
+                } else {
+                    info!("{} could not read shred", keypair.pubkey());
                 }
                 !packet.meta().discard() && should_dedup
             })
@@ -234,7 +240,6 @@ fn get_slot_leaders(
                 .is_none()
         })
         .for_each(|packet| {
-            panic!("set discard true");
             packet.meta_mut().set_discard(true)
         });
     leaders
