@@ -524,6 +524,7 @@ pub mod system_instruction;
 pub mod system_program;
 pub mod sysvar;
 pub mod vote;
+pub mod vote_new;
 pub mod wasm;
 
 #[deprecated(since = "2.1.0", note = "Use `solana-program-memory` crate instead")]
