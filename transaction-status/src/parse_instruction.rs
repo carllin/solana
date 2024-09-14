@@ -15,7 +15,7 @@ use {
     solana_account_decoder::parse_token::spl_token_ids,
     solana_sdk::{
         address_lookup_table, instruction::CompiledInstruction, message::AccountKeys,
-        pubkey::Pubkey, stake, system_program, vote,
+        pubkey::Pubkey, stake, system_program, vote, vote_new,
     },
     std::{
         collections::HashMap,
@@ -34,6 +34,7 @@ lazy_static! {
     static ref STAKE_PROGRAM_ID: Pubkey = stake::program::id();
     static ref SYSTEM_PROGRAM_ID: Pubkey = system_program::id();
     static ref VOTE_PROGRAM_ID: Pubkey = vote::program::id();
+    static ref VOTE_NEW_PROGRAM_ID: Pubkey = vote_new::program::id();
     static ref PARSABLE_PROGRAM_IDS: HashMap<Pubkey, ParsableProgram> = {
         let mut m = HashMap::new();
         m.insert(

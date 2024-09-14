@@ -48,6 +48,13 @@ pub static BUILTINS: &[BuiltinPrototype] = &[
     }),
     testable_prototype!(BuiltinPrototype {
         core_bpf_migration_config: None,
+        name: vote_program,
+        enable_feature_id: None,
+        program_id: solana_vote_new_program::id(),
+        entrypoint: solana_vote_new_program::vote_processor_new::Entrypoint::vm,
+    }),
+    testable_prototype!(BuiltinPrototype {
+        core_bpf_migration_config: None,
         name: stake_program,
         enable_feature_id: None,
         program_id: solana_stake_program::id(),

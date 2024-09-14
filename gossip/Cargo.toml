@@ -53,6 +53,7 @@ solana-tpu-client = { workspace = true }
 solana-version = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-vote-new-program = { workspace = true }
 static_assertions = { workspace = true }
 thiserror = { workspace = true }
 
@@ -79,6 +80,7 @@ frozen-abi = [
     "solana-version/frozen-abi",
     "solana-vote/frozen-abi",
     "solana-vote-program/frozen-abi",
+    "solana-vote-new-program/frozen-abi",
 ]
 
 [[bench]]

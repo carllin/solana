@@ -56,6 +56,7 @@ solana-transaction-status = { workspace = true }
 solana-udp-client = { workspace = true }
 solana-version = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-vote-new-program = { workspace = true }
 solana_rbpf = { workspace = true }
 spl-memo = { workspace = true, features = ["no-entrypoint"] }
 thiserror = { workspace = true }

@@ -28,6 +28,7 @@ solana-sdk = { workspace = true }
 solana-transaction-status-client-types = { workspace = true }
 solana-version = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-vote-new-program = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]

@@ -23,6 +23,7 @@ solana-runtime-transaction = { workspace = true }
 solana-sdk = { workspace = true }
 solana-svm-transaction = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-vote-new-program = { workspace = true }
 
 [lib]
 crate-type = ["lib"]
@@ -51,6 +52,8 @@ frozen-abi = [
     "solana-compute-budget/frozen-abi",
     "solana-sdk/frozen-abi",
     "solana-vote-program/frozen-abi",
+    "solana-vote-new-program/frozen-abi",
+    
 ]
 
 [[bench]]

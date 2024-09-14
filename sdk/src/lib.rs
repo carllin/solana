@@ -54,7 +54,7 @@ pub use solana_program::{
     loader_v4_instruction, message, msg, native_token, nonce, program, program_error,
     program_option, program_pack, rent, secp256k1_program, serialize_utils, slot_hashes,
     slot_history, stable_layout, stake, stake_history, syscalls, system_instruction,
-    system_program, sysvar, unchecked_div_by_const, vote,
+    system_program, sysvar, unchecked_div_by_const, vote, vote_new,
 };
 #[cfg(feature = "borsh")]
 pub use solana_program::{borsh, borsh0_10, borsh1};

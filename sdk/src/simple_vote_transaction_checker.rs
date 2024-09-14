@@ -23,6 +23,9 @@ pub fn is_simple_vote_transaction(
         && instructions
             .next()
             .xor(instructions.next())
-            .map(|(program_id, _ix)| program_id == &solana_sdk::vote::program::id())
+            .map(|(program_id, _ix)| {
+                program_id == &solana_sdk::vote::program::id()
+                    || program_id == &solana_sdk::vote_new::program::id()
+            })
             .unwrap_or(false)
 }

@@ -204,6 +204,7 @@ dependencies = [
  "solana-type-overrides",
  "solana-unified-scheduler-pool",
  "solana-version",
+ "solana-vote-new-program",
  "solana-vote-program",
  "solana_rbpf",
  "thiserror",
@@ -302,6 +303,7 @@ dependencies = [
  "solana-tpu-client",
  "solana-unified-scheduler-pool",
  "solana-version",
+ "solana-vote-new-program",
  "solana-vote-program",
  "spl-token-2022",
  "symlink",
@@ -5627,6 +5629,7 @@ dependencies = [
  "solana-sdk",
  "solana-stake-program",
  "solana-svm-transaction",
+ "solana-vote-new-program",
  "solana-vote-program",
  "static_assertions",
  "strum",
@@ -5916,6 +5919,7 @@ dependencies = [
  "solana-sdk",
  "solana-stake-program",
  "solana-system-program",
+ "solana-vote-new-program",
  "solana-vote-program",
 ]
 
@@ -6042,6 +6046,7 @@ dependencies = [
  "solana-transaction-status",
  "solana-udp-client",
  "solana-version",
+ "solana-vote-new-program",
  "solana-vote-program",
  "solana_rbpf",
  "spl-memo",
@@ -6088,6 +6093,7 @@ dependencies = [
  "solana-rpc-client-api",
  "solana-sdk",
  "solana-transaction-status",
+ "solana-vote-new-program",
  "solana-vote-program",
  "spl-memo",
 ]
@@ -6300,6 +6306,7 @@ dependencies = [
  "solana-unified-scheduler-pool",
  "solana-version",
  "solana-vote",
+ "solana-vote-new-program",
  "solana-vote-program",
  "solana-wen-restart",
  "static_assertions",
@@ -6336,6 +6343,7 @@ dependencies = [
  "solana-sdk",
  "solana-svm-transaction",
  "solana-system-program",
+ "solana-vote-new-program",
  "solana-vote-program",
  "static_assertions",
  "test-case",
@@ -6548,6 +6556,7 @@ dependencies = [
  "solana-sdk",
  "solana-stake-program",
  "solana-version",
+ "solana-vote-new-program",
  "solana-vote-program",
  "tempfile",
 ]
@@ -6637,6 +6646,7 @@ dependencies = [
  "solana-tpu-client",
  "solana-version",
  "solana-vote",
+ "solana-vote-new-program",
  "solana-vote-program",
  "static_assertions",
  "test-case",
@@ -6782,6 +6792,7 @@ dependencies = [
  "solana-timings",
  "solana-transaction-status",
  "solana-vote",
+ "solana-vote-new-program",
  "solana-vote-program",
  "spl-pod",
  "spl-token",
@@ -6848,6 +6859,7 @@ dependencies = [
  "solana-tpu-client",
  "solana-turbine",
  "solana-vote",
+ "solana-vote-new-program",
  "solana-vote-program",
  "static_assertions",
  "strum",
@@ -7027,6 +7039,7 @@ dependencies = [
  "solana-rayon-threadlimit",
  "solana-sdk",
  "solana-short-vec",
+ "solana-vote-new-program",
  "solana-vote-program",
  "test-case",
 ]
@@ -7221,6 +7234,7 @@ dependencies = [
  "solana-stake-program",
  "solana-svm",
  "solana-timings",
+ "solana-vote-new-program",
  "solana-vote-program",
  "solana_rbpf",
  "test-case",
@@ -7391,6 +7405,7 @@ dependencies = [
  "solana-transaction-status",
  "solana-version",
  "solana-vote",
+ "solana-vote-new-program",
  "solana-vote-program",
  "spl-pod",
  "spl-token",
@@ -7428,6 +7443,7 @@ dependencies = [
  "solana-sdk",
  "solana-transaction-status-client-types",
  "solana-version",
+ "solana-vote-new-program",
  "solana-vote-program",
  "tokio",
 ]
@@ -7579,6 +7595,7 @@ dependencies = [
  "solana-transaction-status",
  "solana-version",
  "solana-vote",
+ "solana-vote-new-program",
  "solana-vote-program",
  "solana-zk-elgamal-proof-program",
  "solana-zk-sdk",
@@ -7813,6 +7830,7 @@ dependencies = [
  "solana-program-runtime",
  "solana-sdk",
  "solana-type-overrides",
+ "solana-vote-new-program",
  "solana-vote-program",
  "test-case",
 ]
@@ -7827,6 +7845,7 @@ dependencies = [
  "solana-feature-set",
  "solana-program-test",
  "solana-sdk",
+ "solana-vote-new-program",
  "solana-vote-program",
  "test-case",
 ]
@@ -8369,6 +8388,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-vote-new-program"
+version = "2.1.0"
+dependencies = [
+ "assert_matches",
+ "bincode",
+ "log",
+ "num-derive",
+ "num-traits",
+ "rustc_version 0.4.1",
+ "serde",
+ "serde_derive",
+ "solana-feature-set",
+ "solana-frozen-abi",
+ "solana-frozen-abi-macro",
+ "solana-logger",
+ "solana-metrics",
+ "solana-program",
+ "solana-program-runtime",
+ "solana-sdk",
+ "test-case",
+ "thiserror",
+]
+
+[[package]]
 name = "solana-vote-program"
 version = "2.1.0"
 dependencies = [
@@ -8417,6 +8460,7 @@ dependencies = [
  "solana-streamer",
  "solana-timings",
  "solana-vote",
+ "solana-vote-new-program",
  "solana-vote-program",
  "tempfile",
 ]

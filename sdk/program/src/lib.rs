@@ -564,7 +564,7 @@ pub mod sdk_ids {
         crate::{
             address_lookup_table, bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable,
             config, ed25519_program, feature, incinerator, loader_v4, secp256k1_program,
-            solana_program::pubkey::Pubkey, stake, system_program, sysvar, vote,
+            solana_program::pubkey::Pubkey, stake, system_program, sysvar, vote, vote_new,
         },
         lazy_static::lazy_static,
     };
@@ -581,6 +581,7 @@ pub mod sdk_ids {
                 incinerator::id(),
                 config::program::id(),
                 vote::program::id(),
+                vote_new::program::id(),
                 feature::id(),
                 bpf_loader_deprecated::id(),
                 address_lookup_table::program::id(),

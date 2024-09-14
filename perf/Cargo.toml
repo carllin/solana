@@ -28,6 +28,7 @@ solana-rayon-threadlimit = { workspace = true }
 solana-sdk = { workspace = true }
 solana-short-vec = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-vote-new-program = { workspace = true }
 
 [target."cfg(target_os = \"linux\")".dependencies]
 caps = { workspace = true }
@@ -54,6 +55,7 @@ frozen-abi = [
     "solana-sdk/frozen-abi",
     "solana-short-vec/frozen-abi",
     "solana-vote-program/frozen-abi",
+    "solana-vote-new-program/frozen-abi",
 ]
 
 [[bench]]

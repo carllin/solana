@@ -113,6 +113,7 @@ mod tests {
     #[test_case(solana_stake_program::id(), None)]
     #[test_case(solana_system_program::id(), None)]
     #[test_case(solana_vote_program::id(), None)]
+    #[test_case(solana_vote_new_program::id(), None)]
     #[test_case(
         solana_sdk::loader_v4::id(),
         Some(feature_set::enable_program_runtime_v2_and_loader_v4::id())

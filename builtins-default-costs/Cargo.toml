@@ -23,6 +23,7 @@ solana-sdk = { workspace = true }
 solana-stake-program = { workspace = true }
 solana-system-program = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-vote-new-program = { workspace = true }
 # Add additional builtin programs here
 
 [lib]
@@ -43,6 +44,7 @@ frozen-abi = [
     "dep:rustc_version",
     "dep:solana-frozen-abi",
     "solana-vote-program/frozen-abi",
+    "solana-vote-new-program/frozen-abi",
 ]
 
 [lints]

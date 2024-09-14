@@ -9,7 +9,7 @@ use {
     serde_json::Value,
     solana_sdk::{
         address_lookup_table, clock::UnixTimestamp, instruction::InstructionError, pubkey::Pubkey,
-        stake, system_program, sysvar, vote,
+        stake, system_program, sysvar, vote, vote_new,
     },
     spl_token_2022::extension::interest_bearing_mint::InterestBearingConfig,
     std::collections::HashMap,
@@ -24,6 +24,7 @@ lazy_static! {
     static ref SYSTEM_PROGRAM_ID: Pubkey = system_program::id();
     static ref SYSVAR_PROGRAM_ID: Pubkey = sysvar::id();
     static ref VOTE_PROGRAM_ID: Pubkey = vote::program::id();
+    static ref VOTE_NEW_PROGRAM_ID: Pubkey = vote_new::program::id();
     pub static ref PARSABLE_PROGRAM_IDS: HashMap<Pubkey, ParsableAccount> = {
         let mut m = HashMap::new();
         m.insert(
