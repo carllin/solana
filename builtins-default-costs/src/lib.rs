@@ -24,7 +24,7 @@ lazy_static! {
         (solana_stake_program::id(), solana_stake_program::stake_instruction::DEFAULT_COMPUTE_UNITS),
         (solana_config_program::id(), solana_config_program::config_processor::DEFAULT_COMPUTE_UNITS),
         (solana_vote_program::id(), solana_vote_program::vote_processor::DEFAULT_COMPUTE_UNITS),
-        (solana_vote_new_program::id(), solana_vote_new_program::vote_processor::DEFAULT_COMPUTE_UNITS),
+        (solana_vote_new_program::id(), solana_vote_new_program::vote_processor_new::DEFAULT_COMPUTE_UNITS),
         (solana_system_program::id(), solana_system_program::system_processor::DEFAULT_COMPUTE_UNITS),
         (compute_budget::id(), solana_compute_budget_program::DEFAULT_COMPUTE_UNITS),
         (address_lookup_table::program::id(), solana_address_lookup_table_program::processor::DEFAULT_COMPUTE_UNITS),

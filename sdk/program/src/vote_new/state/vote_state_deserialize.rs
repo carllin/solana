@@ -28,7 +28,7 @@ pub(super) fn deserialize_vote_state_into(
     let commission = read_u8(cursor)?;
     let latency = read_u8(cursor)?;
     let vote_range = read_vote_range(cursor, has_latency)?;
-    let root_slot = read_option_u64(cursor)?;
+    let root = read_option_u64(cursor)?;
     let authorized_voters = read_authorized_voters(cursor)?;
     read_prior_voters_into(cursor, vote_state)?;
     let epoch_credits = read_epoch_credits(cursor)?;
@@ -44,7 +44,7 @@ pub(super) fn deserialize_vote_state_into(
         addr_of_mut!((*vote_state).commission).write(commission);
         addr_of_mut!((*vote_state).latency).write(latency);
         addr_of_mut!((*vote_state).vote_range).write(vote_range);
-        addr_of_mut!((*vote_state).root_slot).write(root_slot);
+        //addr_of_mut!((*vote_state).root).write(root);
         addr_of_mut!((*vote_state).authorized_voters).write(authorized_voters);
         addr_of_mut!((*vote_state).epoch_credits).write(epoch_credits);
     }

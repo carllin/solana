@@ -1,8 +1,8 @@
 #![cfg_attr(RUSTC_WITH_SPECIALIZATION, feature(min_specialization))]
 
-pub mod vote_processor;
-pub mod vote_state;
-pub mod vote_transaction;
+pub mod vote_processor_new;
+pub mod vote_state_new;
+pub mod vote_transaction_new;
 
 #[macro_use]
 extern crate solana_metrics;

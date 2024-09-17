@@ -78,8 +78,8 @@ impl Vote {
 #[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Copy, Clone)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct VoteRange {
-    slot: Slot,
-    reference_slot: Slot,
+    pub slot: Slot,
+    pub reference_slot: Slot,
 }
 
 impl VoteRange {
@@ -206,8 +206,7 @@ pub struct VoteState {
 
     // This usually the last Lockout which was popped from self.votes.
     // However, it can be arbitrary slot, when being used inside Tower
-    pub root_slot: Option<Slot>,
-
+    //pub root: Option<Slot>,
     /// the signer for vote transactions
     authorized_voters: AuthorizedVoters,
 
@@ -235,10 +234,10 @@ impl VoteState {
         }
     }
 
-    pub fn new_rand_for_tests(node_pubkey: Pubkey, root_slot: Slot) -> Self {
+    pub fn new_rand_for_tests(node_pubkey: Pubkey /*root: Slot*/) -> Self {
         Self {
             node_pubkey,
-            root_slot: Some(root_slot),
+            //root: Some(root),
             ..VoteState::default()
         }
     }
@@ -452,6 +451,31 @@ impl VoteState {
             authorized_voters,
             ..Self::default()
         }
+    }
+
+    pub fn process_vote(
+        &mut self,
+        vote_range: &VoteRange,
+        //root: Option<Slot>,
+        epoch: Epoch,
+        current_slot: Slot,
+        timely_vote_credits: bool,
+    ) {
+        // Ignore votes for slots earlier than we already have votes for
+        if vote_range.slot <= self.vote_range.slot {
+            return;
+        }
+
+        let latency = if timely_vote_credits {
+            Self::compute_vote_latency(vote_range.slot, current_slot)
+        } else {
+            0
+        };
+
+        self.latency = latency;
+        //self.root = root;
+        self.vote_range = *vote_range;
+        // TODO: handle credits
     }
 
     /// increment credits, record credits for last epoch if new epoch

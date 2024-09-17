@@ -12,6 +12,9 @@ pub enum VoteError {
     #[error("vote already recorded or not in slot hashes history")]
     VoteTooOld,
 
+    #[error("vote overlaps another vote")]
+    OverlappingVote,
+
     #[error("vote slots do not match bank history")]
     SlotsMismatch,
 
