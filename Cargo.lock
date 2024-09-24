@@ -8388,6 +8388,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-vote-new"
+version = "2.1.0"
+dependencies = [
+ "bincode",
+ "itertools 0.12.1",
+ "log",
+ "rand 0.8.5",
+ "rustc_version 0.4.1",
+ "serde",
+ "serde_derive",
+ "solana-frozen-abi",
+ "solana-frozen-abi-macro",
+ "solana-sdk",
+ "thiserror",
+]
+
+[[package]]
 name = "solana-vote-new-program"
 version = "2.1.0"
 dependencies = [
