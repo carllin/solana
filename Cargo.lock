@@ -6306,6 +6306,7 @@ dependencies = [
  "solana-unified-scheduler-pool",
  "solana-version",
  "solana-vote",
+ "solana-vote-new",
  "solana-vote-new-program",
  "solana-vote-program",
  "solana-wen-restart",
