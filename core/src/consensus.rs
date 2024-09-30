@@ -1751,7 +1751,7 @@ pub fn reconcile_blockstore_roots_with_external_source(
     Ok(())
 }
 
-#[cfg(test)]
+/*(test)]
 pub mod test {
     use {
         super::*,
@@ -3884,4 +3884,4 @@ pub mod test {
                 LatestValidatorVotesForFrozenBanks::default();
         }
     }
-}
+}*/

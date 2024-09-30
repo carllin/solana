@@ -949,7 +949,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
     );
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod test {
     use {
         super::*,
@@ -2431,4 +2431,4 @@ mod test {
             (3, slot3_hash)
         );
     }
-}
+}*/

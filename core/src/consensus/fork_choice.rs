@@ -37,7 +37,6 @@ pub trait ForkChoice {
     fn compute_bank_stats(
         &mut self,
         bank: &Bank,
-        tower: &Tower,
         latest_validator_votes_for_frozen_banks: &mut LatestValidatorVotesForFrozenBanks,
     );
 
@@ -313,10 +312,56 @@ fn select_candidate_vote_and_reset_banks<'a>(
     }
 }
 
+fn can_vote_on_candidate_bank_new(
+    candidate_vote_bank_slot: Slot,
+    progress: &ProgressMap,
+    failure_reasons: &mut Vec<HeaviestForkFailures>,
+) -> bool {
+    let (is_locked_out, propagated_stake, is_leader_slot, total_epoch_stake) = {
+        let fork_stats = progress.get_fork_stats(candidate_vote_bank_slot).unwrap();
+        let propagated_stats = &progress
+            .get_propagated_stats(candidate_vote_bank_slot)
+            .unwrap();
+        (
+            fork_stats.is_locked_out,
+            propagated_stats.propagated_validators_stake,
+            propagated_stats.is_leader_slot,
+            propagated_stats.total_epoch_stake,
+        )
+    };
+
+    // Check if we are locked out.
+    if is_locked_out {
+        failure_reasons.push(HeaviestForkFailures::LockedOut(candidate_vote_bank_slot));
+    }
+
+    // Check if our last leader slot has been propagated.
+    // If we reach here, the candidate_vote_bank exists in the bank_forks, so it isn't
+    // dumped and should exist in progress map.
+    let propagation_confirmed = is_leader_slot
+        || progress
+            .get_leader_propagation_slot_must_exist(candidate_vote_bank_slot)
+            .0;
+    if !propagation_confirmed {
+        failure_reasons.push(HeaviestForkFailures::NoPropagatedConfirmation(
+            candidate_vote_bank_slot,
+            propagated_stake,
+            total_epoch_stake,
+        ));
+    }
+
+    if !is_locked_out && propagation_confirmed {
+        info!("voting: {}", candidate_vote_bank_slot,);
+        true
+    } else {
+        false
+    }
+}
+
 // Checks for all possible reasons we might not be able to vote on the candidate
 // bank. Records any failure reasons, and doesn't early return so we can be sure
 // to record all possible reasons.
-fn can_vote_on_candidate_bank(
+/*fn can_vote_on_candidate_bank(
     candidate_vote_bank_slot: Slot,
     progress: &ProgressMap,
     tower: &Tower,
@@ -399,7 +444,7 @@ fn can_vote_on_candidate_bank(
     } else {
         false
     }
-}
+}*/
 
 /// Given a `heaviest_bank` and a `heaviest_bank_on_same_voted_fork`, return
 /// a bank to vote on, a bank to reset to, and a list of switch failure
@@ -413,7 +458,7 @@ fn can_vote_on_candidate_bank(
 /// valid again if it was confirmed by the cluster.
 /// Until this is resolved, leaders will build each of their
 /// blocks from the last reset bank on the invalid fork.
-pub fn select_vote_and_reset_forks(
+/*pub fn select_vote_and_reset_forks(
     heaviest_bank: &Arc<Bank>,
     // Should only be None if there was no previous vote
     heaviest_bank_on_same_voted_fork: Option<&Arc<Bank>>,
@@ -491,6 +536,36 @@ pub fn select_vote_and_reset_forks(
         SelectVoteAndResetForkResult {
             vote_bank: None,
             reset_bank: reset_bank.cloned(),
+            heaviest_fork_failures: failure_reasons,
+        }
+    }
+}*/
+
+pub fn select_vote_and_reset_forks_new(
+    heaviest_bank: &Arc<Bank>,
+    // Should only be None if there was no previous vote
+    /*heaviest_bank_on_same_voted_fork: Option<&Arc<Bank>>,
+    ancestors: &HashMap<u64, HashSet<u64>>,
+    descendants: &HashMap<u64, HashSet<u64>>,*/
+    progress: &ProgressMap,
+    //latest_validator_votes_for_frozen_banks: &LatestValidatorVotesForFrozenBanks,
+    //fork_choice: &HeaviestSubtreeForkChoice,
+) -> SelectVoteAndResetForkResult {
+    let mut failure_reasons = vec![];
+    let candidate_vote_bank = heaviest_bank;
+    if can_vote_on_candidate_bank_new(candidate_vote_bank.slot(), progress, &mut failure_reasons) {
+        // We can vote!
+        SelectVoteAndResetForkResult {
+            // TODO: Add switching proofs
+            vote_bank: Some((candidate_vote_bank.clone(), SwitchForkDecision::SameFork)),
+            reset_bank: Some(candidate_vote_bank.clone()),
+            heaviest_fork_failures: failure_reasons,
+        }
+    } else {
+        // Unable to vote on the candidate bank.
+        SelectVoteAndResetForkResult {
+            vote_bank: None,
+            reset_bank: Some(candidate_vote_bank.clone()),
             heaviest_fork_failures: failure_reasons,
         }
     }

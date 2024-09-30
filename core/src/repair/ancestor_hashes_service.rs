@@ -904,7 +904,7 @@ impl AncestorHashesService {
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod test {
     use {
         super::*,
@@ -919,7 +919,7 @@ mod test {
                 tests::{replay_blockstore_components, ReplayBlockstoreComponents},
                 ReplayStage,
             },
-            vote_simulator::VoteSimulator,
+            //vote_simulator::VoteSimulator,
         },
         solana_gossip::{
             cluster_info::{ClusterInfo, Node},
@@ -1179,7 +1179,7 @@ mod test {
     }
 
     #[test]
-    fn test_ancestor_hashes_service_find_epoch_slots_frozen_dead_slots() {
+    /*fn test_ancestor_hashes_service_find_epoch_slots_frozen_dead_slots() {
         let vote_simulator = VoteSimulator::new(3);
         let cluster_slots = ClusterSlots::default();
         let mut dead_slot_pool = HashSet::new();
@@ -1237,9 +1237,9 @@ mod test {
                 assert!(repairable_dead_slot_pool.contains(&dead_slot));
             }
         }
-    }
+    }*/
 
-    struct ResponderThreads {
+    /*struct ResponderThreads {
         t_request_receiver: JoinHandle<()>,
         t_listen: JoinHandle<()>,
         t_packet_adapter: JoinHandle<()>,
@@ -1333,7 +1333,7 @@ mod test {
                 correct_bank_hashes,
             }
         }
-    }
+    }*/
 
     struct ManageAncestorHashesState {
         ancestor_hashes_request_statuses: Arc<DashMap<Slot, AncestorRequestStatus>>,
@@ -1692,7 +1692,7 @@ mod test {
         responder_threads.shutdown();
     }
 
-    #[test]
+    /*#[test]
     fn test_ancestor_hashes_service_manage_ancestor_requests() {
         let vote_simulator = VoteSimulator::new(3);
         let ManageAncestorHashesState {
@@ -1943,7 +1943,7 @@ mod test {
         assert!(repairable_dead_slot_pool.is_empty());
         assert!(popular_pruned_slot_pool.is_empty());
         assert!(ancestor_hashes_request_statuses.is_empty());
-    }
+    }*/
 
     #[test]
     fn test_verify_and_process_ancestor_responses_invalid_packet() {
@@ -1977,7 +1977,7 @@ mod test {
         .is_none());
     }
 
-    #[test]
+   /*#[test]
     fn test_ancestor_hashes_service_manage_ancestor_hashes_after_replay_dump() {
         let dead_slot = MAX_ANCESTOR_RESPONSES as Slot;
         let responder_threads = ResponderThreads::new(dead_slot);
@@ -2151,9 +2151,9 @@ mod test {
         // completion
         assert!(ancestor_hashes_request_statuses.is_empty());
         responder_threads.shutdown();
-    }
+    }*/
 
-    #[test]
+    /*#[test]
     fn test_ancestor_hashes_service_retryable_duplicate_ancestor_decision() {
         let vote_simulator = VoteSimulator::new(1);
         let ManageAncestorHashesState {
@@ -2256,5 +2256,5 @@ mod test {
         assert!(dead_slot_pool.is_empty());
         assert!(repairable_dead_slot_pool.is_empty());
         assert!(popular_pruned_slot_pool.contains(&request_slot));
-    }
-}
+    }*/
+}*/

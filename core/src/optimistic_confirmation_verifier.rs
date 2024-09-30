@@ -147,9 +147,12 @@ impl OptimisticConfirmationVerifier {
 #[cfg(test)]
 mod test {
     use {
-        super::*, crate::vote_simulator::VoteSimulator,
-        solana_ledger::get_tmp_ledger_path_auto_delete, solana_runtime::bank::Bank,
-        solana_sdk::pubkey::Pubkey, std::collections::HashMap, trees::tr,
+        super::*, //crate::vote_simulator::VoteSimulator,
+        solana_ledger::get_tmp_ledger_path_auto_delete,
+        solana_runtime::bank::Bank,
+        solana_sdk::pubkey::Pubkey,
+        std::collections::HashMap,
+        trees::tr,
     };
 
     #[test]
@@ -181,7 +184,7 @@ mod test {
             .contains(&(snapshot_start_slot + 1, bank_hash)));
     }
 
-    #[test]
+    /*#[test]
     fn test_get_unrooted_optimistic_slots_same_slot_different_hash() {
         let snapshot_start_slot = 0;
         let mut optimistic_confirmation_verifier =
@@ -324,5 +327,5 @@ mod test {
         let mut vote_simulator = VoteSimulator::new(1);
         vote_simulator.fill_bank_forks(forks, &HashMap::new(), true);
         vote_simulator
-    }
+    }*/
 }

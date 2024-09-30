@@ -2,7 +2,7 @@ use {
     crate::{
         cluster_info_vote_listener::SlotVoteTracker,
         cluster_slots_service::cluster_slots::SlotPubkeys,
-        consensus::{Stake, ThresholdDecision, VotedStakes},
+        consensus_new::{ComputedBankState, VotedStakes},
         replay_stage::SUPERMINORITY_THRESHOLD,
     },
     solana_ledger::blockstore_processor::{ConfirmationProgress, ReplaySlotStats},
@@ -67,6 +67,17 @@ impl RetransmitInfo {
         self.retry_iteration = self.retry_iteration.saturating_add(1);
         self.retry_time = Instant::now();
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ForkStats {
+    pub computed_bank_state: ComputedBankState,
+    pub computed: bool,
+    pub block_height: u64,
+    pub bank_hash: Option<Hash>,
+    pub is_locked_out: bool,
+    pub duplicate_confirmed_hash: Option<Hash>,
+    pub lockout_intervals: LockoutIntervals,
 }
 
 pub struct ForkProgress {
@@ -172,31 +183,6 @@ impl ForkProgress {
             new_progress.fork_stats.bank_hash = Some(bank.hash());
         }
         new_progress
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ForkStats {
-    pub fork_stake: Stake,
-    pub total_stake: Stake,
-    pub block_height: u64,
-    pub has_voted: bool,
-    pub is_recent: bool,
-    pub is_empty: bool,
-    pub vote_threshold: Vec<ThresholdDecision>,
-    pub is_locked_out: bool,
-    pub voted_stakes: VotedStakes,
-    pub duplicate_confirmed_hash: Option<Hash>,
-    pub computed: bool,
-    pub lockout_intervals: LockoutIntervals,
-    pub bank_hash: Option<Hash>,
-    pub my_latest_landed_vote: Option<Slot>,
-}
-
-impl ForkStats {
-    /// Return fork_weight, i.e. bank_stake over total_stake.
-    pub fn fork_weight(&self) -> f64 {
-        self.fork_stake as f64 / self.total_stake as f64
     }
 }
 
@@ -365,7 +351,7 @@ impl ProgressMap {
     pub fn my_latest_landed_vote(&self, slot: Slot) -> Option<Slot> {
         self.progress_map
             .get(&slot)
-            .and_then(|s| s.fork_stats.my_latest_landed_vote)
+            .and_then(|s| s.fork_stats.computed_bank_state.my_latest_landed_vote)
     }
 
     pub fn set_duplicate_confirmed_hash(&mut self, slot: Slot, hash: Hash) {

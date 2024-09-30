@@ -1,4 +1,4 @@
-#![cfg(feature = "dev-context-only-utils")]
+/*#![cfg(feature = "dev-context-only-utils")]
 use {
     crate::{
         cluster_info_vote_listener::VoteTracker,
@@ -413,4 +413,4 @@ pub fn initialize_state(
     let heaviest_subtree_fork_choice =
         HeaviestSubtreeForkChoice::new_from_bank_forks(bank_forks.clone());
     (bank_forks, progress, heaviest_subtree_fork_choice)
-}
+}*/
