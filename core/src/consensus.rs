@@ -298,7 +298,7 @@ impl Tower {
             node_pubkey: *node_pubkey,
             ..Tower::default()
         };
-        tower.initialize_lockouts_from_bank(vote_account_pubkey, root, bank);
+        //tower.initialize_lockouts_from_bank(vote_account_pubkey, root, bank);
         tower
     }
 
@@ -581,11 +581,11 @@ impl Tower {
         self.last_vote_tx_blockhash = BlockhashStatus::HotSpare;
     }
 
-    pub fn last_voted_slot_in_bank(bank: &Bank, vote_account_pubkey: &Pubkey) -> Option<Slot> {
+    /*pub fn last_voted_slot_in_bank(bank: &Bank, vote_account_pubkey: &Pubkey) -> Option<Slot> {
         let vote_account = bank.get_vote_account(vote_account_pubkey)?;
         let vote_state = vote_account.vote_state();
         vote_state.last_voted_slot()
-    }
+    }*/
 
     pub fn record_bank_vote(&mut self, bank: &Bank) -> Option<Slot> {
         // Returns the new root if one is made after applying a vote for the given bank to
@@ -1568,7 +1568,7 @@ impl Tower {
         Ok(())
     }
 
-    fn initialize_lockouts_from_bank(
+    /*fn initialize_lockouts_from_bank(
         &mut self,
         vote_account_pubkey: &Pubkey,
         root: Slot,
@@ -1591,7 +1591,7 @@ impl Tower {
                 bank.slot()
             );
         }
-    }
+    }*/
 
     fn initialize_lockouts<F: FnMut(&LandedVote) -> bool>(&mut self, should_retain: F) {
         self.vote_state.votes.retain(should_retain);

@@ -455,7 +455,7 @@ pub enum CliValidatorsSortOrder {
     EpochCredits,
     Identity,
     LastVote,
-    Root,
+    //Root,
     SkipRate,
     Stake,
     VoteAccount,
@@ -493,7 +493,6 @@ impl fmt::Display for CliValidators {
             total_active_stake: u64,
             use_lamports_unit: bool,
             highest_last_vote: u64,
-            highest_root: u64,
         ) -> fmt::Result {
             fn non_zero_or_dash(v: u64, max_v: u64) -> String {
                 if v == 0 {
@@ -509,7 +508,7 @@ impl fmt::Display for CliValidators {
 
             writeln!(
                 f,
-                "{} {:<44}  {:<44}  {:>3}%  {:>14}  {:>14} {:>7} {:>8}  {:>7}  {:>22} ({:.2}%)",
+                "{} {:<44}  {:<44}  {:>3}% {:>14} {:>7} {:>8}  {:>7}  {:>22} ({:.2}%)",
                 if validator.delinquent {
                     WARNING.to_string()
                 } else {
@@ -519,7 +518,7 @@ impl fmt::Display for CliValidators {
                 validator.vote_account_pubkey,
                 validator.commission,
                 non_zero_or_dash(validator.last_vote, highest_last_vote),
-                non_zero_or_dash(validator.root_slot, highest_root),
+                //non_zero_or_dash(validator.root_slot, highest_root),
                 if let Some(skip_rate) = validator.skip_rate {
                     format!("{skip_rate:.2}%")
                 } else {
@@ -579,9 +578,9 @@ impl fmt::Display for CliValidators {
             CliValidatorsSortOrder::LastVote => {
                 sorted_validators.sort_by_key(|a| a.last_vote);
             }
-            CliValidatorsSortOrder::Root => {
+            /*CliValidatorsSortOrder::Root => {
                 sorted_validators.sort_by_key(|a| a.root_slot);
-            }
+            }*/
             CliValidatorsSortOrder::VoteAccount => {
                 sorted_validators.sort_by(|a, b| a.vote_account_pubkey.cmp(&b.vote_account_pubkey));
             }
@@ -610,11 +609,6 @@ impl fmt::Display for CliValidators {
             sorted_validators.reverse();
         }
 
-        let highest_root = sorted_validators
-            .iter()
-            .map(|v| v.root_slot)
-            .max()
-            .unwrap_or_default();
         let highest_last_vote = sorted_validators
             .iter()
             .map(|v| v.last_vote)
@@ -636,7 +630,6 @@ impl fmt::Display for CliValidators {
                 self.total_active_stake,
                 self.use_lamports_unit,
                 highest_last_vote,
-                highest_root,
             )?;
         }
 
@@ -721,7 +714,7 @@ pub struct CliValidator {
     pub vote_account_pubkey: String,
     pub commission: u8,
     pub last_vote: u64,
-    pub root_slot: u64,
+    //pub root_slot: u64,
     pub credits: u64,       // lifetime credits
     pub epoch_credits: u64, // credits earned in the current epoch
     pub activated_stake: u64,
@@ -789,7 +782,7 @@ impl CliValidator {
             vote_account_pubkey: format_labeled_address(&vote_account.vote_pubkey, address_labels),
             commission: vote_account.commission,
             last_vote: vote_account.last_vote,
-            root_slot: vote_account.root_slot,
+            //root_slot: vote_account.root_slot,
             credits,
             epoch_credits,
             activated_stake: vote_account.activated_stake,

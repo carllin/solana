@@ -1027,11 +1027,7 @@ impl JsonRpcRequestProcessor {
                 }
 
                 let vote_state = account.vote_state();
-                let last_vote = if let Some(vote) = vote_state.votes.iter().last() {
-                    vote.slot()
-                } else {
-                    0
-                };
+                let last_vote = vote_state.slot();
 
                 let epoch_credits = vote_state.epoch_credits();
                 let epoch_credits = if epoch_credits.len()
@@ -1051,7 +1047,7 @@ impl JsonRpcRequestProcessor {
                     node_pubkey: vote_state.node_pubkey.to_string(),
                     activated_stake: *activated_stake,
                     commission: vote_state.commission,
-                    root_slot: vote_state.root_slot.unwrap_or(0),
+                    //root_slot: vote_state.root_slot.unwrap_or(0),
                     epoch_credits,
                     epoch_vote_account: epoch_vote_accounts.contains_key(vote_pubkey),
                     last_vote,

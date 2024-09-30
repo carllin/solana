@@ -17,7 +17,7 @@ use {
         vote::state::VoteStateVersions,
     },
     solana_stake_program::stake_state::Stake,
-    solana_vote::vote_account::{VoteAccount, VoteAccounts},
+    solana_vote_new::vote_account::{VoteAccount, VoteAccounts},
     std::{
         collections::HashMap,
         ops::Add,

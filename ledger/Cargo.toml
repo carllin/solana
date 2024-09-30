@@ -62,7 +62,7 @@ solana-svm = { workspace = true }
 solana-svm-transaction = { workspace = true }
 solana-timings = { workspace = true }
 solana-transaction-status = { workspace = true }
-solana-vote = { workspace = true }
+solana-vote-new = { workspace = true }
 solana-vote-program = { workspace = true }
 solana-vote-new-program = { workspace = true }
 spl-token = { workspace = true, features = ["no-entrypoint"] }

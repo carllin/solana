@@ -78,9 +78,9 @@ use {
     solana_stake_program::{points::PointValue, stake_state},
     solana_transaction_status::parse_ui_instruction,
     solana_unified_scheduler_pool::DefaultSchedulerPool,
-    solana_vote_program::{
+    solana_vote_new_program::{
         self,
-        vote_state::{self, VoteState},
+        vote_state_new::{self, VoteState},
     },
     std::{
         collections::{HashMap, HashSet},
@@ -217,16 +217,14 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
             .sum();
         for (stake, vote_account) in bank.vote_accounts().values() {
             let vote_state = vote_account.vote_state();
-            if let Some(last_vote) = vote_state.votes.iter().last() {
-                let entry = last_votes.entry(vote_state.node_pubkey).or_insert((
-                    last_vote.slot(),
-                    vote_state.clone(),
-                    *stake,
-                    total_stake,
-                ));
-                if entry.0 < last_vote.slot() {
-                    *entry = (last_vote.slot(), vote_state.clone(), *stake, total_stake);
-                }
+            let entry = last_votes.entry(vote_state.node_pubkey).or_insert((
+                vote_state.slot(),
+                vote_state.clone(),
+                *stake,
+                total_stake,
+            ));
+            if entry.0 < vote_state.slot() {
+                *entry = (vote_state.slot(), vote_state.clone(), *stake, total_stake);
             }
         }
     }
@@ -257,12 +255,11 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
         loop {
             for (_, vote_account) in bank.vote_accounts().values() {
                 let vote_state = vote_account.vote_state();
-                if let Some(last_vote) = vote_state.votes.iter().last() {
-                    let validator_votes = all_votes.entry(vote_state.node_pubkey).or_default();
-                    validator_votes
-                        .entry(last_vote.slot())
-                        .or_insert_with(|| vote_state.clone());
-                }
+                let last_vote = vote_state.slot();
+                let validator_votes = all_votes.entry(vote_state.node_pubkey).or_default();
+                validator_votes
+                    .entry(last_vote)
+                    .or_insert_with(|| vote_state.clone());
             }
 
             if !styled_slots.contains(&bank.slot()) {
@@ -354,7 +351,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
             absent_stake += stake;
         };
 
-        if config.vote_account_mode.is_enabled() {
+        /*if config.vote_account_mode.is_enabled() {
             let vote_history =
                 if matches!(config.vote_account_mode, GraphVoteAccountMode::WithHistory) {
                     format!(
@@ -398,7 +395,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
                     "...".to_string()
                 },
             ));
-        }
+        }*/
     }
 
     // Annotate the final "..." node with absent vote and stake information
@@ -412,7 +409,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     }
 
     // Add for vote information from all banks.
-    if config.include_all_votes {
+    /*if config.include_all_votes {
         for (node_pubkey, validator_votes) in &all_votes {
             for (vote_slot, vote_state) in validator_votes {
                 dot.push(format!(
@@ -441,7 +438,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
                 ));
             }
         }
-    }
+    }*/
 
     dot.push("}".to_string());
     dot.join("\n")
@@ -2230,7 +2227,7 @@ fn main() {
                         // Delete existing vote accounts
                         for (address, mut account) in bank
                             .get_program_accounts(
-                                &solana_vote_program::id(),
+                                &solana_vote_new_program::id(),
                                 &ScanConfig::new(false),
                             )
                             .unwrap()
@@ -2261,7 +2258,7 @@ fn main() {
                                 ),
                             );
 
-                            let vote_account = vote_state::create_account_with_authorized(
+                            let vote_account = vote_state_new::create_account_with_authorized(
                                 identity_pubkey,
                                 identity_pubkey,
                                 identity_pubkey,

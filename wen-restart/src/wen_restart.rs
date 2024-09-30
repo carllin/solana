@@ -46,7 +46,7 @@ use {
     },
     solana_sdk::{shred_version::compute_shred_version, timing::timestamp},
     solana_timings::ExecuteTimings,
-    solana_vote_program::vote_state::VoteTransaction,
+    solana_vote_new_program::vote_state_new::{VoteRange, VoteTransaction},
     std::{
         collections::{HashMap, HashSet},
         fs::{read, File},
@@ -1158,21 +1158,11 @@ pub(crate) fn initialize(
                 }
                 None => {
                     // repair and restart option does not work without last voted slot.
-                    if let Some(last_vote_slot) = last_vote.last_voted_slot() {
-                        last_vote_bankhash = last_vote.hash();
-                        last_voted_fork_slots =
-                            AncestorIterator::new_inclusive(last_vote_slot, &blockstore)
-                                .take(RestartLastVotedForkSlots::MAX_SLOTS)
-                                .collect();
-                    } else {
-                        error!("
-                            Cannot find last voted slot in the tower storage, it either means that this node has never \
-                            voted or the tower storage is corrupted. Unfortunately, since WenRestart is a consensus protocol \
-                            depending on each participant to send their last voted fork slots, your validator cannot participate.\
-                            Please check discord for the conclusion of the WenRestart protocol, then generate a snapshot and use \
-                            --wait-for-supermajority to restart the validator.");
-                        return Err(WenRestartError::MissingLastVotedForkSlots.into());
-                    }
+                    last_vote_bankhash = last_vote.hash();
+                    last_voted_fork_slots =
+                        AncestorIterator::new_inclusive(last_vote.slot(), &blockstore)
+                            .take(RestartLastVotedForkSlots::MAX_SLOTS)
+                            .collect();
                 }
             }
             Ok((
@@ -1303,10 +1293,7 @@ mod tests {
             blockstore_processor::{fill_blockstore_slot_with_ticks, test_process_blockstore},
             get_tmp_ledger_path_auto_delete,
         },
-        solana_program::{
-            hash::Hash,
-            vote::state::{TowerSync, Vote},
-        },
+        solana_program::{hash::Hash, vote_new::state::Vote},
         solana_runtime::{
             epoch_stakes::EpochStakes,
             genesis_utils::{
@@ -1322,8 +1309,8 @@ mod tests {
             timing::timestamp,
         },
         solana_streamer::socket::SocketAddrSpace,
-        solana_vote::vote_account::VoteAccount,
-        solana_vote_program::vote_state::create_account_with_authorized,
+        solana_vote_new::vote_account::VoteAccount,
+        solana_vote_new_program::vote_state_new::create_account_with_authorized,
         std::{fs::remove_file, sync::Arc, thread::Builder},
         tempfile::TempDir,
     };
@@ -1556,7 +1543,10 @@ mod tests {
         let last_vote_slot: Slot = test_state.last_voted_fork_slots[0];
         let wen_restart_config = WenRestartConfig {
             wen_restart_path: test_state.wen_restart_proto_path.clone(),
-            last_vote: VoteTransaction::from(Vote::new(vec![last_vote_slot], last_vote_bankhash)),
+            last_vote: VoteTransaction::from(Vote::new(
+                VoteRange::new(0, last_vote_slot),
+                last_vote_bankhash,
+            )),
             blockstore: test_state.blockstore.clone(),
             cluster_info: test_state.cluster_info.clone(),
             bank_forks: test_state.bank_forks.clone(),
@@ -1623,7 +1613,10 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(false));
         let wen_restart_config = WenRestartConfig {
             wen_restart_path: test_state.wen_restart_proto_path.clone(),
-            last_vote: VoteTransaction::from(Vote::new(vec![last_vote_slot], last_vote_bankhash)),
+            last_vote: VoteTransaction::from(Vote::new(
+                VoteRange::new(0, last_vote_slot),
+                last_vote_bankhash,
+            )),
             blockstore: test_state.blockstore.clone(),
             cluster_info: test_state.cluster_info.clone(),
             bank_forks: test_state.bank_forks.clone(),
@@ -1985,7 +1978,7 @@ mod tests {
             wait_for_wen_restart(WenRestartConfig {
                 wen_restart_path: test_state.wen_restart_proto_path,
                 last_vote: VoteTransaction::from(Vote::new(
-                    vec![new_root_slot],
+                    VoteRange::new(0, new_root_slot),
                     last_vote_bankhash
                 )),
                 blockstore: test_state.blockstore,
@@ -2022,7 +2015,10 @@ mod tests {
         assert_eq!(
             initialize(
                 &test_state.wen_restart_proto_path,
-                VoteTransaction::from(Vote::new(last_voted_fork_slots.clone(), last_vote_bankhash)),
+                VoteTransaction::from(Vote::new(
+                    VoteRange::new(0, *last_voted_fork_slots.last().unwrap_or(&0)),
+                    last_vote_bankhash
+                )),
                 test_state.blockstore.clone()
             )
             .unwrap_err()
@@ -2032,7 +2028,8 @@ mod tests {
         );
         assert!(remove_file(&test_state.wen_restart_proto_path).is_ok());
         let last_vote_bankhash = Hash::new_unique();
-        let empty_last_vote = VoteTransaction::from(Vote::new(vec![], last_vote_bankhash));
+        let empty_last_vote =
+            VoteTransaction::from(Vote::new(VoteRange::new(0, 0), last_vote_bankhash));
         assert_eq!(
             initialize(
                 &test_state.wen_restart_proto_path,
@@ -2055,7 +2052,10 @@ mod tests {
         assert_eq!(
             initialize(
                 &test_state.wen_restart_proto_path,
-                VoteTransaction::from(Vote::new(last_voted_fork_slots.clone(), last_vote_bankhash)),
+                VoteTransaction::from(Vote::new(
+                    VoteRange::new(0, *last_voted_fork_slots.last().unwrap_or(&0)),
+                    last_vote_bankhash
+                )),
                 test_state.blockstore.clone()
             )
             .err()
@@ -2082,7 +2082,7 @@ mod tests {
         assert_eq!(
             initialize(
                 &test_state.wen_restart_proto_path,
-                VoteTransaction::from(Vote::new(last_voted_fork_slots.clone(), last_vote_bankhash)),
+                VoteTransaction::from(Vote::new(VoteRange::new(0, *last_voted_fork_slots.last().unwrap_or(&0)), last_vote_bankhash)),
                 test_state.blockstore.clone()
             ).err()
             .unwrap()
@@ -2107,7 +2107,10 @@ mod tests {
         assert_eq!(
             initialize(
                 &test_state.wen_restart_proto_path,
-                VoteTransaction::from(Vote::new(last_voted_fork_slots.clone(), last_vote_bankhash)),
+                VoteTransaction::from(Vote::new(
+                    VoteRange::new(0, *last_voted_fork_slots.last().unwrap_or(&0)),
+                    last_vote_bankhash
+                )),
                 test_state.blockstore.clone()
             )
             .err()
@@ -2119,8 +2122,10 @@ mod tests {
         // Now test successful initialization.
         assert!(remove_file(&test_state.wen_restart_proto_path).is_ok());
         // Test the case where the file is not found.
-        let mut vote = TowerSync::from(vec![(test_state.last_voted_fork_slots[0], 1)]);
-        vote.hash = last_vote_bankhash;
+        let mut vote = Vote::new(
+            VoteRange::new(0, test_state.last_voted_fork_slots[0]),
+            last_vote_bankhash,
+        );
         let last_vote = VoteTransaction::from(vote);
         assert_eq!(
             initialize(
@@ -2276,7 +2281,10 @@ mod tests {
         assert_eq!(
             initialize(
                 &test_state.wen_restart_proto_path,
-                VoteTransaction::from(Vote::new(last_voted_fork_slots.clone(), last_vote_bankhash)),
+                VoteTransaction::from(Vote::new(
+                    VoteRange::new(0, *last_voted_fork_slots.last().unwrap_or(&0)),
+                    last_vote_bankhash
+                )),
                 test_state.blockstore.clone()
             )
             .unwrap(),
@@ -2317,7 +2325,10 @@ mod tests {
         assert_eq!(
             initialize(
                 &test_state.wen_restart_proto_path,
-                VoteTransaction::from(Vote::new(last_voted_fork_slots, last_vote_bankhash)),
+                VoteTransaction::from(Vote::new(
+                    VoteRange::new(0, *last_voted_fork_slots.last().unwrap_or(&0)),
+                    last_vote_bankhash
+                )),
                 test_state.blockstore.clone()
             )
             .unwrap(),
@@ -3375,7 +3386,10 @@ mod tests {
         let last_vote_bankhash = Hash::new_unique();
         let config = WenRestartConfig {
             wen_restart_path: test_state.wen_restart_proto_path.clone(),
-            last_vote: VoteTransaction::from(Vote::new(vec![last_vote_slot], last_vote_bankhash)),
+            last_vote: VoteTransaction::from(Vote::new(
+                VoteRange::new(0, last_vote_slot),
+                last_vote_bankhash,
+            )),
             blockstore: test_state.blockstore.clone(),
             cluster_info: test_state.cluster_info.clone(),
             bank_forks: test_state.bank_forks.clone(),

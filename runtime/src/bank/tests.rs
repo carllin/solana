@@ -109,11 +109,11 @@ use {
     },
     solana_svm_transaction::svm_message::SVMMessage,
     solana_timings::ExecuteTimings,
-    solana_vote_program::{
+    solana_vote_new_program::{
         vote_instruction,
-        vote_state::{
-            self, create_account_with_authorized, BlockTimestamp, Vote, VoteInit, VoteState,
-            VoteStateVersions, MAX_LOCKOUT_HISTORY,
+        vote_state_new::{
+            self, create_account_with_authorized, BlockTimestamp, Vote, VoteInit, VoteRange,
+            VoteState, VoteStateVersions,
         },
     },
     std::{
@@ -144,7 +144,7 @@ impl VoteReward {
         let validator_stake_lamports = rng.gen_range(1..200);
         let validator_voting_keypair = Keypair::new();
 
-        let validator_vote_account = vote_state::create_account(
+        let validator_vote_account = vote_state_new::create_account(
             &validator_voting_keypair.pubkey(),
             &validator_pubkey,
             rng.gen_range(1..20),
@@ -838,7 +838,7 @@ fn test_rent_distribution() {
     let validator_1_staking_keypair = Keypair::new();
     let validator_1_voting_keypair = Keypair::new();
 
-    let validator_1_vote_account = vote_state::create_account(
+    let validator_1_vote_account = vote_state_new::create_account(
         &validator_1_voting_keypair.pubkey(),
         &validator_1_pubkey,
         0,
@@ -871,7 +871,7 @@ fn test_rent_distribution() {
     let validator_2_staking_keypair = Keypair::new();
     let validator_2_voting_keypair = Keypair::new();
 
-    let validator_2_vote_account = vote_state::create_account(
+    let validator_2_vote_account = vote_state_new::create_account(
         &validator_2_voting_keypair.pubkey(),
         &validator_2_pubkey,
         0,
@@ -904,7 +904,7 @@ fn test_rent_distribution() {
     let validator_3_staking_keypair = Keypair::new();
     let validator_3_voting_keypair = Keypair::new();
 
-    let validator_3_vote_account = vote_state::create_account(
+    let validator_3_vote_account = vote_state_new::create_account(
         &validator_3_voting_keypair.pubkey(),
         &validator_3_pubkey,
         0,
@@ -1926,13 +1926,13 @@ where
     bank0.store_account_and_update_capitalization(&stake_id, &stake_account);
 
     // generate some rewards
-    let mut vote_state = Some(vote_state::from(&vote_account).unwrap());
-    for i in 0..MAX_LOCKOUT_HISTORY + 42 {
+    let mut vote_state = Some(vote_state_new::from(&vote_account).unwrap());
+    for i in 0..74 {
         if let Some(v) = vote_state.as_mut() {
-            vote_state::process_slot_vote_unchecked(v, i as u64)
+            vote_state_new::process_slot_vote_unchecked(v, 0, i as u64)
         }
         let versioned = VoteStateVersions::Current(Box::new(vote_state.take().unwrap()));
-        vote_state::to(&versioned, &mut vote_account).unwrap();
+        vote_state_new::to(&versioned, &mut vote_account).unwrap();
         bank0.store_account_and_update_capitalization(&vote_id, &vote_account);
         match versioned {
             VoteStateVersions::Current(v) => {
@@ -2049,7 +2049,7 @@ fn do_test_bank_update_rewards_determinism() -> u64 {
 
     let vote_id = solana_sdk::pubkey::new_rand();
     let mut vote_account =
-        vote_state::create_account(&vote_id, &solana_sdk::pubkey::new_rand(), 0, 100);
+        vote_state_new::create_account(&vote_id, &solana_sdk::pubkey::new_rand(), 0, 100);
     let stake_id1 = solana_sdk::pubkey::new_rand();
     let stake_account1 = crate::stakes::tests::create_stake_account(123, &vote_id, &stake_id1);
     let stake_id2 = solana_sdk::pubkey::new_rand();
@@ -2060,13 +2060,13 @@ fn do_test_bank_update_rewards_determinism() -> u64 {
     bank.store_account_and_update_capitalization(&stake_id2, &stake_account2);
 
     // generate some rewards
-    let mut vote_state = Some(vote_state::from(&vote_account).unwrap());
-    for i in 0..MAX_LOCKOUT_HISTORY + 42 {
+    let mut vote_state = Some(vote_state_new::from(&vote_account).unwrap());
+    for i in 0..74 {
         if let Some(v) = vote_state.as_mut() {
-            vote_state::process_slot_vote_unchecked(v, i as u64)
+            vote_state_new::process_slot_vote_unchecked(v, 0, i as u64)
         }
         let versioned = VoteStateVersions::Current(Box::new(vote_state.take().unwrap()));
-        vote_state::to(&versioned, &mut vote_account).unwrap();
+        vote_state_new::to(&versioned, &mut vote_account).unwrap();
         bank.store_account_and_update_capitalization(&vote_id, &vote_account);
         match versioned {
             VoteStateVersions::Current(v) => {
@@ -2995,11 +2995,11 @@ fn test_readonly_accounts() {
 
     // Create vote accounts
     let vote_account0 =
-        vote_state::create_account(&vote_pubkey0, &authorized_voter.pubkey(), 0, 100);
+        vote_state_new::create_account(&vote_pubkey0, &authorized_voter.pubkey(), 0, 100);
     let vote_account1 =
-        vote_state::create_account(&vote_pubkey1, &authorized_voter.pubkey(), 0, 100);
+        vote_state_new::create_account(&vote_pubkey1, &authorized_voter.pubkey(), 0, 100);
     let vote_account2 =
-        vote_state::create_account(&vote_pubkey2, &authorized_voter.pubkey(), 0, 100);
+        vote_state_new::create_account(&vote_pubkey2, &authorized_voter.pubkey(), 0, 100);
     bank.store_account(&vote_pubkey0, &vote_account0);
     bank.store_account(&vote_pubkey1, &vote_account1);
     bank.store_account(&vote_pubkey2, &vote_account2);
@@ -3010,7 +3010,7 @@ fn test_readonly_accounts() {
     bank.transfer(1, &mint_keypair, &authorized_voter.pubkey())
         .unwrap();
 
-    let vote = Vote::new(vec![1], Hash::default());
+    let vote = Vote::new(VoteRange::new(0, 1), Hash::default());
     let ix0 = vote_instruction::vote(&vote_pubkey0, &authorized_voter.pubkey(), vote.clone());
     let tx0 = Transaction::new_signed_with_payer(
         &[ix0],
@@ -4274,7 +4274,7 @@ fn test_bank_vote_accounts() {
         },
         10,
         vote_instruction::CreateVoteAccountConfig {
-            space: VoteStateVersions::vote_state_size_of(true) as u64,
+            space: VoteStateVersions::vote_state_size_of() as u64,
             ..vote_instruction::CreateVoteAccountConfig::default()
         },
     );
@@ -4342,7 +4342,7 @@ fn test_bank_cloned_stake_delegations() {
         },
         vote_balance,
         vote_instruction::CreateVoteAccountConfig {
-            space: VoteStateVersions::vote_state_size_of(true) as u64,
+            space: VoteStateVersions::vote_state_size_of() as u64,
             ..vote_instruction::CreateVoteAccountConfig::default()
         },
     );
@@ -4638,7 +4638,7 @@ fn test_add_builtin() {
         },
         1,
         vote_instruction::CreateVoteAccountConfig {
-            space: VoteStateVersions::vote_state_size_of(true) as u64,
+            space: VoteStateVersions::vote_state_size_of() as u64,
             ..vote_instruction::CreateVoteAccountConfig::default()
         },
     );
@@ -4685,7 +4685,7 @@ fn test_add_duplicate_static_program() {
         },
         1,
         vote_instruction::CreateVoteAccountConfig {
-            space: VoteStateVersions::vote_state_size_of(true) as u64,
+            space: VoteStateVersions::vote_state_size_of() as u64,
             ..vote_instruction::CreateVoteAccountConfig::default()
         },
     );
@@ -4699,15 +4699,15 @@ fn test_add_duplicate_static_program() {
 
     let slot = bank.slot().saturating_add(1);
     let mut bank = Bank::new_from_parent(bank, &Pubkey::default(), slot);
-    bank.add_mockup_builtin(solana_vote_program::id(), MockBuiltin::vm);
+    bank.add_mockup_builtin(solana_vote_new_program::id(), MockBuiltin::vm);
     let bank = bank_forks
         .write()
         .unwrap()
         .insert(bank)
         .clone_without_scheduler();
 
-    let vote_loader_account = bank.get_account(&solana_vote_program::id()).unwrap();
-    let new_vote_loader_account = bank.get_account(&solana_vote_program::id()).unwrap();
+    let vote_loader_account = bank.get_account(&solana_vote_new_program::id()).unwrap();
+    let new_vote_loader_account = bank.get_account(&solana_vote_new_program::id()).unwrap();
     // Vote loader account should not be updated since it was included in the genesis config.
     assert_eq!(vote_loader_account.data(), new_vote_loader_account.data());
     assert_eq!(
@@ -5969,7 +5969,8 @@ fn test_account_ids_after_program_ids() {
         AccountMeta::new(to_pubkey, false),
     ];
 
-    let instruction = Instruction::new_with_bincode(solana_vote_program::id(), &10, account_metas);
+    let instruction =
+        Instruction::new_with_bincode(solana_vote_new_program::id(), &10, account_metas);
     let mut tx = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&mint_keypair.pubkey()),
@@ -5981,7 +5982,7 @@ fn test_account_ids_after_program_ids() {
 
     let slot = bank.slot().saturating_add(1);
     let mut bank = Bank::new_from_parent(bank, &Pubkey::default(), slot);
-    bank.add_mockup_builtin(solana_vote_program::id(), MockBuiltin::vm);
+    bank.add_mockup_builtin(solana_vote_new_program::id(), MockBuiltin::vm);
     let bank = bank_forks
         .write()
         .unwrap()
@@ -5990,7 +5991,7 @@ fn test_account_ids_after_program_ids() {
 
     let result = bank.process_transaction(&tx);
     assert_eq!(result, Ok(()));
-    let account = bank.get_account(&solana_vote_program::id()).unwrap();
+    let account = bank.get_account(&solana_vote_new_program::id()).unwrap();
     info!("account: {:?}", account);
     assert!(account.executable());
 }
@@ -6030,7 +6031,7 @@ fn test_duplicate_account_key() {
     let (genesis_config, mint_keypair) = create_genesis_config(500);
     let (bank, _bank_forks) = Bank::new_with_mockup_builtin_for_tests(
         &genesis_config,
-        solana_vote_program::id(),
+        solana_vote_new_program::id(),
         MockBuiltin::vm,
     );
 
@@ -6042,7 +6043,8 @@ fn test_duplicate_account_key() {
         AccountMeta::new(to_pubkey, false),
     ];
 
-    let instruction = Instruction::new_with_bincode(solana_vote_program::id(), &10, account_metas);
+    let instruction =
+        Instruction::new_with_bincode(solana_vote_new_program::id(), &10, account_metas);
     let mut tx = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&mint_keypair.pubkey()),
@@ -6061,7 +6063,7 @@ fn test_process_transaction_with_too_many_account_locks() {
     let (genesis_config, mint_keypair) = create_genesis_config(500);
     let (bank, _bank_forks) = Bank::new_with_mockup_builtin_for_tests(
         &genesis_config,
-        solana_vote_program::id(),
+        solana_vote_new_program::id(),
         MockBuiltin::vm,
     );
 
@@ -6073,7 +6075,8 @@ fn test_process_transaction_with_too_many_account_locks() {
         AccountMeta::new(to_pubkey, false),
     ];
 
-    let instruction = Instruction::new_with_bincode(solana_vote_program::id(), &10, account_metas);
+    let instruction =
+        Instruction::new_with_bincode(solana_vote_new_program::id(), &10, account_metas);
     let mut tx = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&mint_keypair.pubkey()),
@@ -6104,9 +6107,10 @@ fn test_program_id_as_payer() {
         AccountMeta::new(to_pubkey, false),
     ];
 
-    bank.add_mockup_builtin(solana_vote_program::id(), MockBuiltin::vm);
+    bank.add_mockup_builtin(solana_vote_new_program::id(), MockBuiltin::vm);
 
-    let instruction = Instruction::new_with_bincode(solana_vote_program::id(), &10, account_metas);
+    let instruction =
+        Instruction::new_with_bincode(solana_vote_new_program::id(), &10, account_metas);
     let mut tx = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&mint_keypair.pubkey()),
@@ -6121,7 +6125,7 @@ fn test_program_id_as_payer() {
     );
     assert_eq!(tx.message.account_keys.len(), 4);
     tx.message.account_keys.clear();
-    tx.message.account_keys.push(solana_vote_program::id());
+    tx.message.account_keys.push(solana_vote_new_program::id());
     tx.message.account_keys.push(mint_keypair.pubkey());
     tx.message.account_keys.push(from_pubkey);
     tx.message.account_keys.push(to_pubkey);
@@ -6149,14 +6153,15 @@ fn test_ref_account_key_after_program_id() {
 
     let slot = bank.slot().saturating_add(1);
     let mut bank = Bank::new_from_parent(bank, &Pubkey::default(), slot);
-    bank.add_mockup_builtin(solana_vote_program::id(), MockBuiltin::vm);
+    bank.add_mockup_builtin(solana_vote_new_program::id(), MockBuiltin::vm);
     let bank = bank_forks
         .write()
         .unwrap()
         .insert(bank)
         .clone_without_scheduler();
 
-    let instruction = Instruction::new_with_bincode(solana_vote_program::id(), &10, account_metas);
+    let instruction =
+        Instruction::new_with_bincode(solana_vote_new_program::id(), &10, account_metas);
     let mut tx = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&mint_keypair.pubkey()),
@@ -9123,7 +9128,7 @@ fn test_vote_epoch_panic() {
         },
         1_000_000_000,
         vote_instruction::CreateVoteAccountConfig {
-            space: VoteStateVersions::vote_state_size_of(true) as u64,
+            space: VoteStateVersions::vote_state_size_of() as u64,
             ..vote_instruction::CreateVoteAccountConfig::default()
         },
     ));
@@ -10686,7 +10691,7 @@ fn test_rent_state_changes_sysvars() {
     let validator_staking_keypair = Keypair::new();
     let validator_voting_keypair = Keypair::new();
 
-    let validator_vote_account = vote_state::create_account(
+    let validator_vote_account = vote_state_new::create_account(
         &validator_voting_keypair.pubkey(),
         &validator_pubkey,
         0,

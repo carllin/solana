@@ -284,7 +284,7 @@ impl RpcSender for MockSender {
                         epoch_vote_account: false,
                         epoch_credits: vec![],
                         last_vote: 0,
-                        root_slot: Slot::default(),
+                        //root_slot: Slot::default(),
                     }],
                 })
             }

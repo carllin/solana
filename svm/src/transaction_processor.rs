@@ -55,7 +55,7 @@ use {
     solana_svm_transaction::{svm_message::SVMMessage, svm_transaction::SVMTransaction},
     solana_timings::{ExecuteTimingType, ExecuteTimings},
     solana_type_overrides::sync::{atomic::Ordering, Arc, RwLock, RwLockReadGuard},
-    solana_vote::vote_account::VoteAccountsHashMap,
+    solana_vote_new::vote_account::VoteAccountsHashMap,
     std::{
         collections::{hash_map::Entry, HashMap, HashSet},
         fmt::{Debug, Formatter},

@@ -257,8 +257,8 @@ mod tests {
             },
         },
         solana_sdk::{hash::Hash, signature::Signer, timing::timestamp},
-        solana_vote::vote_account::VoteAccount,
-        solana_vote_program::vote_state::create_account_with_authorized,
+        solana_vote_new::vote_account::VoteAccount,
+        solana_vote_new_program::vote_state_new::create_account_with_authorized,
     };
 
     const TOTAL_VALIDATOR_COUNT: u16 = 10;

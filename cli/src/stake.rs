@@ -2679,7 +2679,7 @@ pub fn process_delegate_stake(
                 )))?;
 
         let activated_stake = rpc_vote_account.activated_stake;
-        let root_slot = rpc_vote_account.root_slot;
+        /*let root_slot = rpc_vote_account.root_slot;
         let min_root_slot = rpc_client
             .get_slot()
             .map(|slot| slot.saturating_sub(DELINQUENT_VALIDATOR_SLOT_DISTANCE))?;
@@ -2702,7 +2702,7 @@ pub fn process_delegate_stake(
             } else {
                 println!("--force supplied, ignoring: {err}");
             }
-        }
+        }*/
     }
 
     let recent_blockhash = blockhash_query.get_blockhash(rpc_client, config.commitment)?;

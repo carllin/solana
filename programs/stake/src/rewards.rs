@@ -17,7 +17,7 @@ use {
         },
         stake_history::StakeHistory,
     },
-    solana_vote_program::vote_state::VoteState,
+    solana_vote_new_program::vote_state_new::VoteState,
 };
 
 #[derive(Debug, PartialEq, Eq)]

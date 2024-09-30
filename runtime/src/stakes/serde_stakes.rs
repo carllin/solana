@@ -5,7 +5,7 @@ use {
     serde::{ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer},
     solana_sdk::{clock::Epoch, pubkey::Pubkey, stake::state::Delegation},
     solana_stake_program::stake_state::Stake,
-    solana_vote::vote_account::VoteAccounts,
+    solana_vote_new::vote_account::VoteAccounts,
     std::sync::Arc,
 };
 

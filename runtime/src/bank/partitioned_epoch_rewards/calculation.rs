@@ -343,7 +343,7 @@ impl Bank {
             cached_vote_accounts,
         } = reward_calculate_params;
 
-        let solana_vote_program: Pubkey = solana_vote_program::id();
+        let solana_vote_program: Pubkey = solana_vote_new_program::id();
 
         let get_vote_account = |vote_pubkey: &Pubkey| -> Option<VoteAccount> {
             if let Some(vote_account) = cached_vote_accounts.get(vote_pubkey) {
@@ -479,7 +479,7 @@ impl Bank {
             cached_vote_accounts,
         } = reward_calculate_params;
 
-        let solana_vote_program: Pubkey = solana_vote_program::id();
+        let solana_vote_program: Pubkey = solana_vote_new_program::id();
 
         let get_vote_account = |vote_pubkey: &Pubkey| -> Option<VoteAccount> {
             if let Some(vote_account) = cached_vote_accounts.get(vote_pubkey) {

@@ -100,7 +100,7 @@ impl VoteAccount {
             rand::Rng as _,
             solana_sdk::{
                 clock::Clock,
-                vote::state::{VoteInit, VoteStateVersions},
+                vote_new::state::{VoteInit, VoteStateVersions},
             },
         };
 

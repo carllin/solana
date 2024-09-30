@@ -422,7 +422,7 @@ mod tests {
                 epoch_schedule, rent, rewards, stake_history,
             },
         },
-        solana_vote_program::vote_state::{self, VoteState, VoteStateVersions},
+        solana_vote_new_program::vote_state_new::{self, VoteState, VoteStateVersions},
         std::{collections::HashSet, str::FromStr, sync::Arc},
         test_case::test_case,
     };
@@ -518,7 +518,7 @@ mod tests {
                     } else if *pubkey == invalid_stake_state_pubkey() {
                         AccountSharedData::new(0, 0, &id())
                     } else if *pubkey == invalid_vote_state_pubkey() {
-                        AccountSharedData::new(0, 0, &solana_vote_program::id())
+                        AccountSharedData::new(0, 0, &solana_vote_new_program::id())
                     } else if *pubkey == spoofed_stake_state_pubkey() {
                         AccountSharedData::new(0, 0, &spoofed_stake_program_id())
                     } else {
@@ -846,7 +846,7 @@ mod tests {
         let stake_history_address = stake_history::id();
         let stake_history_account = create_account_shared_data_for_test(&StakeHistory::default());
         let vote_address = Pubkey::new_unique();
-        let vote_account = AccountSharedData::new(0, 0, &solana_vote_program::id());
+        let vote_account = AccountSharedData::new(0, 0, &solana_vote_new_program::id());
         let clock_address = clock::id();
         let clock_account = create_account_shared_data_for_test(&clock::Clock::default());
         #[allow(deprecated)]
@@ -2004,10 +2004,14 @@ mod tests {
         .unwrap();
         let vote_address = solana_sdk::pubkey::new_rand();
         let vote_account =
-            vote_state::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
+            vote_state_new::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
         let vote_address_2 = solana_sdk::pubkey::new_rand();
-        let mut vote_account_2 =
-            vote_state::create_account(&vote_address_2, &solana_sdk::pubkey::new_rand(), 0, 100);
+        let mut vote_account_2 = vote_state_new::create_account(
+            &vote_address_2,
+            &solana_sdk::pubkey::new_rand(),
+            0,
+            100,
+        );
         vote_account_2.set_state(&VoteState::default()).unwrap();
         #[allow(deprecated)]
         let mut transaction_accounts = vec![
@@ -2190,15 +2194,19 @@ mod tests {
     fn test_stake_delegate(feature_set: Arc<FeatureSet>) {
         let mut vote_state = VoteState::default();
         for i in 0..1000 {
-            vote_state::process_slot_vote_unchecked(&mut vote_state, i);
+            vote_state_new::process_slot_vote_unchecked(&mut vote_state, 0, i);
         }
         let vote_state_credits = vote_state.credits();
         let vote_address = solana_sdk::pubkey::new_rand();
         let vote_address_2 = solana_sdk::pubkey::new_rand();
         let mut vote_account =
-            vote_state::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
-        let mut vote_account_2 =
-            vote_state::create_account(&vote_address_2, &solana_sdk::pubkey::new_rand(), 0, 100);
+            vote_state_new::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
+        let mut vote_account_2 = vote_state_new::create_account(
+            &vote_address_2,
+            &solana_sdk::pubkey::new_rand(),
+            0,
+            100,
+        );
         vote_account
             .set_state(&VoteStateVersions::new_current(vote_state.clone()))
             .unwrap();
@@ -2444,7 +2452,7 @@ mod tests {
         let authority_address = solana_sdk::pubkey::new_rand();
         let vote_address = solana_sdk::pubkey::new_rand();
         let vote_account =
-            vote_state::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
+            vote_state_new::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
         let stake_address = solana_sdk::pubkey::new_rand();
         let stake_account = AccountSharedData::new_data_with_space(
             stake_lamports,
@@ -2789,7 +2797,7 @@ mod tests {
         .unwrap();
         let vote_address = solana_sdk::pubkey::new_rand();
         let mut vote_account =
-            vote_state::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
+            vote_state_new::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
         vote_account
             .set_state(&VoteStateVersions::new_current(VoteState::default()))
             .unwrap();
@@ -3082,7 +3090,7 @@ mod tests {
         .unwrap();
         let vote_address = solana_sdk::pubkey::new_rand();
         let mut vote_account =
-            vote_state::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
+            vote_state_new::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
         vote_account
             .set_state(&VoteStateVersions::new_current(VoteState::default()))
             .unwrap();
@@ -3434,7 +3442,7 @@ mod tests {
         .unwrap();
         let vote_address = solana_sdk::pubkey::new_rand();
         let mut vote_account =
-            vote_state::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
+            vote_state_new::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
         vote_account
             .set_state(&VoteStateVersions::new_current(VoteState::default()))
             .unwrap();
@@ -3566,7 +3574,7 @@ mod tests {
         .unwrap();
         let vote_address = solana_sdk::pubkey::new_rand();
         let mut vote_account =
-            vote_state::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
+            vote_state_new::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
         vote_account
             .set_state(&VoteStateVersions::new_current(VoteState::default()))
             .unwrap();
@@ -3906,7 +3914,7 @@ mod tests {
         };
         let vote_address = solana_sdk::pubkey::new_rand();
         let vote_account =
-            vote_state::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
+            vote_state_new::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
         #[allow(deprecated)]
         let instruction_accounts = vec![
             AccountMeta {
@@ -4594,7 +4602,7 @@ mod tests {
         );
         let vote_address = solana_sdk::pubkey::new_rand();
         let vote_account =
-            vote_state::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
+            vote_state_new::create_account(&vote_address, &solana_sdk::pubkey::new_rand(), 0, 100);
         let recipient_address = solana_sdk::pubkey::new_rand();
         let mut clock = Clock::default();
         #[allow(deprecated)]
@@ -7037,7 +7045,7 @@ mod tests {
             1, /* lamports */
             &VoteStateVersions::new_current(VoteState::default()),
             VoteState::size_of(),
-            &solana_vote_program::id(),
+            &solana_vote_new_program::id(),
         )
         .unwrap();
 
@@ -7045,7 +7053,7 @@ mod tests {
             1, /* lamports */
             &VoteStateVersions::new_current(VoteState::default()),
             VoteState::size_of(),
-            &solana_vote_program::id(),
+            &solana_vote_new_program::id(),
         )
         .unwrap();
 

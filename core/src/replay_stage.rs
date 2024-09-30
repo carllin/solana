@@ -3357,22 +3357,23 @@ impl ReplayStage {
                     .get_fork_stats_mut(bank_slot)
                     .expect("All frozen banks must exist in the Progress map")
                     .computed;
+                // It's possible that the parent_slot doesn't exist for the root slot. In that
+                // case it's ok to give an empty votes map, because votes earlier than the root
+                // don't contribute to consensus
+                let previous_votes = progress
+                    .get_fork_stats(parent_slot)
+                    .map(|fork_stats| fork_stats.computed_bank_state.votes_per_validator.clone())
+                    .unwrap_or_default();
                 if !is_computed {
                     // TODO: Check if our vote is behind, if so adopt the on chain tower from this Bank
                     Self::adopt_on_chain_tower_if_behind(my_vote_pubkey, progress, bank);
                     let computed_bank_state = consensus_new::collect_vote_lockouts(
                         my_vote_pubkey,
-                        //TODO bring this back, &bank.vote_accounts(),
-                        &HashMap::new(),
+                        &bank.vote_accounts(),
                         ancestors,
                         |slot| progress.get_hash(slot),
                         latest_validator_votes_for_frozen_banks,
-                        progress
-                            .get_fork_stats(parent_slot)
-                            .unwrap()
-                            .computed_bank_state
-                            .votes_per_validator
-                            .clone(),
+                        previous_votes,
                         VOTE_THRESHOLD_SIZE,
                         |slot| {
                             progress.get_fork_stats(slot).and_then(|fork_stats| {

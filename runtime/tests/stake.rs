@@ -26,9 +26,9 @@ use {
         sysvar::{self, stake_history::StakeHistory},
     },
     solana_stake_program::stake_state,
-    solana_vote_program::{
+    solana_vote_new_program::{
         vote_instruction,
-        vote_state::{TowerSync, VoteInit, VoteState, VoteStateVersions, MAX_LOCKOUT_HISTORY},
+        vote_state_new::{Vote, VoteInit, VoteRange, VoteState, VoteStateVersions},
     },
     std::sync::{Arc, RwLock},
 };
@@ -84,19 +84,12 @@ fn fill_epoch_with_votes(
 
         let bank_client = BankClient::new_shared(bank.clone());
         let parent = bank.parent().unwrap();
-        let lowest_slot = u64::max(
-            (parent.slot() + 1).saturating_sub(MAX_LOCKOUT_HISTORY as u64),
-            start_slot,
-        );
+        let lowest_slot = u64::max((parent.slot() + 1).saturating_sub(32 as u64), start_slot);
         let slots: Vec<_> = (lowest_slot..(parent.slot() + 1)).collect();
         let root = (lowest_slot > start_slot).then(|| lowest_slot - 1);
-        let tower_sync = TowerSync::new_from_slots(slots, parent.hash(), root);
+        let vote = Vote::new(VoteRange::new(0, slot), parent.hash());
         let message = Message::new(
-            &[vote_instruction::tower_sync(
-                &vote_pubkey,
-                &vote_pubkey,
-                tower_sync,
-            )],
+            &[vote_instruction::vote(&vote_pubkey, &vote_pubkey, vote)],
             Some(&mint_pubkey),
         );
         assert!(bank_client
@@ -345,7 +338,7 @@ fn test_stake_account_lifetime() {
             },
             vote_balance,
             vote_instruction::CreateVoteAccountConfig {
-                space: VoteStateVersions::vote_state_size_of(true) as u64,
+                space: VoteStateVersions::vote_state_size_of() as u64,
                 ..vote_instruction::CreateVoteAccountConfig::default()
             },
         ),
@@ -435,8 +428,6 @@ fn test_stake_account_lifetime() {
         .expect("couldn't unpack account data")
         .convert_to_current();
 
-    // 1 less vote, as the first vote should have cleared the lockout
-    assert_eq!(vote_state.votes.len(), 31);
     // one vote per slot, might be more slots than 32 in the epoch
     assert!(vote_state.credits() >= 1);
 
@@ -633,7 +624,7 @@ fn test_create_stake_account_from_seed() {
             },
             10,
             vote_instruction::CreateVoteAccountConfig {
-                space: VoteStateVersions::vote_state_size_of(true) as u64,
+                space: VoteStateVersions::vote_state_size_of() as u64,
                 ..vote_instruction::CreateVoteAccountConfig::default()
             },
         ),

@@ -172,8 +172,8 @@ use {
     },
     solana_svm_transaction::svm_message::SVMMessage,
     solana_timings::{ExecuteTimingType, ExecuteTimings},
-    solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
-    solana_vote_program::vote_state::VoteState,
+    solana_vote_new::vote_account::{VoteAccount, VoteAccountsHashMap},
+    solana_vote_new_program::vote_state_new::VoteState,
     std::{
         borrow::Cow,
         collections::{HashMap, HashSet},
@@ -2325,7 +2325,7 @@ impl Bank {
         });
         // Obtain vote-accounts for unique voter pubkeys.
         let cached_vote_accounts = stakes.vote_accounts();
-        let solana_vote_program: Pubkey = solana_vote_program::id();
+        let solana_vote_program: Pubkey = solana_vote_new_program::id();
         let vote_accounts_cache_miss_count = AtomicUsize::default();
         let get_vote_account = |vote_pubkey: &Pubkey| -> Option<VoteAccount> {
             if let Some(vote_account) = cached_vote_accounts.get(vote_pubkey) {
@@ -7123,7 +7123,7 @@ pub mod test_utils {
             lamports::LamportsError,
             pubkey::Pubkey,
         },
-        solana_vote_program::vote_state::{self, BlockTimestamp, VoteStateVersions},
+        solana_vote_new_program::vote_state_new::{self, BlockTimestamp, VoteStateVersions},
         std::sync::Arc,
     };
     pub fn goto_end_of_slot(bank: Arc<Bank>) {
@@ -7148,10 +7148,10 @@ pub mod test_utils {
         vote_pubkey: &Pubkey,
     ) {
         let mut vote_account = bank.get_account(vote_pubkey).unwrap_or_default();
-        let mut vote_state = vote_state::from(&vote_account).unwrap_or_default();
+        let mut vote_state = vote_state_new::from(&vote_account).unwrap_or_default();
         vote_state.last_timestamp = timestamp;
         let versioned = VoteStateVersions::new_current(vote_state);
-        vote_state::to(&versioned, &mut vote_account).unwrap();
+        vote_state_new::to(&versioned, &mut vote_account).unwrap();
         bank.store_account(vote_pubkey, &vote_account);
     }
 

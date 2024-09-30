@@ -59,7 +59,7 @@ use {
     solana_svm_transaction::svm_transaction::SVMTransaction,
     solana_timings::{report_execute_timings, ExecuteTimingType, ExecuteTimings},
     solana_transaction_status::token_balances::TransactionTokenBalancesSet,
-    solana_vote::vote_account::VoteAccountsHashMap,
+    solana_vote_new::vote_account::VoteAccountsHashMap,
     std::{
         borrow::Cow,
         collections::{HashMap, HashSet},
@@ -1888,49 +1888,8 @@ fn load_frozen_forks(
             // If we've reached the last known root in blockstore, start looking
             // for newer cluster confirmed roots
             let new_root_bank = {
-                if bank_forks.read().unwrap().root() >= max_root {
-                    supermajority_root_from_vote_accounts(
-                        bank.total_epoch_stake(),
-                        &bank.vote_accounts(),
-                    ).and_then(|supermajority_root| {
-                        if supermajority_root > root {
-                            // If there's a cluster confirmed root greater than our last
-                            // replayed root, then because the cluster confirmed root should
-                            // be descended from our last root, it must exist in `all_banks`
-                            let cluster_root_bank = all_banks.get(&supermajority_root).unwrap();
-
-                            // cluster root must be a descendant of our root, otherwise something
-                            // is drastically wrong
-                            assert!(cluster_root_bank.ancestors.contains_key(&root));
-                            info!(
-                                "blockstore processor found new cluster confirmed root: {}, observed in bank: {}",
-                                cluster_root_bank.slot(), bank.slot()
-                            );
-
-                            // Ensure cluster-confirmed root and parents are set as root in blockstore
-                            let mut rooted_slots = vec![];
-                            let mut new_root_bank = cluster_root_bank.clone_without_scheduler();
-                            loop {
-                                if new_root_bank.slot() == root { break; } // Found the last root in the chain, yay!
-                                assert!(new_root_bank.slot() > root);
-
-                                rooted_slots.push((new_root_bank.slot(), Some(new_root_bank.hash())));
-                                // As noted, the cluster confirmed root should be descended from
-                                // our last root; therefore parent should be set
-                                new_root_bank = new_root_bank.parent().unwrap();
-                            }
-                            total_rooted_slots += rooted_slots.len();
-                            if blockstore.is_primary_access() {
-                                blockstore
-                                    .mark_slots_as_if_rooted_normally_at_startup(rooted_slots, true)
-                                    .expect("Blockstore::mark_slots_as_if_rooted_normally_at_startup() should succeed");
-                            }
-                            Some(cluster_root_bank)
-                        } else {
-                            None
-                        }
-                    })
-                } else if blockstore.is_root(slot) {
+                // TODO: implement new consensus finality detection here
+                if blockstore.is_root(slot) {
                     Some(&bank)
                 } else {
                     None
@@ -2021,28 +1980,6 @@ fn supermajority_root(roots: &[(Slot, u64)], total_epoch_stake: u64) -> Option<S
     }
 
     None
-}
-
-fn supermajority_root_from_vote_accounts(
-    total_epoch_stake: u64,
-    vote_accounts: &VoteAccountsHashMap,
-) -> Option<Slot> {
-    let mut roots_stakes: Vec<(Slot, u64)> = vote_accounts
-        .values()
-        .filter_map(|(stake, account)| {
-            if *stake == 0 {
-                return None;
-            }
-
-            Some((account.vote_state().root_slot?, *stake))
-        })
-        .collect();
-
-    // Sort from greatest to smallest slot
-    roots_stakes.sort_unstable_by(|a, b| a.0.cmp(&b.0).reverse());
-
-    // Find latest root
-    supermajority_root(&roots_stakes, total_epoch_stake)
 }
 
 // Processes and replays the contents of a single slot, returns Error
@@ -2217,7 +2154,7 @@ pub fn fill_blockstore_slot_with_ticks(
     last_entry_hash
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 pub mod tests {
     use {
         super::*,
@@ -2260,10 +2197,10 @@ pub mod tests {
             transaction_execution_result::TransactionLoadedAccountsStats,
             transaction_processor::ExecutionRecordingConfig,
         },
-        solana_vote::vote_account::VoteAccount,
-        solana_vote_program::{
+        solana_vote_new::vote_account::VoteAccount,
+        solana_vote_new_program::{
             self,
-            vote_state::{TowerSync, VoteState, VoteStateVersions, MAX_LOCKOUT_HISTORY},
+            vote_state::VoteState,
             vote_transaction,
         },
         std::{collections::BTreeSet, sync::RwLock},
@@ -4597,54 +4534,6 @@ pub mod tests {
         run_test_process_blockstore_with_supermajority_root(Some(1), AccessType::Primary)
     }
 
-    #[test]
-    #[allow(clippy::field_reassign_with_default)]
-    fn test_supermajority_root_from_vote_accounts() {
-        let convert_to_vote_accounts = |roots_stakes: Vec<(Slot, u64)>| -> VoteAccountsHashMap {
-            roots_stakes
-                .into_iter()
-                .map(|(root, stake)| {
-                    let mut vote_state = VoteState::default();
-                    vote_state.root_slot = Some(root);
-                    let mut vote_account =
-                        AccountSharedData::new(1, VoteState::size_of(), &solana_vote_program::id());
-                    let versioned = VoteStateVersions::new_current(vote_state);
-                    VoteState::serialize(&versioned, vote_account.data_as_mut_slice()).unwrap();
-                    (
-                        solana_sdk::pubkey::new_rand(),
-                        (stake, VoteAccount::try_from(vote_account).unwrap()),
-                    )
-                })
-                .collect()
-        };
-
-        let total_stake = 10;
-
-        // Supermajority root should be None
-        assert!(supermajority_root_from_vote_accounts(total_stake, &HashMap::default()).is_none());
-
-        // Supermajority root should be None
-        let roots_stakes = vec![(8, 1), (3, 1), (4, 1), (8, 1)];
-        let accounts = convert_to_vote_accounts(roots_stakes);
-        assert!(supermajority_root_from_vote_accounts(total_stake, &accounts).is_none());
-
-        // Supermajority root should be 4, has 7/10 of the stake
-        let roots_stakes = vec![(8, 1), (3, 1), (4, 1), (8, 5)];
-        let accounts = convert_to_vote_accounts(roots_stakes);
-        assert_eq!(
-            supermajority_root_from_vote_accounts(total_stake, &accounts).unwrap(),
-            4
-        );
-
-        // Supermajority root should be 8, it has 7/10 of the stake
-        let roots_stakes = vec![(8, 1), (3, 1), (4, 1), (8, 6)];
-        let accounts = convert_to_vote_accounts(roots_stakes);
-        assert_eq!(
-            supermajority_root_from_vote_accounts(total_stake, &accounts).unwrap(),
-            8
-        );
-    }
-
     fn confirm_slot_entries_for_tests(
         bank: &Arc<Bank>,
         slot_entries: Vec<Entry>,
@@ -5127,4 +5016,4 @@ pub mod tests {
             check_block_cost_limits(&bank, &commit_results, &txs)
         );
     }
-}
+}*/

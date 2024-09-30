@@ -8,7 +8,7 @@ use {
     solana_ledger::blockstore_processor::{ConfirmationProgress, ReplaySlotStats},
     solana_runtime::{bank::Bank, bank_forks::BankForks},
     solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey},
-    solana_vote::vote_account::VoteAccountsHashMap,
+    solana_vote_new::vote_account::VoteAccountsHashMap,
     std::{
         collections::{BTreeMap, HashMap, HashSet},
         sync::{Arc, RwLock},
@@ -406,7 +406,7 @@ impl ProgressMap {
 
 #[cfg(test)]
 mod test {
-    use {super::*, solana_vote::vote_account::VoteAccount};
+    use {super::*, solana_vote_new::vote_account::VoteAccount};
 
     #[test]
     fn test_add_vote_pubkey() {

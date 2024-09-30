@@ -1382,7 +1382,7 @@ impl Validator {
 
         if in_wen_restart {
             info!("Waiting for wen_restart phase one to finish");
-            wait_for_wen_restart(WenRestartConfig {
+            /*wait_for_wen_restart(WenRestartConfig {
                 wen_restart_path: config.wen_restart_proto_path.clone().unwrap(),
                 last_vote,
                 blockstore: blockstore.clone(),
@@ -1395,7 +1395,7 @@ impl Validator {
                 accounts_background_request_sender: accounts_background_request_sender.clone(),
                 genesis_config_hash: genesis_config.hash(),
                 exit: exit.clone(),
-            })?;
+            })?;*/
             return Err(ValidatorError::WenRestartFinished.into());
         }
 

@@ -13,7 +13,7 @@ use {
         transaction::SanitizedTransaction,
     },
     solana_svm_rent_collector::svm_rent_collector::SVMRentCollector,
-    solana_vote::vote_account::VoteAccountsHashMap,
+    solana_vote_new::vote_account::VoteAccountsHashMap,
     std::{result::Result, sync::atomic::Ordering::Relaxed},
     thiserror::Error,
 };

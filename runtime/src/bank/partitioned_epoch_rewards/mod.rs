@@ -19,7 +19,7 @@ use {
         stake::state::{Delegation, Stake, StakeStateV2},
     },
     solana_stake_program::points::PointValue,
-    solana_vote::vote_account::VoteAccounts,
+    solana_vote_new::vote_account::VoteAccounts,
     std::sync::Arc,
 };
 
@@ -289,21 +289,12 @@ mod tests {
             partitioned_rewards::TestPartitionedEpochRewards,
         },
         solana_sdk::{
-            account::Account,
-            epoch_schedule::EpochSchedule,
-            native_token::LAMPORTS_PER_SOL,
-            reward_type::RewardType,
-            signature::Signer,
-            signer::keypair::Keypair,
-            stake::instruction::StakeError,
-            system_transaction,
-            transaction::Transaction,
-            vote::state::{VoteStateVersions, MAX_LOCKOUT_HISTORY},
+            account::Account, epoch_schedule::EpochSchedule, native_token::LAMPORTS_PER_SOL,
+            reward_type::RewardType, signature::Signer, signer::keypair::Keypair,
+            stake::instruction::StakeError, system_transaction, transaction::Transaction,
+            vote_new::state::VoteStateVersions,
         },
-        solana_vote_program::{
-            vote_state::{self, TowerSync},
-            vote_transaction,
-        },
+        solana_vote_new_program::{vote_state_new, vote_transaction_new},
     };
 
     impl PartitionedStakeReward {
@@ -415,13 +406,13 @@ mod tests {
             let vote_id = validator_vote_keypairs.vote_keypair.pubkey();
             let mut vote_account = bank.get_account(&vote_id).unwrap();
             // generate some rewards
-            let mut vote_state = Some(vote_state::from(&vote_account).unwrap());
-            for i in 0..MAX_LOCKOUT_HISTORY + 42 {
+            let mut vote_state = Some(vote_state_new::from(&vote_account).unwrap());
+            for i in 0..74 {
                 if let Some(v) = vote_state.as_mut() {
-                    vote_state::process_slot_vote_unchecked(v, i as u64)
+                    vote_state_new::process_slot_vote_unchecked(v, 0, i as u64)
                 }
                 let versioned = VoteStateVersions::Current(Box::new(vote_state.take().unwrap()));
-                vote_state::to(&versioned, &mut vote_account).unwrap();
+                vote_state_new::to(&versioned, &mut vote_account).unwrap();
                 match versioned {
                     VoteStateVersions::Current(v) => {
                         vote_state = Some(*v);
@@ -800,9 +791,10 @@ mod tests {
 
             // Fill bank_forks with banks with votes landing in the next slot
             // So that rewards will be paid out at the epoch boundary, i.e. slot = 32
-            let tower_sync = TowerSync::new_from_slot(slot - 1, previous_bank.hash());
-            let vote = vote_transaction::new_tower_sync_transaction(
-                tower_sync,
+            let vote = vote_transaction_new::new_vote_transaction(
+                0,
+                slot - 1,
+                previous_bank.hash(),
                 previous_bank.last_blockhash(),
                 &validator_vote_keypairs.node_keypair,
                 &validator_vote_keypairs.vote_keypair,
@@ -986,13 +978,13 @@ mod tests {
             let vote_id = validator_vote_keypairs.vote_keypair.pubkey();
             let mut vote_account = bank.get_account(&vote_id).unwrap();
             // generate some rewards
-            let mut vote_state = Some(vote_state::from(&vote_account).unwrap());
-            for i in 0..MAX_LOCKOUT_HISTORY + 42 {
+            let mut vote_state = Some(vote_state_new::from(&vote_account).unwrap());
+            for i in 0..74 {
                 if let Some(v) = vote_state.as_mut() {
-                    vote_state::process_slot_vote_unchecked(v, i as u64)
+                    vote_state_new::process_slot_vote_unchecked(v, 0, i as u64)
                 }
                 let versioned = VoteStateVersions::Current(Box::new(vote_state.take().unwrap()));
-                vote_state::to(&versioned, &mut vote_account).unwrap();
+                vote_state_new::to(&versioned, &mut vote_account).unwrap();
                 match versioned {
                     VoteStateVersions::Current(v) => {
                         vote_state = Some(*v);

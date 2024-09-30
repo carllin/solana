@@ -16,10 +16,10 @@ pub(crate) mod tests {
             },
             transaction::Transaction,
         },
-        solana_vote::vote_account::{VoteAccount, VoteAccounts},
-        solana_vote_program::{
+        solana_vote_new::vote_account::{VoteAccount, VoteAccounts},
+        solana_vote_new_program::{
             vote_instruction,
-            vote_state::{VoteInit, VoteState, VoteStateVersions},
+            vote_state_new::{VoteInit, VoteState, VoteStateVersions},
         },
     };
 
@@ -55,7 +55,7 @@ pub(crate) mod tests {
                 },
                 amount,
                 vote_instruction::CreateVoteAccountConfig {
-                    space: VoteStateVersions::vote_state_size_of(true) as u64,
+                    space: VoteStateVersions::vote_state_size_of() as u64,
                     ..vote_instruction::CreateVoteAccountConfig::default()
                 },
             ),

@@ -739,7 +739,7 @@ mod tests {
             pubkey::Pubkey,
             signature::{Keypair, Signer},
         },
-        solana_vote_program::vote_state::BlockTimestamp,
+        solana_vote_new_program::vote_state_new::BlockTimestamp,
         std::{sync::atomic::Ordering::Relaxed, time::Duration},
     };
 

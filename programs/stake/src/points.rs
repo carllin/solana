@@ -9,7 +9,7 @@ use {
         stake::state::{Delegation, Stake, StakeStateV2},
         stake_history::StakeHistory,
     },
-    solana_vote_program::vote_state::VoteState,
+    solana_vote_new_program::vote_state_new::VoteState,
     std::cmp::Ordering,
 };
 

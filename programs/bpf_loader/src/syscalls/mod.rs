@@ -2148,7 +2148,7 @@ mod tests {
                 last_restart_slot::LastRestartSlot,
             },
         },
-        solana_vote::vote_account::VoteAccount,
+        solana_vote_new::vote_account::VoteAccount,
         std::{collections::HashMap, mem, str::FromStr},
         test_case::test_case,
     };

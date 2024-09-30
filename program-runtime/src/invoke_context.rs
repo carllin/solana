@@ -37,7 +37,7 @@ use {
     },
     solana_timings::{ExecuteDetailsTimings, ExecuteTimings},
     solana_type_overrides::sync::{atomic::Ordering, Arc},
-    solana_vote::vote_account::VoteAccountsHashMap,
+    solana_vote_new::vote_account::VoteAccountsHashMap,
     std::{
         alloc::Layout,
         cell::RefCell,
