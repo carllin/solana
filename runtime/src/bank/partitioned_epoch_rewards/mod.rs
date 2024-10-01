@@ -289,10 +289,16 @@ mod tests {
             partitioned_rewards::TestPartitionedEpochRewards,
         },
         solana_sdk::{
-            account::Account, epoch_schedule::EpochSchedule, native_token::LAMPORTS_PER_SOL,
-            reward_type::RewardType, signature::Signer, signer::keypair::Keypair,
-            stake::instruction::StakeError, system_transaction, transaction::Transaction,
-            vote_new::state::VoteStateVersions,
+            account::Account,
+            epoch_schedule::EpochSchedule,
+            native_token::LAMPORTS_PER_SOL,
+            reward_type::RewardType,
+            signature::Signer,
+            signer::keypair::Keypair,
+            stake::instruction::StakeError,
+            system_transaction,
+            transaction::Transaction,
+            vote_new::state::{Vote, VoteRange, VoteStateVersions},
         },
         solana_vote_new_program::{vote_state_new, vote_transaction_new},
     };
@@ -792,9 +798,7 @@ mod tests {
             // Fill bank_forks with banks with votes landing in the next slot
             // So that rewards will be paid out at the epoch boundary, i.e. slot = 32
             let vote = vote_transaction_new::new_vote_transaction(
-                0,
-                slot - 1,
-                previous_bank.hash(),
+                Vote::new(VoteRange::new(0, 1), previous_bank.hash()),
                 previous_bank.last_blockhash(),
                 &validator_vote_keypairs.node_keypair,
                 &validator_vote_keypairs.vote_keypair,

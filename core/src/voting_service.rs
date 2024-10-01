@@ -18,6 +18,10 @@ use {
 };
 
 pub enum VoteOp {
+    PushNewVote {
+        tx: Transaction,
+        slot: Slot,
+    },
     PushVote {
         tx: Transaction,
         tower_slots: Vec<Slot>,
@@ -32,6 +36,7 @@ pub enum VoteOp {
 impl VoteOp {
     fn tx(&self) -> &Transaction {
         match self {
+            VoteOp::PushNewVote { tx, .. } => tx,
             VoteOp::PushVote { tx, .. } => tx,
             VoteOp::RefreshVote { tx, .. } => tx,
         }
@@ -71,7 +76,8 @@ impl VotingService {
         tower_storage: &dyn TowerStorage,
         vote_op: VoteOp,
     ) {
-        if let VoteOp::PushVote { saved_tower, .. } = &vote_op {
+        // TODO: handle saving vote state
+        /*if let VoteOp::PushVote { saved_tower, .. } = &vote_op {
             let mut measure = Measure::start("tower storage save");
             if let Err(err) = tower_storage.store(saved_tower) {
                 error!("Unable to save tower to storage: {:?}", err);
@@ -79,7 +85,7 @@ impl VotingService {
             }
             measure.stop();
             trace!("{measure}");
-        }
+        }*/
 
         // Attempt to send our vote transaction to the leaders for the next few slots
         const UPCOMING_LEADER_FANOUT_SLOTS: u64 = FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET;
@@ -93,6 +99,7 @@ impl VotingService {
 
         if !upcoming_leader_sockets.is_empty() {
             for tpu_vote_socket in upcoming_leader_sockets {
+                info!("sending vote to leader: {:?}", tpu_vote_socket);
                 let _ = cluster_info.send_transaction(vote_op.tx(), Some(tpu_vote_socket));
             }
         } else {
@@ -100,7 +107,10 @@ impl VotingService {
             let _ = cluster_info.send_transaction(vote_op.tx(), None);
         }
 
-        match vote_op {
+        /*match vote_op {
+            VoteOp::PushNewVote { tx, slot, .. } => {
+                cluster_info.push_vote(&vec![slot], tx);
+            }
             VoteOp::PushVote {
                 tx, tower_slots, ..
             } => {
@@ -112,7 +122,7 @@ impl VotingService {
             } => {
                 cluster_info.refresh_vote(tx, last_voted_slot);
             }
-        }
+        }*/
     }
 
     pub fn join(self) -> thread::Result<()> {

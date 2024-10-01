@@ -3,9 +3,9 @@ use {
     crate::{
         consensus::{
             latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
-            progress_map::ProgressMap, SwitchForkDecision, ThresholdDecision, Tower,
-            SWITCH_FORK_THRESHOLD,
+            progress_map::ProgressMap, ThresholdDecision, Tower, SWITCH_FORK_THRESHOLD,
         },
+        consensus_new::SwitchForkDecision,
         replay_stage::HeaviestForkFailures,
     },
     solana_runtime::{bank::Bank, bank_forks::BankForks},

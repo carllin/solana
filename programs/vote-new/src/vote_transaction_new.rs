@@ -12,28 +12,25 @@ use {
 };
 
 pub fn new_vote_transaction(
-    reference_slot: Slot,
-    slot: Slot,
-    bank_hash: Hash,
+    vote: Vote,
     blockhash: Hash,
     node_keypair: &Keypair,
     vote_keypair: &Keypair,
     authorized_voter_keypair: &Keypair,
     switch_proof_hash: Option<Hash>,
 ) -> Transaction {
-    let votes = Vote::new(VoteRange::new(reference_slot, slot), bank_hash);
     let vote_ix = if let Some(switch_proof_hash) = switch_proof_hash {
         vote_new::instruction::vote_switch(
             &vote_keypair.pubkey(),
             &authorized_voter_keypair.pubkey(),
-            votes,
+            vote,
             switch_proof_hash,
         )
     } else {
         vote_new::instruction::vote(
             &vote_keypair.pubkey(),
             &authorized_voter_keypair.pubkey(),
-            votes,
+            vote,
         )
     };
 

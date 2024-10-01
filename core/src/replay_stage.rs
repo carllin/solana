@@ -572,6 +572,7 @@ impl ReplayStage {
             let mut my_pubkey = identity_keypair.pubkey();
             // TODO: Load the identity's voting info
             let mut vote_history = LastVoteHistory::default();
+            let mut reference_slot = 0;
             if my_pubkey != tower.node_pubkey {
                 // set-identity was called during the startup procedure, ensure the tower is consistent
                 // before starting the loop. further calls to set-identity will reload the tower in the loop
@@ -828,11 +829,18 @@ impl ReplayStage {
                 compute_bank_stats_time.stop();
 
                 let mut compute_slot_stats_time = Measure::start("compute_slot_stats_time");
+                let mut new_root = None;
                 for slot in newly_computed_slot_stats {
-                    let fork_stats = progress.get_fork_stats(slot).unwrap();
+                    let (voted_stakes, total_stake, last_quorum_commit) = {
+                        let fork_stats = progress.get_fork_stats(slot).unwrap();
+                        let voted_stakes = &fork_stats.computed_bank_state.voted_stakes;
+                        let total_stake = fork_stats.computed_bank_state.total_stake;
+                        let last_quorum_commit = fork_stats.computed_bank_state.last_quorum_commit;
+                        (voted_stakes, total_stake, last_quorum_commit)
+                    };
                     let duplicate_confirmed_forks = Self::tower_duplicate_confirmed_forks(
-                        &fork_stats.computed_bank_state.voted_stakes,
-                        fork_stats.computed_bank_state.total_stake,
+                        voted_stakes,
+                        total_stake,
                         &progress,
                         &bank_forks,
                     );
@@ -850,6 +858,11 @@ impl ReplayStage {
                         &mut purge_repair_slot_counter,
                         &mut duplicate_confirmed_slots,
                     );
+                    if let Some(last_quorum_commit) = last_quorum_commit {
+                        if last_quorum_commit > new_root.unwrap_or(0) {
+                            new_root = Some(last_quorum_commit);
+                        }
+                    }
                 }
                 compute_slot_stats_time.stop();
 
@@ -889,7 +902,7 @@ impl ReplayStage {
                 );
                 select_vote_and_reset_forks_time.stop();
 
-                /*if vote_bank.is_none() {
+                if vote_bank.is_none() {
                     if let Some(heaviest_bank_on_same_voted_fork) =
                         heaviest_bank_on_same_voted_fork.as_ref()
                     {
@@ -897,7 +910,7 @@ impl ReplayStage {
                             progress.my_latest_landed_vote(heaviest_bank_on_same_voted_fork.slot())
                         {
                             Self::refresh_last_vote(
-                                &mut tower,
+                                &mut vote_history,
                                 heaviest_bank_on_same_voted_fork,
                                 my_latest_landed_vote,
                                 &vote_account,
@@ -911,7 +924,7 @@ impl ReplayStage {
                             );
                         }
                     }
-                }*/
+                }
 
                 let mut heaviest_fork_failures_time = Measure::start("heaviest_fork_failures_time");
                 if vote_history.is_recent(heaviest_bank.slot())
@@ -931,7 +944,7 @@ impl ReplayStage {
 
                 let mut voting_time = Measure::start("voting_time");
                 // Vote on a fork
-                /*if let Some((ref vote_bank, ref switch_fork_decision)) = vote_bank {
+                if let Some((ref vote_bank, ref switch_fork_decision)) = vote_bank {
                     if let Some(votable_leader) =
                         leader_schedule_cache.slot_leader_at(vote_bank.slot(), Some(vote_bank))
                     {
@@ -943,11 +956,20 @@ impl ReplayStage {
                         );
                     }
 
+                    if let Some(slot) = new_root {
+                        if slot <= bank_forks.read().unwrap().root() {
+                            new_root = None;
+                        }
+                    }
+
                     if let Err(e) = Self::handle_votable_bank(
+                        &mut reference_slot,
+                        &ancestors,
                         vote_bank,
+                        new_root,
                         switch_fork_decision,
                         &bank_forks,
-                        &mut tower,
+                        &mut vote_history,
                         &mut progress,
                         &vote_account,
                         &identity_keypair,
@@ -974,7 +996,7 @@ impl ReplayStage {
                         error!("Unable to set root: {e}");
                         return;
                     }
-                }*/
+                }
                 voting_time.stop();
 
                 let mut reset_bank_time = Measure::start("reset_bank");
@@ -2277,11 +2299,14 @@ impl ReplayStage {
     }
 
     #[allow(clippy::too_many_arguments)]
-    /*fn handle_votable_bank(
+    fn handle_votable_bank(
+        reference_slot: &mut Slot,
+        ancestors: &HashMap<u64, HashSet<u64>>,
         bank: &Arc<Bank>,
+        new_root: Option<Slot>,
         switch_fork_decision: &SwitchForkDecision,
         bank_forks: &Arc<RwLock<BankForks>>,
-        tower: &mut Tower,
+        vote_history: &mut LastVoteHistory,
         progress: &mut ProgressMap,
         vote_account_pubkey: &Pubkey,
         identity_keypair: &Keypair,
@@ -2308,8 +2333,16 @@ impl ReplayStage {
         if bank.is_empty() {
             datapoint_info!("replay_stage-voted_empty_bank", ("slot", bank.slot(), i64));
         }
+        let last_vote_slot = vote_history.last_voted_slot().unwrap_or(0);
+        let same_fork = ancestors
+            .get(&bank.slot())
+            .map(|ancestors| ancestors.contains(&last_vote_slot))
+            .unwrap_or(false);
+        if !same_fork {
+            *reference_slot = bank.slot();
+        }
         trace!("handle votable bank {}", bank.slot());
-        let new_root = tower.record_bank_vote(bank);
+        vote_history.record_bank_vote(bank, *reference_slot);
 
         if let Some(new_root) = new_root {
             // get the root bank before squash
@@ -2381,40 +2414,40 @@ impl ReplayStage {
             info!("new root {}", new_root);
         }
 
-        let mut update_commitment_cache_time = Measure::start("update_commitment_cache");
-        // Send (voted) bank along with the updated vote account state for this node, the vote
-        // state is always newer than the one in the bank by definition, because banks can't
-        // contain vote transactions which are voting on its own slot.
-        //
-        // It should be acceptable to aggressively use the vote for our own _local view_ of
-        // commitment aggregation, although it's not guaranteed that the new vote transaction is
-        // observed by other nodes at this point.
-        //
-        // The justification stems from the assumption of the sensible voting behavior from the
-        // consensus subsystem. That's because it means there would be a slashing possibility
-        // otherwise.
-        //
-        // This behavior isn't significant normally for mainnet-beta, because staked nodes aren't
-        // servicing RPC requests. However, this eliminates artificial 1-slot delay of the
-        // `finalized` confirmation if a node is materially staked and servicing RPC requests at
-        // the same time for development purposes.
-        let node_vote_state = (*vote_account_pubkey, tower.vote_state.clone());
+        /*let mut update_commitment_cache_time = Measure::start("update_commitment_cache");
+         // Send (voted) bank along with the updated vote account state for this node, the vote
+         // state is always newer than the one in the bank by definition, because banks can't
+         // contain vote transactions which are voting on its own slot.
+         //
+         // It should be acceptable to aggressively use the vote for our own _local view_ of
+         // commitment aggregation, although it's not guaranteed that the new vote transaction is
+         // observed by other nodes at this point.
+         //
+         // The justification stems from the assumption of the sensible voting behavior from the
+         // consensus subsystem. That's because it means there would be a slashing possibility
+         // otherwise.
+         //
+         // This behavior isn't significant normally for mainnet-beta, because staked nodes aren't
+         // servicing RPC requests. However, this eliminates artificial 1-slot delay of the
+         // `finalized` confirmation if a node is materially staked and servicing RPC requests at
+         // the same time for development purposes.
+         let node_vote_state = (*vote_account_pubkey, tower.vote_state.clone());
         Self::update_commitment_cache(
-            bank.clone(),
-            bank_forks.read().unwrap().root(),
-            progress.get_fork_stats(bank.slot()).unwrap().total_stake,
-            node_vote_state,
-            lockouts_sender,
-        );
-        update_commitment_cache_time.stop();
-        replay_timing.update_commitment_cache_us += update_commitment_cache_time.as_us();
+             bank.clone(),
+             bank_forks.read().unwrap().root(),
+             progress.get_fork_stats(bank.slot()).unwrap().total_stake,
+             node_vote_state,
+             lockouts_sender,
+         );
+         update_commitment_cache_time.stop();
+         replay_timing.update_commitment_cache_us += update_commitment_cache_time.as_us();*/
 
         Self::push_vote(
             bank,
             vote_account_pubkey,
             identity_keypair,
             authorized_voter_keypairs,
-            tower,
+            vote_history,
             switch_fork_decision,
             vote_signatures,
             *has_new_vote_been_rooted,
@@ -2492,14 +2525,6 @@ impl ReplayStage {
             Some(authorized_voter_keypair) => authorized_voter_keypair,
         };
 
-        // Send our last few votes along with the new one
-        // Compact the vote state update before sending
-        let vote = match vote {
-            VoteTransaction::VoteStateUpdate(vote_state_update) => {
-                VoteTransaction::CompactVoteStateUpdate(vote_state_update)
-            }
-            vote => vote,
-        };
         let vote_ix = switch_fork_decision
             .to_vote_instruction(
                 vote,
@@ -2528,7 +2553,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn refresh_last_vote(
-        tower: &mut Tower,
+        vote_history: &mut LastVoteHistory,
         heaviest_bank_on_same_fork: &Bank,
         my_latest_landed_vote: Slot,
         vote_account_pubkey: &Pubkey,
@@ -2540,7 +2565,7 @@ impl ReplayStage {
         voting_sender: &Sender<VoteOp>,
         wait_to_vote_slot: Option<Slot>,
     ) {
-        let last_voted_slot = tower.last_voted_slot();
+        let last_voted_slot = vote_history.last_voted_slot();
         if last_voted_slot.is_none() {
             return;
         }
@@ -2563,7 +2588,7 @@ impl ReplayStage {
 
         // If we are a non voting validator or have an incorrect setup preventing us from
         // generating vote txs, no need to refresh
-        let last_vote_tx_blockhash = match tower.last_vote_tx_blockhash() {
+        let last_vote_tx_blockhash = match vote_history.last_vote_tx_blockhash() {
             // Since the checks in vote generation are deterministic, if we were non voting or hot spare
             // on the original vote, the refresh will also fail. No reason to refresh.
             BlockhashStatus::NonVoting | BlockhashStatus::HotSpare => return,
@@ -2594,14 +2619,14 @@ impl ReplayStage {
         }
 
         // Update timestamp for refreshed vote
-        tower.refresh_last_vote_timestamp(heaviest_bank_on_same_fork.slot());
+        vote_history.refresh_last_vote_timestamp(heaviest_bank_on_same_fork.slot());
 
         let vote_tx_result = Self::generate_vote_tx(
             identity_keypair,
             heaviest_bank_on_same_fork,
             vote_account_pubkey,
             authorized_voter_keypairs,
-            tower.last_vote(),
+            vote_history.last_vote().expect("refreshed vote must exist"),
             &SwitchForkDecision::SameFork,
             vote_signatures,
             has_new_vote_been_rooted,
@@ -2610,7 +2635,7 @@ impl ReplayStage {
 
         if let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result {
             let recent_blockhash = vote_tx.message.recent_blockhash;
-            tower.refresh_last_vote_tx_blockhash(recent_blockhash);
+            vote_history.refresh_last_vote_tx_blockhash(recent_blockhash);
 
             // Send the votes to the TPU and gossip for network propagation
             let hash_string = format!("{recent_blockhash}");
@@ -2628,9 +2653,9 @@ impl ReplayStage {
                 .unwrap_or_else(|err| warn!("Error: {:?}", err));
             last_vote_refresh_time.last_refresh_time = Instant::now();
         } else if vote_tx_result.is_non_voting() {
-            tower.mark_last_vote_tx_blockhash_non_voting();
+            vote_history.mark_last_vote_tx_blockhash_non_voting();
         } else if vote_tx_result.is_hot_spare() {
-            tower.mark_last_vote_tx_blockhash_hot_spare();
+            vote_history.mark_last_vote_tx_blockhash_hot_spare();
         }
     }
 
@@ -2640,7 +2665,7 @@ impl ReplayStage {
         vote_account_pubkey: &Pubkey,
         identity_keypair: &Keypair,
         authorized_voter_keypairs: &[Arc<Keypair>],
-        tower: &mut Tower,
+        vote_history: &mut LastVoteHistory,
         switch_fork_decision: &SwitchForkDecision,
         vote_signatures: &mut Vec<Signature>,
         has_new_vote_been_rooted: bool,
@@ -2654,7 +2679,9 @@ impl ReplayStage {
             bank,
             vote_account_pubkey,
             authorized_voter_keypairs,
-            tower.last_vote(),
+            vote_history
+                .last_vote()
+                .expect("must exist at this point after handle_votable_bank"),
             switch_fork_decision,
             vote_signatures,
             has_new_vote_been_rooted,
@@ -2663,24 +2690,23 @@ impl ReplayStage {
         generate_time.stop();
         replay_timing.generate_vote_us += generate_time.as_us();
         if let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result {
-            tower.refresh_last_vote_tx_blockhash(vote_tx.message.recent_blockhash);
+            vote_history.refresh_last_vote_tx_blockhash(vote_tx.message.recent_blockhash);
 
-            let saved_tower = SavedTower::new(tower, identity_keypair).unwrap_or_else(|err| {
+            /*let saved_tower = SavedTower::new(tower, identity_keypair).unwrap_or_else(|err| {
                 error!("Unable to create saved tower: {:?}", err);
                 std::process::exit(1);
-            });
-            let tower_slots = tower.tower_slots();
+            });*/
+
             voting_sender
-                .send(VoteOp::PushVote {
+                .send(VoteOp::PushNewVote {
                     tx: vote_tx,
-                    tower_slots,
-                    saved_tower: SavedTowerVersions::from(saved_tower),
+                    slot: bank.slot(),
                 })
                 .unwrap_or_else(|err| warn!("Error: {:?}", err));
         } else if vote_tx_result.is_non_voting() {
-            tower.mark_last_vote_tx_blockhash_non_voting();
+            vote_history.mark_last_vote_tx_blockhash_non_voting();
         }
-    }*/
+    }
 
     /*fn update_commitment_cache(
         bank: Arc<Bank>,

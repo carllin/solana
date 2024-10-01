@@ -17,7 +17,7 @@ use {
         slot_hashes::SlotHashes,
         sysvar,
     },
-    solana_vote_program::vote_instruction::VoteInstruction,
+    solana_vote_new_program::vote_instruction::VoteInstruction,
     std::{
         cmp,
         collections::HashMap,
@@ -72,29 +72,18 @@ impl LatestValidatorVotePacket {
             .next()
             .ok_or(DeserializedPacketError::VoteTransactionError)?;
 
-        let instruction_filter = |ix: &VoteInstruction| {
-            if deprecate_legacy_vote_ixs {
-                matches!(
-                    ix,
-                    VoteInstruction::TowerSync(_) | VoteInstruction::TowerSyncSwitch(_, _),
-                )
-            } else {
-                ix.is_single_vote_state_update()
-            }
-        };
+        let instruction_filter = |ix: &VoteInstruction| ix.is_simple_vote();
 
         match limited_deserialize::<VoteInstruction>(&instruction.data) {
-            Ok(vote_state_update_instruction)
-                if instruction_filter(&vote_state_update_instruction) =>
-            {
+            Ok(vote_instruction) if instruction_filter(&vote_instruction) => {
                 let &pubkey = message
                     .message
                     .static_account_keys()
                     .first()
                     .ok_or(DeserializedPacketError::VoteTransactionError)?;
-                let slot = vote_state_update_instruction.last_voted_slot().unwrap_or(0);
-                let hash = vote_state_update_instruction.hash();
-                let timestamp = vote_state_update_instruction.timestamp();
+                let slot = vote_instruction.slot();
+                let hash = vote_instruction.hash();
+                let timestamp = vote_instruction.timestamp();
 
                 Ok(Self {
                     vote: Some(vote),
@@ -486,21 +475,23 @@ mod tests {
             epoch_schedule::MINIMUM_SLOTS_PER_EPOCH, genesis_config::GenesisConfig, hash::Hash,
             signature::Signer, system_transaction::transfer,
         },
-        solana_vote_program::{
-            vote_state::TowerSync, vote_transaction::new_tower_sync_transaction,
+        solana_vote_new_program::{
+            vote_state_new::{Vote, VoteRange},
+            vote_transaction_new::new_vote_transaction,
         },
         std::{sync::Arc, thread::Builder},
     };
 
-    fn from_slots(
-        slots: Vec<(u64, u32)>,
+    fn from_slot(
+        reference_slot: Slot,
+        slot: Slot,
         vote_source: VoteSource,
         keypairs: &ValidatorVoteKeypairs,
         timestamp: Option<UnixTimestamp>,
     ) -> LatestValidatorVotePacket {
-        let mut vote = TowerSync::from(slots);
+        let mut vote = Vote::new(VoteRange::new(reference_slot, slot), Hash::new_unique());
         vote.timestamp = timestamp;
-        let vote_tx = new_tower_sync_transaction(
+        let vote_tx = new_vote_transaction(
             vote,
             Hash::new_unique(),
             &keypairs.node_keypair,
@@ -534,8 +525,8 @@ mod tests {
         let switch_proof = Hash::new_unique();
         let mut tower_sync = Packet::from_data(
             None,
-            new_tower_sync_transaction(
-                TowerSync::from(vec![(0, 3), (1, 2), (2, 1)]),
+            new_vote_transaction(
+                Vote::new(VoteRange::new(0, 2), Hash::new_unique()),
                 blockhash,
                 &keypairs.node_keypair,
                 &keypairs.vote_keypair,
@@ -550,8 +541,8 @@ mod tests {
             .set(PacketFlags::SIMPLE_VOTE_TX, true);
         let mut tower_sync_switch = Packet::from_data(
             None,
-            new_tower_sync_transaction(
-                TowerSync::from(vec![(0, 3), (1, 2), (3, 1)]),
+            new_vote_transaction(
+                Vote::new(VoteRange::new(0, 3), Hash::new_unique()),
                 blockhash,
                 &keypairs.node_keypair,
                 &keypairs.vote_keypair,
@@ -611,13 +602,8 @@ mod tests {
             keypair_b.node_keypair.pubkey(),
         ]);
 
-        let vote_a = from_slots(vec![(0, 2), (1, 1)], VoteSource::Gossip, &keypair_a, None);
-        let vote_b = from_slots(
-            vec![(0, 5), (4, 2), (9, 1)],
-            VoteSource::Gossip,
-            &keypair_b,
-            None,
-        );
+        let vote_a = from_slot(0, 1, VoteSource::Gossip, &keypair_a, None);
+        let vote_b = from_slot(0, 9, VoteSource::Gossip, &keypair_b, None);
 
         assert!(latest_unprocessed_votes
             .update_latest_vote(vote_a, false /* should replenish */)
@@ -636,18 +622,8 @@ mod tests {
             latest_unprocessed_votes.get_latest_vote_slot(keypair_b.node_keypair.pubkey())
         );
 
-        let vote_a = from_slots(
-            vec![(0, 5), (1, 4), (3, 3), (10, 1)],
-            VoteSource::Gossip,
-            &keypair_a,
-            None,
-        );
-        let vote_b = from_slots(
-            vec![(0, 5), (4, 2), (6, 1)],
-            VoteSource::Gossip,
-            &keypair_b,
-            None,
-        );
+        let vote_a = from_slot(0, 10, VoteSource::Gossip, &keypair_a, None);
+        let vote_b = from_slot(0, 6, VoteSource::Gossip, &keypair_b, None);
 
         // Evict previous vote
         assert_eq!(
@@ -669,18 +645,8 @@ mod tests {
         assert_eq!(2, latest_unprocessed_votes.len());
 
         // Same votes should be no-ops
-        let vote_a = from_slots(
-            vec![(0, 5), (1, 4), (3, 3), (10, 1)],
-            VoteSource::Gossip,
-            &keypair_a,
-            None,
-        );
-        let vote_b = from_slots(
-            vec![(0, 5), (4, 2), (9, 1)],
-            VoteSource::Gossip,
-            &keypair_b,
-            None,
-        );
+        let vote_a = from_slot(0, 10, VoteSource::Gossip, &keypair_a, None);
+        let vote_b = from_slot(0, 9, VoteSource::Gossip, &keypair_b, None);
         latest_unprocessed_votes.update_latest_vote(vote_a, false /* should replenish */);
         latest_unprocessed_votes.update_latest_vote(vote_b, false /* should replenish */);
 
@@ -699,18 +665,8 @@ mod tests {
         );
 
         // Same votes with timestamps should override
-        let vote_a = from_slots(
-            vec![(0, 5), (1, 4), (3, 3), (10, 1)],
-            VoteSource::Gossip,
-            &keypair_a,
-            Some(1),
-        );
-        let vote_b = from_slots(
-            vec![(0, 5), (4, 2), (9, 1)],
-            VoteSource::Gossip,
-            &keypair_b,
-            Some(2),
-        );
+        let vote_a = from_slot(0, 10, VoteSource::Gossip, &keypair_a, Some(1));
+        let vote_b = from_slot(0, 9, VoteSource::Gossip, &keypair_b, Some(2));
         latest_unprocessed_votes.update_latest_vote(vote_a, false /* should replenish */);
         latest_unprocessed_votes.update_latest_vote(vote_b, false /* should replenish */);
 
@@ -725,18 +681,8 @@ mod tests {
         );
 
         // Same votes with bigger timestamps should override
-        let vote_a = from_slots(
-            vec![(0, 5), (1, 4), (3, 3), (10, 1)],
-            VoteSource::Gossip,
-            &keypair_a,
-            Some(5),
-        );
-        let vote_b = from_slots(
-            vec![(0, 5), (4, 2), (9, 1)],
-            VoteSource::Gossip,
-            &keypair_b,
-            Some(6),
-        );
+        let vote_a = from_slot(0, 10, VoteSource::Gossip, &keypair_a, Some(5));
+        let vote_b = from_slot(0, 9, VoteSource::Gossip, &keypair_b, Some(6));
         latest_unprocessed_votes.update_latest_vote(vote_a, false /* should replenish */);
         latest_unprocessed_votes.update_latest_vote(vote_b, false /* should replenish */);
 
@@ -751,18 +697,8 @@ mod tests {
         );
 
         // Same votes with smaller timestamps should not override
-        let vote_a = from_slots(
-            vec![(0, 5), (1, 4), (3, 3), (10, 1)],
-            VoteSource::Gossip,
-            &keypair_a,
-            Some(2),
-        );
-        let vote_b = from_slots(
-            vec![(0, 5), (4, 2), (9, 1)],
-            VoteSource::Gossip,
-            &keypair_b,
-            Some(3),
-        );
+        let vote_a = from_slot(0, 10, VoteSource::Gossip, &keypair_a, Some(2));
+        let vote_b = from_slot(0, 9, VoteSource::Gossip, &keypair_b, Some(3));
         latest_unprocessed_votes
             .update_latest_vote(vote_a.clone(), false /* should replenish */);
         latest_unprocessed_votes
@@ -828,7 +764,7 @@ mod tests {
         let insert_vote = |latest_unprocessed_votes: &LatestUnprocessedVotes,
                            keypairs: &Arc<Vec<ValidatorVoteKeypairs>>,
                            i: usize| {
-            let vote = from_slots(vec![(i as u64, 1)], VoteSource::Gossip, &keypairs[i], None);
+            let vote = from_slot(0, i as Slot, VoteSource::Gossip, &keypairs[i], None);
             latest_unprocessed_votes.update_latest_vote(vote, false /* should replenish */);
         };
 
@@ -873,8 +809,9 @@ mod tests {
             .spawn(move || {
                 let mut rng = thread_rng();
                 for i in 0..vote_limit {
-                    let vote = from_slots(
-                        vec![(i, 1)],
+                    let vote = from_slot(
+                        0,
+                        i,
                         VoteSource::Gossip,
                         &keypairs[rng.gen_range(0..10)],
                         None,
@@ -889,8 +826,9 @@ mod tests {
             .spawn(move || {
                 let mut rng = thread_rng();
                 for i in 0..vote_limit {
-                    let vote = from_slots(
-                        vec![(i, 1)],
+                    let vote = from_slot(
+                        0,
+                        i,
                         VoteSource::Tpu,
                         &keypairs_tpu[rng.gen_range(0..10)],
                         None,
@@ -941,8 +879,8 @@ mod tests {
         let keypair_a = ValidatorVoteKeypairs::new_rand();
         let keypair_b = ValidatorVoteKeypairs::new_rand();
 
-        let vote_a = from_slots(vec![(1, 1)], VoteSource::Gossip, &keypair_a, None);
-        let vote_b = from_slots(vec![(2, 1)], VoteSource::Tpu, &keypair_b, None);
+        let vote_a = from_slot(0, 1, VoteSource::Gossip, &keypair_a, None);
+        let vote_b = from_slot(0, 2, VoteSource::Tpu, &keypair_b, None);
         latest_unprocessed_votes.update_latest_vote(vote_a, false /* should replenish */);
         latest_unprocessed_votes.update_latest_vote(vote_b, false /* should replenish */);
 
@@ -1051,11 +989,11 @@ mod tests {
             keypair_d.node_keypair.pubkey(),
         ]);
 
-        let vote_a = from_slots(vec![(1, 1)], VoteSource::Gossip, &keypair_a, None);
-        let mut vote_b = from_slots(vec![(2, 1)], VoteSource::Tpu, &keypair_b, None);
+        let vote_a = from_slot(0, 1, VoteSource::Gossip, &keypair_a, None);
+        let mut vote_b = from_slot(0, 2, VoteSource::Tpu, &keypair_b, None);
         vote_b.forwarded = true;
-        let vote_c = from_slots(vec![(3, 1)], VoteSource::Tpu, &keypair_c, None);
-        let vote_d = from_slots(vec![(4, 1)], VoteSource::Gossip, &keypair_d, None);
+        let vote_c = from_slot(0, 3, VoteSource::Tpu, &keypair_c, None);
+        let vote_d = from_slot(0, 4, VoteSource::Gossip, &keypair_d, None);
 
         latest_unprocessed_votes.update_latest_vote(vote_a, false /* should replenish */);
         latest_unprocessed_votes.update_latest_vote(vote_b, false /* should replenish */);
@@ -1091,10 +1029,10 @@ mod tests {
         let keypair_c = ValidatorVoteKeypairs::new_rand();
         let keypair_d = ValidatorVoteKeypairs::new_rand();
 
-        let vote_a = from_slots(vec![(1, 1)], VoteSource::Gossip, &keypair_a, None);
-        let vote_b = from_slots(vec![(2, 1)], VoteSource::Tpu, &keypair_b, None);
-        let vote_c = from_slots(vec![(3, 1)], VoteSource::Tpu, &keypair_c, None);
-        let vote_d = from_slots(vec![(4, 1)], VoteSource::Gossip, &keypair_d, None);
+        let vote_a = from_slot(0, 1, VoteSource::Gossip, &keypair_a, None);
+        let vote_b = from_slot(0, 2, VoteSource::Tpu, &keypair_b, None);
+        let vote_c = from_slot(0, 3, VoteSource::Tpu, &keypair_c, None);
+        let vote_d = from_slot(0, 4, VoteSource::Gossip, &keypair_d, None);
         let votes = [
             vote_a.clone(),
             vote_b.clone(),
