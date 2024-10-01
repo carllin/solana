@@ -14,7 +14,7 @@ use {
         system_program,
     },
     solana_stake_program::stake_state,
-    solana_vote_program::vote_state,
+    solana_vote_new_program::vote_state_new,
     std::borrow::Borrow,
 };
 
@@ -142,7 +142,7 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
 
         // Create accounts
         let node_account = Account::new(VALIDATOR_LAMPORTS, 0, &system_program::id());
-        let vote_account = vote_state::create_account(&vote_pubkey, &node_pubkey, 0, *stake);
+        let vote_account = vote_state_new::create_account(&vote_pubkey, &node_pubkey, 0, *stake);
         let stake_account = Account::from(stake_state::create_account(
             &stake_pubkey,
             &vote_pubkey,
@@ -244,7 +244,7 @@ pub fn create_genesis_config_with_leader_ex(
     cluster_type: ClusterType,
     mut initial_accounts: Vec<(Pubkey, AccountSharedData)>,
 ) -> GenesisConfig {
-    let validator_vote_account = vote_state::create_account(
+    let validator_vote_account = vote_state_new::create_account(
         validator_vote_account_pubkey,
         validator_pubkey,
         0,
