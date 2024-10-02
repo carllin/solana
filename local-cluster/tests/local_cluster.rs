@@ -434,6 +434,7 @@ fn test_mainnet_beta_cluster_type() {
         &solana_sdk::system_program::id(),
         &solana_sdk::stake::program::id(),
         &solana_vote_program::id(),
+        &solana_vote_new_program::id(),
         &solana_sdk::bpf_loader_deprecated::id(),
         &solana_sdk::bpf_loader::id(),
         &solana_sdk::bpf_loader_upgradeable::id(),

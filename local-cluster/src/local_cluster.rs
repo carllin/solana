@@ -52,9 +52,9 @@ use {
         TpuClient, TpuClientConfig, DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_TPU_ENABLE_UDP,
         DEFAULT_TPU_USE_QUIC,
     },
-    solana_vote_program::{
+    solana_vote_new_program::{
         vote_instruction,
-        vote_state::{self, VoteInit},
+        vote_state_new::{self, VoteInit},
     },
     std::{
         collections::HashMap,
@@ -788,7 +788,7 @@ impl LocalCluster {
                 },
                 amount,
                 vote_instruction::CreateVoteAccountConfig {
-                    space: vote_state::VoteStateVersions::vote_state_size_of(true) as u64,
+                    space: vote_state_new::VoteStateVersions::vote_state_size_of() as u64,
                     ..vote_instruction::CreateVoteAccountConfig::default()
                 },
             );
@@ -874,7 +874,7 @@ impl LocalCluster {
                     (Some(stake_account), Some(vote_account)) => {
                         match (
                             stake_state::stake_from(&stake_account),
-                            vote_state::from(&vote_account),
+                            vote_state_new::from(&vote_account),
                         ) {
                             (Some(stake_state), Some(vote_state)) => {
                                 if stake_state.delegation.voter_pubkey != vote_account_pubkey
