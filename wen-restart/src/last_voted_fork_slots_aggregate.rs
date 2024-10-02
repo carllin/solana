@@ -290,7 +290,7 @@ mod tests {
         assert!(bank_forks
             .write()
             .unwrap()
-            .set_root(1, &AbsRequestSender::default(), None)
+            .set_root(1, &AbsRequestSender::default())
             .is_ok());
         let root_bank = bank_forks.read().unwrap().root_bank();
         let root_slot = root_bank.slot();

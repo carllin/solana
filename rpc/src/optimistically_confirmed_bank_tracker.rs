@@ -607,7 +607,7 @@ mod tests {
         bank_forks
             .write()
             .unwrap()
-            .set_root(7, &AbsRequestSender::default(), None)
+            .set_root(7, &AbsRequestSender::default())
             .unwrap();
         OptimisticallyConfirmedBankTracker::process_notification(
             BankNotification::OptimisticallyConfirmed(6),

@@ -1170,7 +1170,7 @@ impl ProgramTestContext {
         let abs_request_sender = AbsRequestSender::new(snapshot_request_sender);
 
         bank_forks
-            .set_root(pre_warp_slot, &abs_request_sender, Some(pre_warp_slot))
+            .set_root(pre_warp_slot, &abs_request_sender)
             .unwrap();
 
         // The call to `set_root()` above will send an EAH request.  Need to intercept and handle
@@ -1237,7 +1237,6 @@ impl ProgramTestContext {
             .set_root(
                 pre_warp_slot,
                 &solana_runtime::accounts_background_service::AbsRequestSender::default(),
-                Some(pre_warp_slot),
             )
             .unwrap();
 

@@ -23,40 +23,13 @@ use {
 };
 
 pub struct CommitmentAggregationData {
-    bank: Arc<Bank>,
     root: Slot,
-    total_stake: Stake,
-    // The latest local vote state of the node running this service.
-    // Used for commitment aggregation if the node's vote account is staked.
-    node_vote_state: (Pubkey, VoteState),
 }
 
 impl CommitmentAggregationData {
-    pub fn new(
-        bank: Arc<Bank>,
-        root: Slot,
-        total_stake: Stake,
-        node_vote_state: (Pubkey, VoteState),
-    ) -> Self {
-        Self {
-            bank,
-            root,
-            total_stake,
-            node_vote_state,
-        }
+    pub fn new(root: Slot) -> Self {
+        CommitmentAggregationData { root }
     }
-}
-
-fn get_highest_super_majority_root(mut rooted_stake: Vec<(Slot, u64)>, total_stake: u64) -> Slot {
-    rooted_stake.sort_by(|a, b| a.0.cmp(&b.0).reverse());
-    let mut stake_sum = 0;
-    for (root, stake) in rooted_stake {
-        stake_sum += stake;
-        if (stake_sum as f64 / total_stake as f64) > VOTE_THRESHOLD_SIZE {
-            return root;
-        }
-    }
-    0
 }
 
 pub struct AggregateCommitmentService {
@@ -100,30 +73,51 @@ impl AggregateCommitmentService {
         subscriptions: &Arc<RpcSubscriptions>,
         exit: &AtomicBool,
     ) -> Result<(), RecvTimeoutError> {
-        /*loop {
+        loop {
             if exit.load(Ordering::Relaxed) {
                 return Ok(());
             }
 
+            let aggregation_data = receiver.recv_timeout(Duration::from_secs(1))?;
+            let aggregation_data = receiver.try_iter().last().unwrap_or(aggregation_data);
+            let root = aggregation_data.root;
             let mut aggregate_commitment_time = Measure::start("aggregate-commitment-ms");
-            // TODO: just send the highest root here
+            let update_commitment_slots =
+                Self::update_commitment_cache(block_commitment_cache, aggregation_data);
             aggregate_commitment_time.stop();
-
-            datapoint_info!(
-                "block-commitment-cache",
-                (
-                    "aggregate-commitment-ms",
-                    aggregate_commitment_time.as_ms() as i64,
-                    i64
-                ),
-            );
 
             // Triggers rpc_subscription notifications as soon as new commitment data is available,
             // sending just the commitment cache slot information that the notifications thread
             // needs
-            subscriptions.notify_subscribers(update_commitment_slots);
-        }*/
+            subscriptions.notify_subscribers(CommitmentSlots {
+                root,
+                slot: root,
+                highest_confirmed_slot: root,
+                highest_super_majority_root: root,
+            });
+        }
         Ok(())
+    }
+
+    fn update_commitment_cache(
+        block_commitment_cache: &RwLock<BlockCommitmentCache>,
+        aggregation_data: CommitmentAggregationData,
+    ) -> CommitmentSlots {
+        let mut new_block_commitment = BlockCommitmentCache::new(
+            HashMap::default(),
+            0,
+            CommitmentSlots {
+                slot: aggregation_data.root,
+                root: aggregation_data.root,
+                highest_confirmed_slot: aggregation_data.root,
+                highest_super_majority_root: aggregation_data.root,
+            },
+        );
+        new_block_commitment.set_highest_confirmed_slot(aggregation_data.root);
+        let mut w_block_commitment_cache = block_commitment_cache.write().unwrap();
+        new_block_commitment.set_highest_super_majority_root(aggregation_data.root);
+        *w_block_commitment_cache = new_block_commitment;
+        w_block_commitment_cache.commitment_slots()
     }
 
     pub fn join(self) -> thread::Result<()> {

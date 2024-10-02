@@ -344,7 +344,6 @@ impl BankForks {
         &mut self,
         root: Slot,
         accounts_background_request_sender: &AbsRequestSender,
-        highest_super_majority_root: Option<Slot>,
     ) -> Result<(Vec<BankWithScheduler>, SetRootMetrics), SetRootError> {
         let old_epoch = self.root_bank().epoch();
         // To support `RootBankCache` (via `ReadOnlyAtomicSlot`) accessing `root` *without* locking
@@ -439,8 +438,7 @@ impl BankForks {
         let new_tx_count = root_bank.transaction_count();
         let accounts_data_len = root_bank.load_accounts_data_size() as i64;
         let mut prune_time = Measure::start("set_root::prune");
-        let (removed_banks, prune_slots_ms, prune_remove_ms) =
-            self.prune_non_rooted(root, highest_super_majority_root);
+        let (removed_banks, prune_slots_ms, prune_remove_ms) = self.prune_non_rooted(root);
         prune_time.stop();
         let dropped_banks_len = removed_banks.len();
 
@@ -477,15 +475,11 @@ impl BankForks {
         &mut self,
         root: Slot,
         accounts_background_request_sender: &AbsRequestSender,
-        highest_super_majority_root: Option<Slot>,
     ) -> Result<Vec<BankWithScheduler>, SetRootError> {
         let program_cache_prune_start = Instant::now();
         let set_root_start = Instant::now();
-        let (removed_banks, set_root_metrics) = self.do_set_root_return_metrics(
-            root,
-            accounts_background_request_sender,
-            highest_super_majority_root,
-        )?;
+        let (removed_banks, set_root_metrics) =
+            self.do_set_root_return_metrics(root, accounts_background_request_sender)?;
         datapoint_info!(
             "bank-forks_set_root",
             (
@@ -635,15 +629,10 @@ impl BankForks {
     /// i.e. the cluster-confirmed root.  This commitment is stronger than the local node's root.
     /// So (A) and (B) are kept to facilitate RPC at different commitment levels.  Everything below
     /// the highest confirmed root can be pruned.
-    fn prune_non_rooted(
-        &mut self,
-        root: Slot,
-        highest_super_majority_root: Option<Slot>,
-    ) -> (Vec<BankWithScheduler>, u64, u64) {
+    fn prune_non_rooted(&mut self, root: Slot) -> (Vec<BankWithScheduler>, u64, u64) {
         // We want to collect timing separately, and the 2nd collect requires
         // a unique borrow to self which is already borrowed by self.banks
         let mut prune_slots_time = Measure::start("prune_slots");
-        let highest_super_majority_root = highest_super_majority_root.unwrap_or(root);
         let prune_slots: Vec<_> = self
             .banks
             .keys()
@@ -651,9 +640,7 @@ impl BankForks {
             .filter(|slot| {
                 let keep = *slot == root
                     || self.descendants[&root].contains(slot)
-                    || (*slot < root
-                        && *slot >= highest_super_majority_root
-                        && self.descendants[slot].contains(&root));
+                    || (*slot < root && self.descendants[slot].contains(&root));
                 !keep
             })
             .collect();
@@ -873,7 +860,7 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis_config);
         let bank_forks0 = BankForks::new_rw_arc(bank0);
         let mut bank_forks0 = bank_forks0.write().unwrap();
-        bank_forks0.set_root(0, &abs_request_sender, None).unwrap();
+        bank_forks0.set_root(0, &abs_request_sender).unwrap();
 
         let bank1 = Bank::new_for_tests(&genesis_config);
         let bank_forks1 = BankForks::new_rw_arc(bank1);
@@ -908,9 +895,7 @@ mod tests {
 
             // Set root in bank_forks0 to truncate the ancestor history
             bank_forks0.insert(child1);
-            bank_forks0
-                .set_root(slot, &abs_request_sender, None)
-                .unwrap();
+            bank_forks0.set_root(slot, &abs_request_sender).unwrap();
 
             // Don't set root in bank_forks1 to keep the ancestor history
             bank_forks1.insert(child2);
@@ -978,11 +963,7 @@ mod tests {
         bank_forks
             .write()
             .unwrap()
-            .set_root(
-                2,
-                &AbsRequestSender::default(),
-                None, // highest confirmed root
-            )
+            .set_root(2, &AbsRequestSender::default())
             .unwrap();
         bank_forks.read().unwrap().get(2).unwrap().squash();
         assert_eq!(
@@ -1004,78 +985,6 @@ mod tests {
             bank_forks.read().unwrap().descendants(),
             make_hash_map(vec![
                 (0, vec![2]),
-                (1, vec![2]),
-                (2, vec![5, 6]),
-                (5, vec![6]),
-                (6, vec![])
-            ])
-        );
-    }
-
-    #[test]
-    fn test_bank_forks_with_highest_super_majority_root() {
-        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(10_000);
-        let bank = Bank::new_for_tests(&genesis_config);
-        assert_eq!(bank.slot(), 0);
-        let bank_forks = BankForks::new_rw_arc(bank);
-
-        let parent_child_pairs = vec![(0, 1), (1, 2), (0, 3), (3, 4)];
-        extend_bank_forks(bank_forks.clone(), &parent_child_pairs);
-
-        assert_eq!(
-            bank_forks.read().unwrap().ancestors(),
-            make_hash_map(vec![
-                (0, vec![]),
-                (1, vec![0]),
-                (2, vec![0, 1]),
-                (3, vec![0]),
-                (4, vec![0, 3]),
-            ])
-        );
-        assert_eq!(
-            bank_forks.read().unwrap().descendants(),
-            make_hash_map(vec![
-                (0, vec![1, 2, 3, 4]),
-                (1, vec![2]),
-                (2, vec![]),
-                (3, vec![4]),
-                (4, vec![]),
-            ])
-        );
-        bank_forks
-            .write()
-            .unwrap()
-            .set_root(
-                2,
-                &AbsRequestSender::default(),
-                Some(1), // highest confirmed root
-            )
-            .unwrap();
-        bank_forks.read().unwrap().get(2).unwrap().squash();
-        assert_eq!(
-            bank_forks.read().unwrap().ancestors(),
-            make_hash_map(vec![(1, vec![]), (2, vec![]),])
-        );
-        assert_eq!(
-            bank_forks.read().unwrap().descendants(),
-            make_hash_map(vec![(0, vec![1, 2]), (1, vec![2]), (2, vec![]),])
-        );
-
-        let parent_child_pairs = vec![(2, 5), (5, 6)];
-        extend_bank_forks(bank_forks.clone(), &parent_child_pairs);
-        assert_eq!(
-            bank_forks.read().unwrap().ancestors(),
-            make_hash_map(vec![
-                (1, vec![]),
-                (2, vec![]),
-                (5, vec![2]),
-                (6, vec![2, 5])
-            ])
-        );
-        assert_eq!(
-            bank_forks.read().unwrap().descendants(),
-            make_hash_map(vec![
-                (0, vec![1, 2]),
                 (1, vec![2]),
                 (2, vec![5, 6]),
                 (5, vec![6]),
@@ -1137,11 +1046,7 @@ mod tests {
         assert_matches!(bank_forks.relationship(1, 13), BlockRelation::Unknown);
         assert_matches!(bank_forks.relationship(13, 2), BlockRelation::Unknown);
         bank_forks
-            .set_root(
-                2,
-                &AbsRequestSender::default(),
-                Some(1), // highest confirmed root
-            )
+            .set_root(2, &AbsRequestSender::default())
             .unwrap();
         assert_matches!(bank_forks.relationship(1, 2), BlockRelation::Unknown);
         assert_matches!(bank_forks.relationship(2, 0), BlockRelation::Unknown);

@@ -979,7 +979,6 @@ impl ReplayStage {
                         &lockouts_sender,
                         &accounts_background_request_sender,
                         &rpc_subscriptions,
-                        &block_commitment_cache,
                         &mut heaviest_subtree_fork_choice,
                         &bank_notification_sender,
                         &mut duplicate_slots_tracker,
@@ -2316,7 +2315,6 @@ impl ReplayStage {
         lockouts_sender: &Sender<CommitmentAggregationData>,
         accounts_background_request_sender: &AbsRequestSender,
         rpc_subscriptions: &Arc<RpcSubscriptions>,
-        block_commitment_cache: &Arc<RwLock<BlockCommitmentCache>>,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         duplicate_slots_tracker: &mut DuplicateSlotsTracker,
@@ -2373,18 +2371,11 @@ impl ReplayStage {
             blockstore
                 .set_roots(rooted_slots.iter())
                 .expect("Ledger set roots failed");
-            let highest_super_majority_root = Some(
-                block_commitment_cache
-                    .read()
-                    .unwrap()
-                    .highest_super_majority_root(),
-            );
             Self::handle_new_root(
                 new_root,
                 bank_forks,
                 progress,
                 accounts_background_request_sender,
-                highest_super_majority_root,
                 heaviest_subtree_fork_choice,
                 duplicate_slots_tracker,
                 duplicate_confirmed_slots,
@@ -2414,33 +2405,12 @@ impl ReplayStage {
             info!("new root {}", new_root);
         }
 
-        /*let mut update_commitment_cache_time = Measure::start("update_commitment_cache");
-         // Send (voted) bank along with the updated vote account state for this node, the vote
-         // state is always newer than the one in the bank by definition, because banks can't
-         // contain vote transactions which are voting on its own slot.
-         //
-         // It should be acceptable to aggressively use the vote for our own _local view_ of
-         // commitment aggregation, although it's not guaranteed that the new vote transaction is
-         // observed by other nodes at this point.
-         //
-         // The justification stems from the assumption of the sensible voting behavior from the
-         // consensus subsystem. That's because it means there would be a slashing possibility
-         // otherwise.
-         //
-         // This behavior isn't significant normally for mainnet-beta, because staked nodes aren't
-         // servicing RPC requests. However, this eliminates artificial 1-slot delay of the
-         // `finalized` confirmation if a node is materially staked and servicing RPC requests at
-         // the same time for development purposes.
-         let node_vote_state = (*vote_account_pubkey, tower.vote_state.clone());
-        Self::update_commitment_cache(
-             bank.clone(),
-             bank_forks.read().unwrap().root(),
-             progress.get_fork_stats(bank.slot()).unwrap().total_stake,
-             node_vote_state,
-             lockouts_sender,
-         );
-         update_commitment_cache_time.stop();
-         replay_timing.update_commitment_cache_us += update_commitment_cache_time.as_us();*/
+        let mut update_commitment_cache_time = Measure::start("update_commitment_cache");
+        if let Some(new_root) = new_root {
+            Self::update_commitment_cache(new_root, lockouts_sender);
+        }
+        update_commitment_cache_time.stop();
+        replay_timing.update_commitment_cache_us += update_commitment_cache_time.as_us();
 
         Self::push_vote(
             bank,
@@ -2708,22 +2678,11 @@ impl ReplayStage {
         }
     }
 
-    /*fn update_commitment_cache(
-        bank: Arc<Bank>,
-        root: Slot,
-        total_stake: Stake,
-        node_vote_state: (Pubkey, VoteState),
-        lockouts_sender: &Sender<CommitmentAggregationData>,
-    ) {
-        if let Err(e) = lockouts_sender.send(CommitmentAggregationData::new(
-            bank,
-            root,
-            total_stake,
-            node_vote_state,
-        )) {
+    fn update_commitment_cache(root: Slot, lockouts_sender: &Sender<CommitmentAggregationData>) {
+        if let Err(e) = lockouts_sender.send(CommitmentAggregationData::new(root)) {
             trace!("lockouts_sender failed: {:?}", e);
         }
-    }*/
+    }
 
     fn reset_poh_recorder(
         my_pubkey: &Pubkey,
@@ -3726,7 +3685,6 @@ impl ReplayStage {
         bank_forks: &RwLock<BankForks>,
         progress: &mut ProgressMap,
         accounts_background_request_sender: &AbsRequestSender,
-        highest_super_majority_root: Option<Slot>,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
         duplicate_slots_tracker: &mut DuplicateSlotsTracker,
         duplicate_confirmed_slots: &mut DuplicateConfirmedSlots,
@@ -3737,11 +3695,10 @@ impl ReplayStage {
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
     ) -> Result<(), SetRootError> {
         bank_forks.read().unwrap().prune_program_cache(new_root);
-        let removed_banks = bank_forks.write().unwrap().set_root(
-            new_root,
-            accounts_background_request_sender,
-            highest_super_majority_root,
-        )?;
+        let removed_banks = bank_forks
+            .write()
+            .unwrap()
+            .set_root(new_root, accounts_background_request_sender)?;
 
         drop_bank_sender
             .send(removed_banks)
@@ -5452,7 +5409,7 @@ pub(crate) mod tests {
         let bank9 = bank_forks.get(9).unwrap();
         bank_forks.insert(Bank::new_from_parent(bank9, &Pubkey::default(), 10));
         bank_forks
-            .set_root(9, &AbsRequestSender::default(), None)
+            .set_root(9, &AbsRequestSender::default())
             .unwrap();
         let total_epoch_stake = bank0.total_epoch_stake();
 
@@ -8886,7 +8843,7 @@ pub(crate) mod tests {
         bank_forks
             .write()
             .unwrap()
-            .set_root(1, &AbsRequestSender::default(), None)
+            .set_root(1, &AbsRequestSender::default())
             .unwrap();
 
         // Mark 0 as duplicate confirmed, should fail as it is 0 < root
@@ -9001,7 +8958,7 @@ pub(crate) mod tests {
         bank_forks
             .write()
             .unwrap()
-            .set_root(1, &AbsRequestSender::default(), None)
+            .set_root(1, &AbsRequestSender::default())
             .unwrap();
 
         // Mark 0 as duplicate confirmed, should fail as it is 0 < root

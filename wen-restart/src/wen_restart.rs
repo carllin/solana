@@ -1916,7 +1916,6 @@ mod tests {
             let _ = bank_forks.set_root(
                 last_vote_slot + 1,
                 &AbsRequestSender::default(),
-                Some(last_vote_slot + 1),
             );
         }
         let new_root_bank = test_state

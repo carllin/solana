@@ -4679,7 +4679,7 @@ pub mod tests {
                 self.bank_forks
                     .write()
                     .unwrap()
-                    .set_root(*root, &AbsRequestSender::default(), Some(0))
+                    .set_root(*root, &AbsRequestSender::default())
                     .unwrap();
                 let block_time = self
                     .bank_forks

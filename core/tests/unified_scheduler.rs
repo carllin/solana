@@ -151,7 +151,6 @@ fn test_scheduler_waited_by_drop_bank_service() {
             &bank_forks,
             &mut progress,
             &AbsRequestSender::default(),
-            None,
             &mut heaviest_subtree_fork_choice,
             &mut duplicate_slots_tracker,
             &mut duplicate_confirmed_slots,

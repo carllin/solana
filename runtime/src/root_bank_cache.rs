@@ -79,7 +79,7 @@ mod tests {
             bank_forks
                 .write()
                 .unwrap()
-                .set_root(1, &AbsRequestSender::default(), None)
+                .set_root(1, &AbsRequestSender::default())
                 .unwrap();
             let bank = bank_forks.read().unwrap().root_bank();
 

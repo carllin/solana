@@ -1904,11 +1904,10 @@ fn load_frozen_forks(
 
                 leader_schedule_cache.set_root(new_root_bank);
                 new_root_bank.prune_program_cache(root, new_root_bank.epoch());
-                let _ = bank_forks.write().unwrap().set_root(
-                    root,
-                    accounts_background_request_sender,
-                    None,
-                )?;
+                let _ = bank_forks
+                    .write()
+                    .unwrap()
+                    .set_root(root, accounts_background_request_sender)?;
                 m.stop();
                 set_root_us += m.as_us();
 

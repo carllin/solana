@@ -301,7 +301,6 @@ fn test_epoch_accounts_hash_basic(test_environment: TestEnvironment) {
                     &test_environment
                         .background_services
                         .accounts_background_request_sender,
-                    None,
                 )
                 .unwrap();
         }
@@ -415,7 +414,6 @@ fn test_snapshots_have_expected_epoch_accounts_hash() {
                 &test_environment
                     .background_services
                     .accounts_background_request_sender,
-                None,
             )
             .unwrap();
 
@@ -543,7 +541,6 @@ fn test_background_services_request_handling_for_epoch_accounts_hash() {
                     &test_environment
                         .background_services
                         .accounts_background_request_sender,
-                    None,
                 )
                 .unwrap();
             info!("Calling set_root() on bank {}... DONE", bank.slot());
@@ -604,7 +601,6 @@ fn test_epoch_accounts_hash_and_warping() {
             &test_environment
                 .background_services
                 .accounts_background_request_sender,
-            None,
         )
         .unwrap();
     // flush the write cache so warping can calculate the accounts hash from storages
@@ -634,7 +630,6 @@ fn test_epoch_accounts_hash_and_warping() {
             &test_environment
                 .background_services
                 .accounts_background_request_sender,
-            None,
         )
         .unwrap();
     info!("Waiting for epoch accounts hash...");
@@ -678,7 +673,6 @@ fn test_epoch_accounts_hash_and_warping() {
             &test_environment
                 .background_services
                 .accounts_background_request_sender,
-            None,
         )
         .unwrap();
     info!("Waiting for epoch accounts hash...");
