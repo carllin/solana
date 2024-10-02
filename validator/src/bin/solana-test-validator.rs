@@ -12,7 +12,7 @@ use {
         input_parsers::{pubkey_of, pubkeys_of, value_of},
         input_validators::normalize_to_url_if_moniker,
     },
-    solana_core::consensus::tower_storage::FileTowerStorage,
+    solana_core::consensus_new::vote_history_storage::FileVoteHistoryStorage,
     solana_faucet::faucet::run_local_faucet_with_port,
     solana_rpc::{
         rpc::{JsonRpcConfig, RpcBigtableConfig},
@@ -384,7 +384,7 @@ fn main() {
     genesis.transaction_account_lock_limit =
         value_t!(matches, "transaction_account_lock_limit", usize).ok();
 
-    let tower_storage = Arc::new(FileTowerStorage::new(ledger_path.clone()));
+    let vote_history_storage = Arc::new(FileVoteHistoryStorage::new(ledger_path.clone()));
 
     let admin_service_post_init = Arc::new(RwLock::new(None));
     // If geyser_plugin_config value is invalid, the validator will exit when the values are extracted below
@@ -405,7 +405,7 @@ fn main() {
             authorized_voter_keypairs: genesis.authorized_voter_keypairs.clone(),
             staked_nodes_overrides: genesis.staked_nodes_overrides.clone(),
             post_init: admin_service_post_init,
-            tower_storage: tower_storage.clone(),
+            vote_history_storage: vote_history_storage.clone(),
             rpc_to_plugin_manager_sender,
         },
     );
@@ -442,7 +442,7 @@ fn main() {
 
     genesis
         .ledger_path(&ledger_path)
-        .tower_storage(tower_storage)
+        .vote_history_storage(vote_history_storage)
         .add_account(
             faucet_pubkey,
             AccountSharedData::new(faucet_lamports, 0, &system_program::id()),

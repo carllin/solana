@@ -11,7 +11,7 @@ use {
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsService},
         completed_data_sets_service::CompletedDataSetsSender,
-        consensus::{tower_storage::TowerStorage, Tower},
+        consensus_new::{vote_history_storage::VoteHistoryStorage, VoteHistory},
         cost_update_service::CostUpdateService,
         drop_bank_service::DropBankService,
         repair::{
@@ -126,8 +126,8 @@ impl Tvu {
         ledger_signal_receiver: Receiver<bool>,
         rpc_subscriptions: &Arc<RpcSubscriptions>,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
-        tower: Tower,
-        tower_storage: Arc<dyn TowerStorage>,
+        vote_history: VoteHistory,
+        vote_history_storage: Arc<dyn VoteHistoryStorage>,
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         exit: Arc<AtomicBool>,
         block_commitment_cache: Arc<RwLock<BlockCommitmentCache>>,
@@ -280,7 +280,7 @@ impl Tvu {
             bank_notification_sender,
             wait_for_vote_to_start_leader: tvu_config.wait_for_vote_to_start_leader,
             ancestor_hashes_replay_update_sender,
-            tower_storage: tower_storage.clone(),
+            vote_history_storage: vote_history_storage.clone(),
             wait_to_vote_slot,
             replay_forks_threads: tvu_config.replay_forks_threads,
             replay_transactions_threads: tvu_config.replay_transactions_threads,
@@ -291,7 +291,7 @@ impl Tvu {
             voting_receiver,
             cluster_info.clone(),
             poh_recorder.clone(),
-            tower_storage,
+            vote_history_storage,
         );
 
         let warm_quic_cache_service = connection_cache.and_then(|connection_cache| {
@@ -325,7 +325,7 @@ impl Tvu {
                 ledger_signal_receiver,
                 duplicate_slots_receiver,
                 poh_recorder.clone(),
-                tower,
+                vote_history,
                 vote_tracker,
                 cluster_slots,
                 retransmit_slots_sender,
@@ -405,7 +405,7 @@ impl Tvu {
 pub mod tests {
     use {
         super::*,
-        crate::consensus::tower_storage::FileTowerStorage,
+        crate::consensus_new::vote_history_storage::FileVoteHistoryStorage,
         serial_test::serial,
         solana_gossip::cluster_info::{ClusterInfo, Node},
         solana_ledger::{
@@ -500,8 +500,8 @@ pub mod tests {
                 OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks),
             )),
             &poh_recorder,
-            Tower::default(),
-            Arc::new(FileTowerStorage::default()),
+            VoteHistory::default(),
+            Arc::new(FileVoteHistoryStorage::default()),
             &leader_schedule_cache,
             exit.clone(),
             block_commitment_cache,

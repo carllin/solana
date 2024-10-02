@@ -6,7 +6,6 @@ use {
         latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
         progress_map::ProgressMap, tree_diff::TreeDiff, Tower,
     },
-    crate::consensus_new::VoteHistory,
     solana_measure::measure::Measure,
     solana_runtime::{bank::Bank, bank_forks::BankForks, epoch_stakes::EpochStakes},
     solana_sdk::{
@@ -1133,8 +1132,8 @@ impl HeaviestSubtreeForkChoice {
         );
     }
 
-    fn heaviest_slot_on_same_voted_fork(&self, vote_history: &VoteHistory) -> Option<SlotHashKey> {
-        vote_history
+    fn heaviest_slot_on_same_voted_fork(&self, tower: &Tower) -> Option<SlotHashKey> {
+        tower
             .last_voted_slot_hash()
             .and_then(|last_voted_slot_hash| {
                 match self.is_candidate(&last_voted_slot_hash) {
@@ -1183,7 +1182,7 @@ impl HeaviestSubtreeForkChoice {
                         self.deepest_slot(&last_voted_slot_hash)
                     }
                     None => {
-                        /*if !tower.is_stray_last_vote() {
+                        if !tower.is_stray_last_vote() {
                             // Unless last vote is stray and stale, self.is_candidate(last_voted_slot_hash) must return
                             // Some(_), justifying to panic! here.
                             // Also, adjust_lockouts_after_replay() correctly makes last_voted_slot None,
@@ -1202,8 +1201,7 @@ impl HeaviestSubtreeForkChoice {
                             // meaning some inconsistency between saved tower and ledger.
                             // (newer snapshot, or only a saved tower is moved over to new setup?)
                             None
-                        }*/
-                        None
+                        }
                     }
                 }
             })
@@ -1276,7 +1274,7 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
     fn select_forks(
         &self,
         _frozen_banks: &[Arc<Bank>],
-        vote_history: &VoteHistory,
+        tower: &Tower,
         _progress: &ProgressMap,
         _ancestors: &HashMap<u64, HashSet<u64>>,
         bank_forks: &RwLock<BankForks>,
@@ -1288,7 +1286,7 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
             r_bank_forks
                 .get_with_checked_hash(self.best_overall_slot())
                 .unwrap(),
-            self.heaviest_slot_on_same_voted_fork(vote_history)
+            self.heaviest_slot_on_same_voted_fork(tower)
                 .and_then(|slot_hash| {
                     #[allow(clippy::manual_filter)]
                     if let Some(bank) = r_bank_forks.get(slot_hash.0) {
@@ -1421,7 +1419,7 @@ impl<'a> Iterator for AncestorIterator<'a> {
     }
 }
 
-/*#[cfg(test)]
+#[cfg(test)]
 mod test {
     use {
         super::*,
@@ -4621,4 +4619,4 @@ mod test {
             );
         }
     }
-}*/
+}

@@ -29,7 +29,7 @@ use {
     solana_clap_utils::input_parsers::{keypair_of, keypairs_of, pubkey_of, value_of, values_of},
     solana_core::{
         banking_trace::DISABLED_BAKING_TRACE_DIR,
-        consensus::tower_storage,
+        consensus_new::vote_history_storage,
         system_monitor_service::SystemMonitorService,
         tpu::DEFAULT_TPU_COALESCE,
         validator::{
@@ -1129,14 +1129,16 @@ pub fn main() {
         .ok()
         .or_else(|| get_cluster_shred_version(&entrypoint_addrs));
 
-    let tower_storage: Arc<dyn tower_storage::TowerStorage> =
+    let vote_history_storage: Arc<dyn vote_history_storage::VoteHistoryStorage> =
         match value_t_or_exit!(matches, "tower_storage", String).as_str() {
             "file" => {
                 let tower_path = value_t!(matches, "tower", PathBuf)
                     .ok()
                     .unwrap_or_else(|| ledger_path.clone());
 
-                Arc::new(tower_storage::FileTowerStorage::new(tower_path))
+                Arc::new(vote_history_storage::FileVoteHistoryStorage::new(
+                    tower_path,
+                ))
             }
             "etcd" => {
                 let endpoints = values_t_or_exit!(matches, "etcd_endpoint", String);
@@ -1152,7 +1154,7 @@ pub fn main() {
                     })
                 };
 
-                let tls_config = tower_storage::EtcdTlsConfig {
+                let tls_config = vote_history_storage::EtcdTlsConfig {
                     domain_name,
                     ca_certificate: read(ca_certificate_file),
                     identity_certificate: read(identity_certificate_file),
@@ -1160,7 +1162,7 @@ pub fn main() {
                 };
 
                 Arc::new(
-                    tower_storage::EtcdTowerStorage::new(endpoints, Some(tls_config))
+                    vote_history_storage::EtcdVoteHistoryStorage::new(endpoints, Some(tls_config))
                         .unwrap_or_else(|err| {
                             eprintln!("Failed to connect to etcd: {err}");
                             exit(1);
@@ -1394,7 +1396,7 @@ pub fn main() {
 
     let mut validator_config = ValidatorConfig {
         require_tower: matches.is_present("require_tower"),
-        tower_storage,
+        vote_history_storage,
         halt_at_slot: value_t!(matches, "dev_halt_at_slot", Slot).ok(),
         expected_genesis_hash: matches
             .value_of("expected_genesis_hash")
@@ -1882,7 +1884,7 @@ pub fn main() {
             start_progress: start_progress.clone(),
             authorized_voter_keypairs: authorized_voter_keypairs.clone(),
             post_init: admin_service_post_init.clone(),
-            tower_storage: validator_config.tower_storage.clone(),
+            vote_history_storage: validator_config.vote_history_storage.clone(),
             staked_nodes_overrides,
             rpc_to_plugin_manager_sender,
         },

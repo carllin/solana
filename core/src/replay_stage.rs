@@ -16,12 +16,15 @@ use {
             heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
             latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
             progress_map::{ForkProgress, ProgressMap, PropagatedStats},
-            tower_storage::{SavedTower, SavedTowerVersions, TowerStorage},
             Tower,
         },
         consensus_new::{
-            self, BlockhashStatus, ComputedBankState, LastVoteHistory, Stake, SwitchForkDecision,
-            VotedStakes, SWITCH_FORK_THRESHOLD,
+            self,
+            vote_history_storage::{
+                SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage,
+            },
+            BlockhashStatus, ComputedBankState, Stake, SwitchForkDecision, VoteHistory,
+            VoteHistoryError, VotedStakes, SWITCH_FORK_THRESHOLD,
         },
         cost_update_service::CostUpdate,
         repair::{
@@ -266,7 +269,7 @@ pub struct ReplayStageConfig {
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub wait_for_vote_to_start_leader: bool,
     pub ancestor_hashes_replay_update_sender: AncestorHashesReplayUpdateSender,
-    pub tower_storage: Arc<dyn TowerStorage>,
+    pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
     // Stops voting until this slot has been reached. Should be used to avoid
     // duplicate voting which can lead to slashing.
     pub wait_to_vote_slot: Option<Slot>,
@@ -518,7 +521,7 @@ impl ReplayStage {
         ledger_signal_receiver: Receiver<bool>,
         duplicate_slots_receiver: DuplicateSlotReceiver,
         poh_recorder: Arc<RwLock<PohRecorder>>,
-        mut tower: Tower,
+        mut vote_history: VoteHistory,
         vote_tracker: Arc<VoteTracker>,
         cluster_slots: Arc<ClusterSlots>,
         retransmit_slots_sender: Sender<Slot>,
@@ -552,7 +555,7 @@ impl ReplayStage {
             bank_notification_sender,
             wait_for_vote_to_start_leader,
             ancestor_hashes_replay_update_sender,
-            tower_storage,
+            vote_history_storage,
             wait_to_vote_slot,
             replay_forks_threads,
             replay_transactions_threads,
@@ -570,15 +573,28 @@ impl ReplayStage {
             let _exit = Finalizer::new(exit.clone());
             let mut identity_keypair = cluster_info.keypair().clone();
             let mut my_pubkey = identity_keypair.pubkey();
-            // TODO: Load the identity's voting info
-            let mut vote_history = LastVoteHistory::default();
             let mut reference_slot = 0;
-            if my_pubkey != tower.node_pubkey {
+            if my_pubkey != vote_history.node_pubkey {
                 // set-identity was called during the startup procedure, ensure the tower is consistent
                 // before starting the loop. further calls to set-identity will reload the tower in the loop
-                let my_old_pubkey = tower.node_pubkey;
-                // TODO: Load the identity's voting info
-                Self::load_tower();
+                let my_old_pubkey = vote_history.node_pubkey;
+                let root = bank_forks.read().unwrap().root();
+                vote_history = match Self::load_vote_history(
+                    vote_history_storage.as_ref(),
+                    &my_pubkey,
+                    root,
+                ) {
+                    Ok(vote_history) => vote_history,
+                    Err(err) => {
+                        error!(
+                            "Unable to load new tower when attempting to change identity from {} \
+                             to {} on ReplayStage startup, Exiting: {}",
+                            my_old_pubkey, my_pubkey, err
+                        );
+                        // drop(_exit) will set the exit flag, eventually tearing down the entire process
+                        return;
+                    }
+                };
                 warn!(
                     "Identity changed during startup from {} to {}",
                     my_old_pubkey, my_pubkey
@@ -870,7 +886,7 @@ impl ReplayStage {
                 let (heaviest_bank, heaviest_bank_on_same_voted_fork) =
                     heaviest_subtree_fork_choice.select_forks(
                         &frozen_banks,
-                        &tower,
+                        &vote_history,
                         &progress,
                         &ancestors,
                         &bank_forks,
@@ -933,7 +949,7 @@ impl ReplayStage {
                     Self::log_heaviest_fork_failures(
                         &heaviest_fork_failures,
                         &bank_forks,
-                        &tower,
+                        &vote_history,
                         &progress,
                         &ancestors,
                         &heaviest_bank,
@@ -1037,8 +1053,11 @@ impl ReplayStage {
                             let my_old_pubkey = my_pubkey;
                             my_pubkey = identity_keypair.pubkey();
 
-                            // TODO: Load the new identity's voting info
-                            Self::load_tower();
+                            Self::load_vote_history(
+                                vote_history_storage.as_ref(),
+                                &my_pubkey,
+                                bank_forks.read().unwrap().root(),
+                            );
                             // Ensure the validator can land votes with the new identity before
                             // becoming leader
                             has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
@@ -1056,7 +1075,7 @@ impl ReplayStage {
                         last_reset_bank_descendants = vec![];
                         tpu_has_bank = false;
 
-                        if let Some(last_voted_slot) = tower.last_voted_slot() {
+                        if let Some(last_voted_slot) = vote_history.last_voted_slot() {
                             // If the current heaviest bank is not a descendant of the last voted slot,
                             // there must be a partition
                             partition_info.update(
@@ -1189,10 +1208,45 @@ impl ReplayStage {
         })
     }
 
+    /// Loads the tower from `vote_history_storage` with identity `node_pubkey`.
+    ///
+    /// If the tower is missing or too old, a tower is constructed from bank forks.
     /// Loads the tower from `tower_storage` with identity `node_pubkey`.
     ///
     /// If the tower is missing or too old, a tower is constructed from bank forks.
-    fn load_tower() {}
+    fn load_vote_history(
+        vote_history_storage: &dyn VoteHistoryStorage,
+        node_pubkey: &Pubkey,
+        root: Slot,
+    ) -> Result<VoteHistory, VoteHistoryError> {
+        let vote_history = VoteHistory::restore(vote_history_storage, node_pubkey);
+        match vote_history {
+            Ok(vote_history) => Ok(vote_history),
+            Err(err) if err.is_file_missing() => {
+                // If the vote history is missing, then worst case
+                // scenario is you vote on a slot less than your last vote,
+                // potentially causing an overlapping vote
+
+                // If we're on the same fork, the best thing to do if we cannot find
+                // the last reference slot from our history is to vote again with
+                // a reference slot set to the tip of the fork, which guarantees
+                // no sandwich on the same fork
+
+                // On restart if the last vote is old and no longer in BankForks,
+                // our next vote slot will be unable to find the last vote in its ancestry,
+                // which will cause us to update the last reference slot to the tip of the
+                // fork. This is perfectly safe as long as the vote history prevents us from
+                // voting for a slot less than the last voted slot to prevent an overlapping vote,
+                // which it does!
+                warn!(
+                    "Failed to load vote_history, file missing for {node_pubkey}: {err}. Creating a new \
+                     vote_history from bankforks."
+                );
+                Ok(VoteHistory::new(*node_pubkey, root))
+            }
+            Err(err) => Err(err),
+        }
+    }
 
     fn check_for_vote_only_mode(
         heaviest_bank_slot: Slot,
@@ -2305,7 +2359,7 @@ impl ReplayStage {
         new_root: Option<Slot>,
         switch_fork_decision: &SwitchForkDecision,
         bank_forks: &Arc<RwLock<BankForks>>,
-        vote_history: &mut LastVoteHistory,
+        vote_history: &mut VoteHistory,
         progress: &mut ProgressMap,
         vote_account_pubkey: &Pubkey,
         identity_keypair: &Keypair,
@@ -2523,7 +2577,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn refresh_last_vote(
-        vote_history: &mut LastVoteHistory,
+        vote_history: &mut VoteHistory,
         heaviest_bank_on_same_fork: &Bank,
         my_latest_landed_vote: Slot,
         vote_account_pubkey: &Pubkey,
@@ -2635,7 +2689,7 @@ impl ReplayStage {
         vote_account_pubkey: &Pubkey,
         identity_keypair: &Keypair,
         authorized_voter_keypairs: &[Arc<Keypair>],
-        vote_history: &mut LastVoteHistory,
+        vote_history: &mut VoteHistory,
         switch_fork_decision: &SwitchForkDecision,
         vote_signatures: &mut Vec<Signature>,
         has_new_vote_been_rooted: bool,
@@ -2662,15 +2716,17 @@ impl ReplayStage {
         if let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result {
             vote_history.refresh_last_vote_tx_blockhash(vote_tx.message.recent_blockhash);
 
-            /*let saved_tower = SavedTower::new(tower, identity_keypair).unwrap_or_else(|err| {
-                error!("Unable to create saved tower: {:?}", err);
-                std::process::exit(1);
-            });*/
+            let saved_vote_history = SavedVoteHistory::new(vote_history, identity_keypair)
+                .unwrap_or_else(|err| {
+                    error!("Unable to create saved vote history: {:?}", err);
+                    std::process::exit(1);
+                });
 
             voting_sender
                 .send(VoteOp::PushNewVote {
                     tx: vote_tx,
                     slot: bank.slot(),
+                    saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
                 })
                 .unwrap_or_else(|err| warn!("Error: {:?}", err));
         } else if vote_tx_result.is_non_voting() {
@@ -3323,7 +3379,7 @@ impl ReplayStage {
         frozen_banks: &mut [Arc<Bank>],
         progress: &mut ProgressMap,
         vote_tracker: &VoteTracker,
-        vote_history: &LastVoteHistory,
+        vote_history: &VoteHistory,
         cluster_slots: &ClusterSlots,
         bank_forks: &RwLock<BankForks>,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
@@ -3862,7 +3918,7 @@ impl ReplayStage {
     fn log_heaviest_fork_failures(
         heaviest_fork_failures: &Vec<HeaviestForkFailures>,
         bank_forks: &Arc<RwLock<BankForks>>,
-        tower: &Tower,
+        vote_history: &VoteHistory,
         progress: &ProgressMap,
         ancestors: &HashMap<Slot, HashSet<Slot>>,
         heaviest_bank: &Arc<Bank>,
@@ -3894,15 +3950,16 @@ impl ReplayStage {
                 ) => {
                     if slot > *last_threshold_failure_slot {
                         *last_threshold_failure_slot = slot;
-                        let in_partition = if let Some(last_voted_slot) = tower.last_voted_slot() {
-                            Self::is_partition_detected(
-                                ancestors,
-                                last_voted_slot,
-                                heaviest_bank.slot(),
-                            )
-                        } else {
-                            false
-                        };
+                        let in_partition =
+                            if let Some(last_voted_slot) = vote_history.last_voted_slot() {
+                                Self::is_partition_detected(
+                                    ancestors,
+                                    last_voted_slot,
+                                    heaviest_bank.slot(),
+                                )
+                            } else {
+                                false
+                            };
                         datapoint_info!(
                             "replay_stage-threshold-failure",
                             ("slot", slot as i64, i64),
@@ -3933,7 +3990,7 @@ pub(crate) mod tests {
         crate::{
             consensus::{
                 progress_map::{ValidatorStakeInfo, RETRANSMIT_BASE_DELAY_MS},
-                tower_storage::{FileTowerStorage, NullTowerStorage},
+                vote_history_storage::{FileTowerStorage, NullTowerStorage},
                 tree_diff::TreeDiff,
                 ThresholdDecision, Tower, VOTE_THRESHOLD_DEPTH,
             },
@@ -7165,7 +7222,7 @@ pub(crate) mod tests {
             vote_simulator,
             ..
         } = replay_blockstore_components(None, 10, None::<GenerateVotes>);
-        let tower_storage = NullTowerStorage::default();
+        let vote_history_storage = NullTowerStorage::default();
 
         let VoteSimulator {
             mut validator_keypairs,
@@ -7219,7 +7276,7 @@ pub(crate) mod tests {
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
-            &tower_storage,
+            &vote_history_storage,
             vote_info,
         );
 
@@ -7294,7 +7351,7 @@ pub(crate) mod tests {
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
-            &tower_storage,
+            &vote_history_storage,
             vote_info,
         );
         let votes = cluster_info.get_votes(&mut cursor);
@@ -7377,7 +7434,7 @@ pub(crate) mod tests {
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
-            &tower_storage,
+            &vote_history_storage,
             vote_info,
         );
 
@@ -7465,7 +7522,7 @@ pub(crate) mod tests {
         voting_receiver: &Receiver<VoteOp>,
         cluster_info: &ClusterInfo,
         poh_recorder: &RwLock<PohRecorder>,
-        tower_storage: &dyn TowerStorage,
+        vote_history_storage: &dyn TowerStorage,
         make_it_landing: bool,
         cursor: &mut Cursor,
         bank_forks: &RwLock<BankForks>,
@@ -7492,7 +7549,7 @@ pub(crate) mod tests {
         crate::voting_service::VotingService::handle_vote(
             cluster_info,
             poh_recorder,
-            tower_storage,
+            vote_history_storage,
             vote_info,
         );
 
@@ -7543,7 +7600,7 @@ pub(crate) mod tests {
             vote_simulator,
             ..
         } = replay_blockstore_components(None, 10, None::<GenerateVotes>);
-        let tower_storage = NullTowerStorage::default();
+        let vote_history_storage = NullTowerStorage::default();
 
         let VoteSimulator {
             mut validator_keypairs,
@@ -7603,7 +7660,7 @@ pub(crate) mod tests {
             &voting_receiver,
             &cluster_info,
             &poh_recorder,
-            &tower_storage,
+            &vote_history_storage,
             true,
             &mut cursor,
             &bank_forks,
@@ -7621,7 +7678,7 @@ pub(crate) mod tests {
             &voting_receiver,
             &cluster_info,
             &poh_recorder,
-            &tower_storage,
+            &vote_history_storage,
             false,
             &mut cursor,
             &bank_forks,
@@ -8517,7 +8574,7 @@ pub(crate) mod tests {
     #[test]
     fn test_tower_load_missing() {
         let tower_file = tempdir().unwrap().into_path();
-        let tower_storage = FileTowerStorage::new(tower_file);
+        let vote_history_storage = FileTowerStorage::new(tower_file);
         let node_pubkey = Pubkey::new_unique();
         let vote_account = Pubkey::new_unique();
         let tree = tr(0) / (tr(1) / (tr(3) / (tr(4))) / (tr(2) / (tr(5) / (tr(6)))));
@@ -8532,7 +8589,7 @@ pub(crate) mod tests {
         let bank_forks = vote_simulator.bank_forks;
 
         let tower =
-            ReplayStage::load_tower(&tower_storage, &node_pubkey, &vote_account, &bank_forks)
+            ReplayStage::load_tower(&vote_history_storage, &node_pubkey, &vote_account, &bank_forks)
                 .unwrap();
         let expected_tower = Tower::new_for_tests(VOTE_THRESHOLD_DEPTH, VOTE_THRESHOLD_SIZE);
         assert_eq!(tower.vote_state, expected_tower.vote_state);
@@ -8542,7 +8599,7 @@ pub(crate) mod tests {
     #[test]
     fn test_tower_load() {
         let tower_file = tempdir().unwrap().into_path();
-        let tower_storage = FileTowerStorage::new(tower_file);
+        let vote_history_storage = FileTowerStorage::new(tower_file);
         let node_keypair = Keypair::new();
         let node_pubkey = node_keypair.pubkey();
         let vote_account = Pubkey::new_unique();
@@ -8557,10 +8614,10 @@ pub(crate) mod tests {
             setup_forks_from_tree(tree, 3, Some(Box::new(generate_votes)));
         let bank_forks = vote_simulator.bank_forks;
         let expected_tower = Tower::new_random(node_pubkey);
-        expected_tower.save(&tower_storage, &node_keypair).unwrap();
+        expected_tower.save(&vote_history_storage, &node_keypair).unwrap();
 
         let tower =
-            ReplayStage::load_tower(&tower_storage, &node_pubkey, &vote_account, &bank_forks)
+            ReplayStage::load_tower(&vote_history_storage, &node_pubkey, &vote_account, &bank_forks)
                 .unwrap();
         assert_eq!(tower.vote_state, expected_tower.vote_state);
         assert_eq!(tower.node_pubkey, expected_tower.node_pubkey);

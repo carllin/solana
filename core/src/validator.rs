@@ -9,10 +9,10 @@ use {
         cache_block_meta_service::{CacheBlockMetaSender, CacheBlockMetaService},
         cluster_info_vote_listener::VoteTracker,
         completed_data_sets_service::CompletedDataSetsService,
-        consensus::{
-            reconcile_blockstore_roots_with_external_source,
-            tower_storage::{NullTowerStorage, TowerStorage},
-            ExternalRootSource, Tower,
+        consensus::{reconcile_blockstore_roots_with_external_source, ExternalRootSource},
+        consensus_new::{
+            vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
+            VoteHistory,
         },
         poh_timing_report_service::PohTimingReportService,
         repair::{self, serve_repair::ServeRepair, serve_repair_service::ServeRepairService},
@@ -124,7 +124,7 @@ use {
     solana_streamer::{socket::SocketAddrSpace, streamer::StakedNodes},
     solana_turbine::{self, broadcast_stage::BroadcastStageType},
     solana_unified_scheduler_pool::DefaultSchedulerPool,
-    solana_vote_program::vote_state,
+    solana_vote_new_program::vote_state_new,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         collections::{HashMap, HashSet},
@@ -243,7 +243,7 @@ pub struct ValidatorConfig {
     /// processing.
     pub run_verification: bool,
     pub require_tower: bool,
-    pub tower_storage: Arc<dyn TowerStorage>,
+    pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
     pub debug_keys: Option<Arc<HashSet<Pubkey>>>,
     pub contact_debug_interval: u64,
     pub contact_save_interval: u64,
@@ -315,7 +315,7 @@ impl Default for ValidatorConfig {
             wal_recovery_mode: None,
             run_verification: true,
             require_tower: false,
-            tower_storage: Arc::new(NullTowerStorage::default()),
+            vote_history_storage: Arc::new(NullVoteHistoryStorage::default()),
             debug_keys: None,
             contact_debug_interval: DEFAULT_CONTACT_DEBUG_INTERVAL_MILLIS,
             contact_save_interval: DEFAULT_CONTACT_SAVE_INTERVAL_MILLIS,
@@ -1301,20 +1301,20 @@ impl Validator {
         } else {
             None
         };
-        let tower = match process_blockstore.process_to_create_tower() {
-            Ok(tower) => {
-                info!("Tower state: {:?}", tower);
-                tower
+        let vote_history = match process_blockstore.process_to_create_vote_history() {
+            Ok(vote_history) => {
+                info!("Vote history state: {:?}", vote_history);
+                vote_history
             }
             Err(e) => {
                 warn!(
-                    "Unable to retrieve tower: {:?} creating default tower....",
+                    "Unable to retrieve vote_history: {:?} creating default vote_history....",
                     e
                 );
-                Tower::default()
+                VoteHistory::default()
             }
         };
-        let last_vote = tower.last_vote();
+        let last_vote = vote_history.last_vote();
 
         let outstanding_repair_requests =
             Arc::<RwLock<repair::repair_service::OutstandingShredRepairs>>::default();
@@ -1336,8 +1336,8 @@ impl Validator {
             ledger_signal_receiver,
             &rpc_subscriptions,
             &poh_recorder,
-            tower,
-            config.tower_storage.clone(),
+            vote_history,
+            config.vote_history_storage.clone(),
             &leader_schedule_cache,
             exit.clone(),
             block_commitment_cache,
@@ -1671,8 +1671,8 @@ impl Validator {
 
 fn active_vote_account_exists_in_bank(bank: &Bank, vote_account: &Pubkey) -> bool {
     if let Some(account) = &bank.get_account(vote_account) {
-        if let Some(vote_state) = vote_state::from(account) {
-            return !vote_state.votes.is_empty();
+        if let Some(vote_state) = vote_state_new::from(account) {
+            return vote_state.vote_range.slot() != 0;
         }
     }
     false
@@ -1720,87 +1720,88 @@ fn maybe_cluster_restart_with_hard_fork(config: &ValidatorConfig, root_slot: Slo
     None
 }
 
-fn post_process_restored_tower(
-    restored_tower: crate::consensus::Result<Tower>,
+fn post_process_restored_vote_history(
+    restored_vote_history: crate::consensus_new::Result<VoteHistory>,
     validator_identity: &Pubkey,
     vote_account: &Pubkey,
     config: &ValidatorConfig,
     bank_forks: &BankForks,
-) -> Result<Tower, String> {
-    let mut should_require_tower = config.require_tower;
+) -> Result<VoteHistory, String> {
+    let mut should_require_vote_history = config.require_tower;
 
-    let restored_tower = restored_tower.and_then(|tower| {
+    let restored_vote_history = restored_vote_history.and_then(|vote_history| {
         let root_bank = bank_forks.root_bank();
         let slot_history = root_bank.get_slot_history();
-        // make sure tower isn't corrupted first before the following hard fork check
-        let tower = tower.adjust_lockouts_after_replay(root_bank.slot(), &slot_history);
-
         if let Some(hard_fork_restart_slot) =
             maybe_cluster_restart_with_hard_fork(config, root_bank.slot())
         {
-            // intentionally fail to restore tower; we're supposedly in a new hard fork; past
+            // intentionally fail to restore vote history; we're supposedly in a new hard fork; past
             // out-of-chain vote state doesn't make sense at all
             // what if --wait-for-supermajority again if the validator restarted?
             let message =
-                format!("Hard fork is detected; discarding tower restoration result: {tower:?}");
-            datapoint_error!("tower_error", ("error", message, String),);
+                format!("Hard fork is detected; discarding vote history restoration result: {vote_history:?}");
+            datapoint_error!("vote_history_error", ("error", message, String),);
             error!("{}", message);
 
-            // unconditionally relax tower requirement so that we can always restore tower
+            // unconditionally relax vote history requirement so that we can always restore vote history
             // from root bank.
-            should_require_tower = false;
-            return Err(crate::consensus::TowerError::HardFork(
+            should_require_vote_history = false;
+            return Err(crate::consensus_new::VoteHistoryError::HardFork(
                 hard_fork_restart_slot,
             ));
         }
 
         if let Some(warp_slot) = config.warp_slot {
-            // unconditionally relax tower requirement so that we can always restore tower
+            // unconditionally relax vote history requirement so that we can always restore vote history
             // from root bank after the warp
-            should_require_tower = false;
-            return Err(crate::consensus::TowerError::HardFork(warp_slot));
+            should_require_vote_history = false;
+            return Err(crate::consensus_new::VoteHistoryError::HardFork(warp_slot));
         }
 
-        tower
+        Ok(vote_history)
     });
 
-    let restored_tower = match restored_tower {
-        Ok(tower) => tower,
+    let restored_vote_history = match restored_vote_history {
+        Ok(vote_history) => vote_history,
         Err(err) => {
             let voting_has_been_active =
                 active_vote_account_exists_in_bank(&bank_forks.working_bank(), vote_account);
             if !err.is_file_missing() {
                 datapoint_error!(
-                    "tower_error",
-                    ("error", format!("Unable to restore tower: {err}"), String),
+                    "vote_history_error",
+                    (
+                        "error",
+                        format!("Unable to restore vote_history: {err}"),
+                        String
+                    ),
                 );
             }
-            if should_require_tower && voting_has_been_active {
+            if should_require_vote_history && voting_has_been_active {
                 return Err(format!(
-                    "Requested mandatory tower restore failed: {err}. And there is an existing \
+                    "Requested mandatory vote history restore failed: {err}. And there is an existing \
                      vote_account containing actual votes. Aborting due to possible conflicting \
                      duplicate votes"
                 ));
             }
             if err.is_file_missing() && !voting_has_been_active {
-                // Currently, don't protect against spoofed snapshots with no tower at all
+                // Currently, don't protect against spoofed snapshots with no vote history at all
                 info!(
-                    "Ignoring expected failed tower restore because this is the initial validator \
+                    "Ignoring expected failed vote history restore because this is the initial validator \
                      start with the vote account..."
                 );
             } else {
                 error!(
-                    "Rebuilding a new tower from the latest vote account due to failed tower \
+                    "Rebuilding a new vote history from the latest vote account due to failed vote history \
                      restore: {}",
                     err
                 );
             }
 
-            Tower::new_from_bankforks(bank_forks, validator_identity, vote_account)
+            VoteHistory::new(*validator_identity, bank_forks.root())
         }
     };
 
-    Ok(restored_tower)
+    Ok(restored_vote_history)
 }
 
 fn blockstore_options_from_config(config: &ValidatorConfig) -> BlockstoreOptions {
@@ -1987,7 +1988,7 @@ pub struct ProcessBlockStore<'a> {
     blockstore_root_scan: Option<BlockstoreRootScan>,
     accounts_background_request_sender: AbsRequestSender,
     config: &'a ValidatorConfig,
-    tower: Option<Tower>,
+    vote_history: Option<VoteHistory>,
 }
 
 impl<'a> ProcessBlockStore<'a> {
@@ -2023,12 +2024,12 @@ impl<'a> ProcessBlockStore<'a> {
             blockstore_root_scan: Some(blockstore_root_scan),
             accounts_background_request_sender,
             config,
-            tower: None,
+            vote_history: None,
         }
     }
 
     pub(crate) fn process(&mut self) -> Result<(), String> {
-        if self.tower.is_none() {
+        if self.vote_history.is_none() {
             let previous_start_process = *self.start_progress.read().unwrap();
             *self.start_progress.write().unwrap() = ValidatorStartProgress::LoadingLedger;
 
@@ -2070,20 +2071,23 @@ impl<'a> ProcessBlockStore<'a> {
                 blockstore_root_scan.join();
             }
 
-            self.tower = Some({
-                let restored_tower = Tower::restore(self.config.tower_storage.as_ref(), self.id);
-                if let Ok(tower) = &restored_tower {
-                    // reconciliation attempt 1 of 2 with tower
+            self.vote_history = Some({
+                let restored_vote_history =
+                    VoteHistory::restore(self.config.vote_history_storage.as_ref(), self.id);
+                if let Ok(vote_history) = &restored_vote_history {
+                    // reconciliation attempt 1 of 2 with vote history
                     reconcile_blockstore_roots_with_external_source(
-                        ExternalRootSource::Tower(tower.root()),
+                        ExternalRootSource::Tower(vote_history.root),
                         self.blockstore,
                         &mut self.original_blockstore_root,
                     )
-                    .map_err(|err| format!("Failed to reconcile blockstore with tower: {err:?}"))?;
+                    .map_err(|err| {
+                        format!("Failed to reconcile blockstore with vote history: {err:?}")
+                    })?;
                 }
 
-                post_process_restored_tower(
-                    restored_tower,
+                post_process_restored_vote_history(
+                    restored_vote_history,
                     self.id,
                     self.vote_account,
                     self.config,
@@ -2096,7 +2100,7 @@ impl<'a> ProcessBlockStore<'a> {
                 self.bank_forks.read().unwrap().root(),
             ) {
                 // reconciliation attempt 2 of 2 with hard fork
-                // this should be #2 because hard fork root > tower root in almost all cases
+                // this should be #2 because hard fork root > vote history root in almost all cases
                 reconcile_blockstore_roots_with_external_source(
                     ExternalRootSource::HardFork(hard_fork_restart_slot),
                     self.blockstore,
@@ -2110,9 +2114,9 @@ impl<'a> ProcessBlockStore<'a> {
         Ok(())
     }
 
-    pub(crate) fn process_to_create_tower(mut self) -> Result<Tower, String> {
+    pub(crate) fn process_to_create_vote_history(mut self) -> Result<VoteHistory, String> {
         self.process()?;
-        Ok(self.tower.unwrap())
+        Ok(self.vote_history.unwrap())
     }
 }
 
@@ -2174,7 +2178,7 @@ fn maybe_warp_slot(
         );
 
         drop(bank_forks);
-        // Process blockstore after warping bank forks to make sure tower and
+        // Process blockstore after warping bank forks to make sure vote history and
         // bank forks are in sync.
         process_blockstore.process()?;
     }

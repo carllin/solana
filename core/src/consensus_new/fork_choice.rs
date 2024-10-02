@@ -5,7 +5,7 @@ use {
             latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
             progress_map::ProgressMap, ThresholdDecision, Tower, SWITCH_FORK_THRESHOLD,
         },
-        consensus_new::{SwitchForkDecision, VoteHistory},
+        consensus_new::SwitchForkDecision,
         replay_stage::HeaviestForkFailures,
     },
     solana_runtime::{bank::Bank, bank_forks::BankForks},
@@ -47,7 +47,7 @@ pub trait ForkChoice {
     fn select_forks(
         &self,
         frozen_banks: &[Arc<Bank>],
-        vote_history: &VoteHistory,
+        tower: &Tower,
         progress: &ProgressMap,
         ancestors: &HashMap<u64, HashSet<u64>>,
         bank_forks: &RwLock<BankForks>,

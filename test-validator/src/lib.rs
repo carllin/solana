@@ -12,7 +12,7 @@ use {
     solana_compute_budget::compute_budget::ComputeBudget,
     solana_core::{
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
-        consensus::tower_storage::TowerStorage,
+        consensus_new::vote_history_storage::VoteHistoryStorage,
         validator::{Validator, ValidatorConfig, ValidatorStartProgress},
     },
     solana_feature_set::FEATURE_NAMES,
@@ -111,7 +111,7 @@ impl Default for TestValidatorNodeConfig {
 pub struct TestValidatorGenesis {
     fee_rate_governor: FeeRateGovernor,
     ledger_path: Option<PathBuf>,
-    tower_storage: Option<Arc<dyn TowerStorage>>,
+    vote_history_storage: Option<Arc<dyn VoteHistoryStorage>>,
     pub rent: Rent,
     rpc_config: JsonRpcConfig,
     pubsub_config: PubSubConfig,
@@ -143,7 +143,7 @@ impl Default for TestValidatorGenesis {
         Self {
             fee_rate_governor: FeeRateGovernor::default(),
             ledger_path: Option::<PathBuf>::default(),
-            tower_storage: Option::<Arc<dyn TowerStorage>>::default(),
+            vote_history_storage: Option::<Arc<dyn VoteHistoryStorage>>::default(),
             rent: Rent::default(),
             rpc_config: JsonRpcConfig::default_for_test(),
             pubsub_config: PubSubConfig::default(),
@@ -222,8 +222,11 @@ impl TestValidatorGenesis {
         self
     }
 
-    pub fn tower_storage(&mut self, tower_storage: Arc<dyn TowerStorage>) -> &mut Self {
-        self.tower_storage = Some(tower_storage);
+    pub fn vote_history_storage(
+        &mut self,
+        vote_history_storage: Arc<dyn VoteHistoryStorage>,
+    ) -> &mut Self {
+        self.vote_history_storage = Some(vote_history_storage);
         self
     }
 
@@ -1029,8 +1032,8 @@ impl TestValidator {
             account_indexes: config.rpc_config.account_indexes.clone(),
             ..ValidatorConfig::default_for_test()
         };
-        if let Some(ref tower_storage) = config.tower_storage {
-            validator_config.tower_storage = tower_storage.clone();
+        if let Some(ref vote_history_storage) = config.vote_history_storage {
+            validator_config.vote_history_storage = vote_history_storage.clone();
         }
 
         let validator = Some(Validator::new(

@@ -1913,10 +1913,7 @@ mod tests {
 
         {
             let mut bank_forks = test_state.bank_forks.write().unwrap();
-            let _ = bank_forks.set_root(
-                last_vote_slot + 1,
-                &AbsRequestSender::default(),
-            );
+            let _ = bank_forks.set_root(last_vote_slot + 1, &AbsRequestSender::default());
         }
         let new_root_bank = test_state
             .bank_forks

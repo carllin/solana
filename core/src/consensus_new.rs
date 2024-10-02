@@ -1,13 +1,9 @@
 use crate::replay_stage::DUPLICATE_THRESHOLD;
 
-/*pub mod fork_choice;
-pub mod heaviest_subtree_fork_choice;
-pub(crate) mod latest_validator_votes_for_frozen_banks;
-pub mod progress_map;
-pub mod tree_diff;
-pub mod vote_stake_tracker;*/
+pub mod vote_history_storage;
 
 use {
+    self::vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage},
     crate::consensus::{
         heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
         latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
@@ -97,7 +93,7 @@ impl SwitchForkDecision {
 
 pub const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 
-//pub type Result<T> = std::result::Result<T, TowerError>;
+pub type Result<T> = std::result::Result<T, VoteHistoryError>;
 pub type Stake = u64;
 pub type VotedStakes = HashMap<Slot, Stake>;
 pub type PubkeyVotes = Vec<(Pubkey, Slot)>;
@@ -129,17 +125,33 @@ pub(crate) enum BlockhashStatus {
     Blockhash(Hash),
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub enum VoteHistoryVersions {
+    Current(VoteHistory),
+}
+
+impl VoteHistoryVersions {
+    pub fn new_current(vote_history: VoteHistory) -> Self {
+        Self::Current(vote_history)
+    }
+
+    pub fn convert_to_current(self) -> VoteHistory {
+        match self {
+            VoteHistoryVersions::Current(vote_history) => vote_history,
+        }
+    }
+}
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
     frozen_abi(digest = "8ziHa1vA7WG5RCvXiE3g1f2qjSTNa47FB7e2czo7en7a")
 )]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-pub struct LastVoteHistory {
+pub struct VoteHistory {
     pub node_pubkey: Pubkey,
     threshold_size: f64,
     last_vote: Option<VoteTransaction>,
-    root: Slot,
+    pub root: Slot,
     #[serde(skip)]
     // The blockhash used in the last vote transaction, may or may not equal the
     // blockhash of the voted block itself, depending if the vote slot was refreshed.
@@ -152,7 +164,7 @@ pub struct LastVoteHistory {
     pub last_switch_threshold_check: Option<(Slot, SwitchForkDecision)>,*/
 }
 
-impl Default for LastVoteHistory {
+impl Default for VoteHistory {
     fn default() -> Self {
         Self {
             node_pubkey: Pubkey::default(),
@@ -223,7 +235,7 @@ pub(crate) fn collect_vote_lockouts(
 
         if key == *vote_account_pubkey {
             my_latest_landed_vote = Some(vote_state.slot());
-            datapoint_info!("tower-observed", ("slot", vote_state.slot(), i64));
+            datapoint_info!("vote-history-observed", ("slot", vote_state.slot(), i64));
         }
 
         // Add the last vote to update the `heaviest_subtree_fork_choice`
@@ -362,7 +374,15 @@ pub(crate) fn is_slot_duplicate_confirmed(
         .unwrap_or(false)
 }
 
-impl LastVoteHistory {
+impl VoteHistory {
+    pub(crate) fn new(node_pubkey: Pubkey, root: Slot) -> Self {
+        Self {
+            node_pubkey,
+            root,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn last_vote_tx_blockhash(&self) -> BlockhashStatus {
         self.last_vote_tx_blockhash
     }
@@ -649,7 +669,7 @@ impl LastVoteHistory {
                      ledger."
                 );
                 warn!("{}", message);
-                datapoint_warn!("tower_warn", ("warn", message, String));
+                datapoint_warn!("vote_history_warn", ("warn", message, String));
             }
             &empty_ancestors
         };
@@ -955,13 +975,67 @@ impl LastVoteHistory {
     fn is_first_switch_check(&self) -> bool {
         self.last_switch_threshold_check.is_none()
     }*/
+
+    pub fn save(
+        &self,
+        vote_history_storage: &dyn VoteHistoryStorage,
+        node_keypair: &Keypair,
+    ) -> Result<()> {
+        let saved_vote_history = SavedVoteHistory::new(self, node_keypair)?;
+        vote_history_storage.store(&SavedVoteHistoryVersions::from(saved_vote_history))?;
+        Ok(())
+    }
+
+    pub fn restore(
+        vote_history_storage: &dyn VoteHistoryStorage,
+        node_pubkey: &Pubkey,
+    ) -> Result<Self> {
+        vote_history_storage.load(node_pubkey)
+    }
 }
 
-// Given an untimely crash, tower may have roots that are not reflected in blockstore,
+#[derive(Error, Debug)]
+pub enum VoteHistoryError {
+    #[error("IO Error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("Serialization Error: {0}")]
+    SerializeError(#[from] bincode::Error),
+
+    #[error("The signature on the saved vote history is invalid")]
+    InvalidSignature,
+
+    #[error("The vote history does not match this validator: {0}")]
+    WrongVoteHistory(String),
+
+    #[error(
+        "The vote history is too old: newest slot in vote history ({0}) << oldest slot in available history \
+         ({1})"
+    )]
+    TooOldTower(Slot, Slot),
+
+    #[error("The vote history is fatally inconsistent with blockstore: {0}")]
+    FatallyInconsistent(&'static str),
+
+    #[error("The vote history is useless because of new hard fork: {0}")]
+    HardFork(Slot),
+}
+
+impl VoteHistoryError {
+    pub fn is_file_missing(&self) -> bool {
+        if let VoteHistoryError::IoError(io_err) = &self {
+            io_err.kind() == std::io::ErrorKind::NotFound
+        } else {
+            false
+        }
+    }
+}
+
+// Given an untimely crash, vote history may have roots that are not reflected in blockstore,
 // or the reverse of this.
 // That's because we don't impose any ordering guarantee or any kind of write barriers
-// between tower (plain old POSIX fs calls) and blockstore (through RocksDB), when
-// `ReplayState::handle_votable_bank()` saves tower before setting blockstore roots.
+// between vote history (plain old POSIX fs calls) and blockstore (through RocksDB), when
+// `ReplayState::handle_votable_bank()` saves vote history before setting blockstore roots.
 /*pub fn reconcile_blockstore_roots_with_external_source(
     external_source: ExternalRootSource,
     blockstore: &Blockstore,

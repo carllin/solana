@@ -11,7 +11,7 @@ use {
     solana_accounts_db::accounts_index::AccountIndex,
     solana_core::{
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
-        consensus::{tower_storage::TowerStorage, Tower},
+        consensus_new::{vote_history_storage::VoteHistoryStorage, VoteHistory},
         repair::repair_service,
         validator::ValidatorStartProgress,
     },
@@ -44,7 +44,7 @@ pub struct AdminRpcRequestMetadata {
     pub start_progress: Arc<RwLock<ValidatorStartProgress>>,
     pub validator_exit: Arc<RwLock<Exit>>,
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
-    pub tower_storage: Arc<dyn TowerStorage>,
+    pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
     pub staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
     pub post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
     pub rpc_to_plugin_manager_sender: Option<Sender<GeyserPluginManagerRequest>>,
@@ -708,14 +708,17 @@ impl AdminRpcImpl {
     ) -> Result<()> {
         meta.with_post_init(|post_init| {
             if require_tower {
-                let _ = Tower::restore(meta.tower_storage.as_ref(), &identity_keypair.pubkey())
-                    .map_err(|err| {
-                        jsonrpc_core::error::Error::invalid_params(format!(
-                            "Unable to load tower file for identity {}: {}",
-                            identity_keypair.pubkey(),
-                            err
-                        ))
-                    })?;
+                let _ = VoteHistory::restore(
+                    meta.vote_history_storage.as_ref(),
+                    &identity_keypair.pubkey(),
+                )
+                .map_err(|err| {
+                    jsonrpc_core::error::Error::invalid_params(format!(
+                        "Unable to load tower file for identity {}: {}",
+                        identity_keypair.pubkey(),
+                        err
+                    ))
+                })?;
             }
 
             for n in post_init.notifies.iter() {
@@ -866,7 +869,7 @@ mod tests {
         super::*,
         serde_json::Value,
         solana_accounts_db::accounts_index::AccountSecondaryIndexes,
-        solana_core::consensus::tower_storage::NullTowerStorage,
+        solana_core::consensus_new::vote_history_storage::NullVoteHistoryStorage,
         solana_gossip::cluster_info::ClusterInfo,
         solana_inline_spl::token,
         solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo},
@@ -929,7 +932,7 @@ mod tests {
                 start_progress,
                 validator_exit,
                 authorized_voter_keypairs: Arc::new(RwLock::new(vec![vote_keypair])),
-                tower_storage: Arc::new(NullTowerStorage {}),
+                vote_history_storage: Arc::new(NullVoteHistoryStorage {}),
                 post_init: Arc::new(RwLock::new(Some(AdminRpcRequestMetadataPostInit {
                     cluster_info,
                     bank_forks: bank_forks.clone(),

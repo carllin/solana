@@ -1,6 +1,7 @@
 use {
     crate::{
         consensus::tower_storage::{SavedTowerVersions, TowerStorage},
+        consensus_new::vote_history_storage::{SavedVoteHistoryVersions, VoteHistoryStorage},
         next_leader::upcoming_leader_tpu_vote_sockets,
     },
     crossbeam_channel::Receiver,
@@ -21,6 +22,7 @@ pub enum VoteOp {
     PushNewVote {
         tx: Transaction,
         slot: Slot,
+        saved_vote_history: SavedVoteHistoryVersions,
     },
     PushVote {
         tx: Transaction,
@@ -52,7 +54,7 @@ impl VotingService {
         vote_receiver: Receiver<VoteOp>,
         cluster_info: Arc<ClusterInfo>,
         poh_recorder: Arc<RwLock<PohRecorder>>,
-        tower_storage: Arc<dyn TowerStorage>,
+        vote_history_storage: Arc<dyn VoteHistoryStorage>,
     ) -> Self {
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
@@ -61,7 +63,7 @@ impl VotingService {
                     Self::handle_vote(
                         &cluster_info,
                         &poh_recorder,
-                        tower_storage.as_ref(),
+                        vote_history_storage.as_ref(),
                         vote_op,
                     );
                 }
@@ -73,19 +75,21 @@ impl VotingService {
     pub fn handle_vote(
         cluster_info: &ClusterInfo,
         poh_recorder: &RwLock<PohRecorder>,
-        tower_storage: &dyn TowerStorage,
+        vote_history_storage: &dyn VoteHistoryStorage,
         vote_op: VoteOp,
     ) {
-        // TODO: handle saving vote state
-        /*if let VoteOp::PushVote { saved_tower, .. } = &vote_op {
-            let mut measure = Measure::start("tower storage save");
-            if let Err(err) = tower_storage.store(saved_tower) {
-                error!("Unable to save tower to storage: {:?}", err);
+        if let VoteOp::PushNewVote {
+            saved_vote_history, ..
+        } = &vote_op
+        {
+            let mut measure = Measure::start("vote history storage save");
+            if let Err(err) = vote_history_storage.store(saved_vote_history) {
+                error!("Unable to save vote history to storage: {:?}", err);
                 std::process::exit(1);
             }
             measure.stop();
             trace!("{measure}");
-        }*/
+        }
 
         // Attempt to send our vote transaction to the leaders for the next few slots
         const UPCOMING_LEADER_FANOUT_SLOTS: u64 = FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET;
