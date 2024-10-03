@@ -41,7 +41,7 @@ use {
         system_program,
     },
     solana_stake_program::stake_state,
-    solana_vote_program::vote_state::{self, VoteState},
+    solana_vote_new_program::vote_state_new::{self, VoteState},
     std::{
         collections::HashMap,
         error,
@@ -641,7 +641,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             AccountSharedData::new(bootstrap_validator_lamports, 0, &system_program::id()),
         );
 
-        let vote_account = vote_state::create_account_with_authorized(
+        let vote_account = vote_state_new::create_account_with_authorized(
             identity_pubkey,
             identity_pubkey,
             identity_pubkey,
