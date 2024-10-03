@@ -37,7 +37,7 @@ use {
     solana_tpu_client::tpu_client::{
         TpuClient, TpuClientConfig, DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_TPU_ENABLE_UDP,
     },
-    solana_vote_program::vote_state::VoteAuthorize,
+    solana_vote_new_program::vote_state_new::VoteAuthorize,
     std::{
         collections::HashMap, error, io::stdout, process::exit, rc::Rc, str::FromStr, sync::Arc,
         time::Duration,

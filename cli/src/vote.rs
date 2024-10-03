@@ -23,7 +23,7 @@ use {
         offline::*,
     },
     solana_cli_output::{
-        return_signers_with_config, CliEpochVotingHistory, CliLandedVote, CliVoteAccount,
+        return_signers_with_config, CliEpochVotingHistory, CliVote, CliVoteAccount,
         ReturnSignersConfig,
     },
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
@@ -35,10 +35,10 @@ use {
         native_token::lamports_to_sol, pubkey::Pubkey, system_instruction::SystemError,
         transaction::Transaction,
     },
-    solana_vote_program::{
+    solana_vote_new_program::{
         vote_error::VoteError,
         vote_instruction::{self, withdraw, CreateVoteAccountConfig},
-        vote_state::{VoteAuthorize, VoteInit, VoteState, VoteStateVersions},
+        vote_state_new::{VoteAuthorize, VoteInit, VoteState, VoteStateVersions},
     },
     std::rc::Rc,
 };
@@ -796,7 +796,7 @@ pub fn process_create_vote_account(
     let vote_account = config.signers[vote_account];
     let vote_account_pubkey = vote_account.pubkey();
     let vote_account_address = if let Some(seed) = seed {
-        Pubkey::create_with_seed(&vote_account_pubkey, seed, &solana_vote_program::id())?
+        Pubkey::create_with_seed(&vote_account_pubkey, seed, &solana_vote_new_program::id())?
     } else {
         vote_account_pubkey
     };
@@ -819,7 +819,7 @@ pub fn process_create_vote_account(
 
     let fee_payer = config.signers[fee_payer];
     let nonce_authority = config.signers[nonce_authority];
-    let space = VoteStateVersions::vote_state_size_of(true) as u64;
+    let space = VoteStateVersions::vote_state_size_of() as u64;
 
     let compute_unit_limit = ComputeUnitLimit::Default;
     let build_message = |lamports| {
@@ -884,7 +884,7 @@ pub fn process_create_vote_account(
             rpc_client.get_account_with_commitment(&vote_account_address, config.commitment)
         {
             if let Some(vote_account) = response.value {
-                let err_msg = if vote_account.owner == solana_vote_program::id() {
+                let err_msg = if vote_account.owner == solana_vote_new_program::id() {
                     format!("Vote account {vote_account_address} already exists")
                 } else {
                     format!(
@@ -1218,7 +1218,7 @@ pub(crate) fn get_vote_account(
             CliError::RpcRequestError(format!("{vote_account_pubkey:?} account does not exist"))
         })?;
 
-    if vote_account.owner != solana_vote_program::id() {
+    if vote_account.owner != solana_vote_new_program::id() {
         return Err(CliError::RpcRequestError(format!(
             "{vote_account_pubkey:?} is not a vote account"
         ))
@@ -1246,12 +1246,10 @@ pub fn process_show_vote_account(
 
     let epoch_schedule = rpc_client.get_epoch_schedule()?;
 
-    let mut votes: Vec<CliLandedVote> = vec![];
+    let mut votes: Vec<CliVote> = vec![];
     let mut epoch_voting_history: Vec<CliEpochVotingHistory> = vec![];
-    if !vote_state.votes.is_empty() {
-        for vote in &vote_state.votes {
-            votes.push(vote.into());
-        }
+    if vote_state.vote_range.slot != 0 {
+        votes.push(vote_state.vote_range.slot.into());
         for (epoch, credits, prev_credits) in vote_state.epoch_credits().iter().copied() {
             let credits_earned = credits.saturating_sub(prev_credits);
             let slots_in_epoch = epoch_schedule.get_slots_in_epoch(epoch);
@@ -1283,7 +1281,6 @@ pub fn process_show_vote_account(
         authorized_withdrawer: vote_state.authorized_withdrawer.to_string(),
         credits: vote_state.credits(),
         commission: vote_state.commission,
-        root_slot: vote_state.root_slot,
         recent_timestamp: vote_state.last_timestamp.clone(),
         votes,
         epoch_voting_history,

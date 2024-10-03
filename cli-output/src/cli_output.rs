@@ -41,9 +41,9 @@ use {
         EncodedConfirmedBlock, EncodedTransaction, TransactionConfirmationStatus,
         UiTransactionStatusMeta,
     },
-    solana_vote_program::{
+    solana_vote_new_program::{
         authorized_voters::AuthorizedVoters,
-        vote_state::{BlockTimestamp, LandedVote, MAX_EPOCH_CREDITS_HISTORY, MAX_LOCKOUT_HISTORY},
+        vote_state_new::{BlockTimestamp, MAX_EPOCH_CREDITS_HISTORY},
     },
     std::{
         collections::{BTreeMap, HashMap},
@@ -1081,9 +1081,9 @@ impl fmt::Display for CliKeyedEpochRewards {
     }
 }
 
-fn show_votes_and_credits(
+/*fn show_votes_and_credits(
     f: &mut fmt::Formatter,
-    votes: &[CliLandedVote],
+    votes: &[CliVote],
     epoch_voting_history: &[CliEpochVotingHistory],
 ) -> fmt::Result {
     if votes.is_empty() {
@@ -1108,14 +1108,9 @@ fn show_votes_and_credits(
     for vote in votes.iter().rev() {
         write!(
             f,
-            "- slot: {} (confirmation count: {})",
-            vote.slot, vote.confirmation_count
+            "- slot: {}",
+            vote.slot,
         )?;
-        if vote.latency == 0 {
-            writeln!(f)?;
-        } else {
-            writeln!(f, " (latency {})", vote.latency)?;
-        }
     }
     if let Some(newest) = newest_history_entry {
         writeln!(
@@ -1176,7 +1171,7 @@ fn show_votes_and_credits(
     }
 
     Ok(())
-}
+}*/
 
 enum Format {
     Csv,
@@ -1204,7 +1199,7 @@ macro_rules! format_as {
     };
 }
 
-fn show_epoch_rewards(
+/*fn show_epoch_rewards(
     f: &mut fmt::Formatter,
     epoch_rewards: &Option<Vec<CliEpochReward>>,
     use_csv: bool,
@@ -1254,7 +1249,7 @@ fn show_epoch_rewards(
         }
     }
     Ok(())
-}
+}*/
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1445,7 +1440,7 @@ impl fmt::Display for CliStakeState {
                 }
                 show_authorized(f, self.authorized.as_ref().unwrap())?;
                 show_lockup(f, self.lockup.as_ref())?;
-                show_epoch_rewards(f, &self.epoch_rewards, self.use_csv)?
+                //show_epoch_rewards(f, &self.epoch_rewards, self.use_csv)?
             }
         }
         Ok(())
@@ -1628,9 +1623,8 @@ pub struct CliVoteAccount {
     pub authorized_withdrawer: String,
     pub credits: u64,
     pub commission: u8,
-    pub root_slot: Option<Slot>,
     pub recent_timestamp: BlockTimestamp,
-    pub votes: Vec<CliLandedVote>,
+    pub votes: Vec<CliVote>,
     pub epoch_voting_history: Vec<CliEpochVotingHistory>,
     #[serde(skip_serializing)]
     pub use_lamports_unit: bool,
@@ -1657,20 +1651,12 @@ impl fmt::Display for CliVoteAccount {
         writeln!(f, "Commission: {}%", self.commission)?;
         writeln!(
             f,
-            "Root Slot: {}",
-            match self.root_slot {
-                Some(slot) => slot.to_string(),
-                None => "~".to_string(),
-            }
-        )?;
-        writeln!(
-            f,
             "Recent Timestamp: {} from slot {}",
             unix_timestamp_to_string(self.recent_timestamp.timestamp),
             self.recent_timestamp.slot
         )?;
-        show_votes_and_credits(f, &self.votes, &self.epoch_voting_history)?;
-        show_epoch_rewards(f, &self.epoch_rewards, self.use_csv)?;
+        //show_votes_and_credits(f, &self.votes, &self.epoch_voting_history)?;
+        //show_epoch_rewards(f, &self.epoch_rewards, self.use_csv)?;
         Ok(())
     }
 }
@@ -1730,19 +1716,13 @@ pub struct CliEpochVotingHistory {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CliLandedVote {
-    pub latency: u8,
+pub struct CliVote {
     pub slot: Slot,
-    pub confirmation_count: u32,
 }
 
-impl From<&LandedVote> for CliLandedVote {
-    fn from(landed_vote: &LandedVote) -> Self {
-        Self {
-            latency: landed_vote.latency,
-            slot: landed_vote.slot(),
-            confirmation_count: landed_vote.confirmation_count(),
-        }
+impl From<Slot> for CliVote {
+    fn from(slot: Slot) -> Self {
+        Self { slot }
     }
 }
 

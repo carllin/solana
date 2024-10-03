@@ -16,7 +16,7 @@ use {
     },
     solana_streamer::socket::SocketAddrSpace,
     solana_test_validator::TestValidator,
-    solana_vote_program::vote_state::{VoteAuthorize, VoteState, VoteStateVersions},
+    solana_vote_new_program::vote_state_new::{VoteAuthorize, VoteState, VoteStateVersions},
 };
 
 #[test]
