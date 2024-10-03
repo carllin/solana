@@ -2351,6 +2351,26 @@ impl ReplayStage {
         }
     }
 
+    fn adjust_old_reference_slots_for_vote(
+        reference_slot: &mut Slot,
+        bank: &Arc<Bank>,
+        my_vote_pubkey: &Pubkey,
+    ) {
+        if let Some(vote_account) = bank.get_vote_account(my_vote_pubkey) {
+            let mut bank_vote_state = vote_account.vote_state().clone();
+            if bank_vote_state.vote_range.reference_slot > *reference_slot {
+                info!(
+                    "Frozen bank vote state range {:?}
+                    is newer than our local reference slot {reference_slot},
+                    changing reference slot to {}",
+                    bank_vote_state.vote_range,
+                    bank.slot()
+                );
+                *reference_slot = bank.slot();
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn handle_votable_bank(
         reference_slot: &mut Slot,
@@ -2386,6 +2406,7 @@ impl ReplayStage {
             datapoint_info!("replay_stage-voted_empty_bank", ("slot", bank.slot(), i64));
         }
         let last_vote_slot = vote_history.last_voted_slot().unwrap_or(0);
+        Self::adjust_old_reference_slots_for_vote(reference_slot, bank, vote_account_pubkey);
         let same_fork = ancestors
             .get(&bank.slot())
             .map(|ancestors| ancestors.contains(&last_vote_slot))
@@ -2393,7 +2414,7 @@ impl ReplayStage {
         if !same_fork {
             *reference_slot = bank.slot();
         }
-        trace!("handle votable bank {}", bank.slot());
+        info!("vote_bank: {} {}", bank.slot(), *reference_slot);
         vote_history.record_bank_vote(bank, *reference_slot);
 
         if let Some(new_root) = new_root {
@@ -3406,8 +3427,6 @@ impl ReplayStage {
                     .map(|fork_stats| fork_stats.computed_bank_state.votes_per_validator.clone())
                     .unwrap_or_default();
                 if !is_computed {
-                    // TODO: Check if our vote is behind, if so adopt the on chain tower from this Bank
-                    Self::adopt_on_chain_tower_if_behind(my_vote_pubkey, progress, bank);
                     let computed_bank_state = consensus_new::collect_vote_lockouts(
                         my_vote_pubkey,
                         &bank.vote_accounts(),
@@ -3450,13 +3469,6 @@ impl ReplayStage {
             );
         }
         new_stats
-    }
-
-    fn adopt_on_chain_tower_if_behind(
-        my_vote_pubkey: &Pubkey,
-        progress: &mut ProgressMap,
-        bank: &Arc<Bank>,
-    ) {
     }
 
     fn update_propagation_status(
