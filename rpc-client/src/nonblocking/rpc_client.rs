@@ -677,6 +677,7 @@ impl RpcClient {
         commitment: CommitmentConfig,
         config: RpcSendTransactionConfig,
     ) -> ClientResult<Signature> {
+        println!("send_and_confirm_transaction_with_spinner_and_config");
         let recent_blockhash = if transaction.uses_durable_nonce() {
             self.get_latest_blockhash_with_commitment(CommitmentConfig::processed())
                 .await?
@@ -684,11 +685,14 @@ impl RpcClient {
         } else {
             *transaction.get_recent_blockhash()
         };
+        println!("send_transaction_with_config");
         let signature = self
             .send_transaction_with_config(transaction, config)
             .await?;
+        println!("confirm_transaction_with_spinner");
         self.confirm_transaction_with_spinner(&signature, &recent_blockhash, commitment)
             .await?;
+        println!("finished send_and_confirm_transaction_with_spinner_and_config");
         Ok(signature)
     }
 
@@ -887,7 +891,7 @@ impl RpcClient {
                     data,
                 }) = &err.kind
                 {
-                    debug!("{} {}", code, message);
+                    println!("error codesss: {} {}", code, message);
                     if let RpcResponseErrorData::SendTransactionPreflightFailure(
                         RpcSimulateTransactionResult {
                             logs: Some(logs), ..
@@ -895,9 +899,9 @@ impl RpcClient {
                     ) = data
                     {
                         for (i, log) in logs.iter().enumerate() {
-                            debug!("{:>3}: {}", i + 1, log);
+                            println!("{:>3}: {}", i + 1, log);
                         }
-                        debug!("");
+                        println!("");
                     }
                 }
                 return Err(err);
@@ -1082,9 +1086,11 @@ impl RpcClient {
             .unwrap_or_default();
         let (signature, status) = loop {
             // Get recent commitment in order to count confirmations for successful transactions
+            println!("getting signature: {}", signature);
             let status = self
                 .get_signature_status_with_commitment(signature, CommitmentConfig::processed())
                 .await?;
+            println!("status: {:?}", status);
             if status.is_none() {
                 let blockhash_not_found = !self
                     .is_blockhash_valid(recent_blockhash, CommitmentConfig::processed())
@@ -1102,9 +1108,11 @@ impl RpcClient {
         };
         if let Some(result) = status {
             if let Err(err) = result {
+                println!("error: {:?}", err);
                 return Err(err.into());
             }
         } else {
+            println!("other error, unable to confirm transaction");
             return Err(RpcError::ForUser(
                 "unable to confirm transaction. \
                                       This can happen in situations such as transaction expiration \
@@ -1115,6 +1123,7 @@ impl RpcClient {
         }
         let now = Instant::now();
         loop {
+            println!("getting commitment: {}", signature);
             // Return when specified commitment is reached
             // Failed transactions have already been eliminated, `is_some` check is sufficient
             if self
@@ -1134,10 +1143,12 @@ impl RpcClient {
                 signature,
             ));
             sleep(Duration::from_millis(500)).await;
+            println!("getting num blocks: {}", signature);
             confirmations = self
                 .get_num_blocks_since_signature_confirmation(signature)
                 .await
                 .unwrap_or(confirmations);
+            println!("finished getting num blocks: {}", signature);
             if now.elapsed().as_secs() >= MAX_HASH_AGE_IN_SECONDS as u64 {
                 return Err(
                     RpcError::ForUser("transaction not finalized. \

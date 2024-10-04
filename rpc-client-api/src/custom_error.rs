@@ -139,7 +139,13 @@ impl From<RpcCustomError> for Error {
                 message: format!("Block not available for slot {slot}"),
                 data: None,
             },
-            RpcCustomError::NodeUnhealthy { num_slots_behind } => Self {
+            RpcCustomError::NodeUnhealthy { num_slots_behind } => {
+                let message = if let Some(num_slots_behind) = num_slots_behind {
+                    format!("Node is behind by {num_slots_behind} slots")
+                } else {
+                    "Node is unhealthy".to_string()
+                };
+                println!("error message: {:?}", message);Self {
                 code: ErrorCode::ServerError(JSON_RPC_SERVER_ERROR_NODE_UNHEALTHY),
                 message: if let Some(num_slots_behind) = num_slots_behind {
                     format!("Node is behind by {num_slots_behind} slots")
@@ -149,7 +155,7 @@ impl From<RpcCustomError> for Error {
                 data: Some(serde_json::json!(NodeUnhealthyErrorData {
                     num_slots_behind
                 })),
-            },
+            }},
             RpcCustomError::TransactionPrecompileVerificationFailure(e) => Self {
                 code: ErrorCode::ServerError(
                     JSON_RPC_SERVER_ERROR_TRANSACTION_PRECOMPILE_VERIFICATION_FAILURE,

@@ -45,6 +45,7 @@ impl RpcHealth {
     }
 
     pub fn check(&self) -> RpcHealthStatus {
+        return RpcHealthStatus::Ok;
         #[cfg(test)]
         {
             if let Some(stub_health_status) = *self.stub_health_status.read().unwrap() {

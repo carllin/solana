@@ -139,6 +139,7 @@ impl RpcSender for HttpSender {
         request: RpcRequest,
         params: serde_json::Value,
     ) -> Result<serde_json::Value> {
+        println!("http sender send");
         let mut stats_updater = StatsUpdater::new(&self.stats);
 
         let request_id = self.request_id.fetch_add(1, Ordering::Relaxed);
@@ -191,15 +192,17 @@ impl RpcSender for HttpSender {
                     Ok(rpc_error_object) => {
                         let data = match rpc_error_object.code {
                                     custom_error::JSON_RPC_SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE => {
+                                        println!("preflight failure");
                                         match serde_json::from_value::<RpcSimulateTransactionResult>(json["error"]["data"].clone()) {
                                             Ok(data) => RpcResponseErrorData::SendTransactionPreflightFailure(data),
                                             Err(err) => {
-                                                debug!("Failed to deserialize RpcSimulateTransactionResult: {:?}", err);
+                                                println!("Failed to deserialize RpcSimulateTransactionResult: {:?}", err);
                                                 RpcResponseErrorData::Empty
                                             }
                                         }
                                     },
                                     custom_error::JSON_RPC_SERVER_ERROR_NODE_UNHEALTHY => {
+                                        println!("unhealthy json node");
                                         match serde_json::from_value::<custom_error::NodeUnhealthyErrorData>(json["error"]["data"].clone()) {
                                             Ok(custom_error::NodeUnhealthyErrorData {num_slots_behind}) => RpcResponseErrorData::NodeUnhealthy {num_slots_behind},
                                             Err(_err) => {

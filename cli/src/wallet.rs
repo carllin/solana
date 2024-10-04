@@ -886,6 +886,7 @@ pub fn process_transfer(
 
     let recent_blockhash = blockhash_query.get_blockhash(rpc_client, config.commitment)?;
 
+    println!("process_transfer");
     if !sign_only && !allow_unfunded_recipient {
         let recipient_balance = rpc_client
             .get_balance_with_commitment(to, config.commitment)?
@@ -918,6 +919,7 @@ pub fn process_transfer(
     };
     let build_message = |lamports| {
         let ixs = if let Some((base_pubkey, seed, program_id, from_pubkey)) = with_seed.as_ref() {
+            println!("initiating transfer 1");
             vec![system_instruction::transfer_with_seed(
                 from_pubkey,
                 base_pubkey,
@@ -932,6 +934,7 @@ pub fn process_transfer(
                 compute_unit_limit,
             })
         } else {
+            println!("initiating transfer 1");
             vec![system_instruction::transfer(&from_pubkey, to, lamports)]
                 .with_memo(memo)
                 .with_compute_unit_config(&ComputeUnitConfig {
@@ -952,6 +955,7 @@ pub fn process_transfer(
         }
     };
 
+    println!("resolve_spend_tx_and_check_account_balances");
     let (message, _) = resolve_spend_tx_and_check_account_balances(
         rpc_client,
         sign_only,
@@ -988,8 +992,10 @@ pub fn process_transfer(
         let result = if no_wait {
             rpc_client.send_transaction(&tx)
         } else {
+            println!("send and confirm tx");
             rpc_client.send_and_confirm_transaction_with_spinner(&tx)
         };
+        println!("finished");
         log_instruction_custom_error::<SystemError>(result, config)
     }
 }
