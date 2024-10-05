@@ -2,9 +2,11 @@
 use trees::{Tree, TreeWalk};
 use {
     crate::consensus::{
-        fork_choice::ForkChoice,
+        fork_choice::{ForkChoice, QuorumSlot},
         latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
-        progress_map::ProgressMap, tree_diff::TreeDiff, Tower,
+        progress_map::ProgressMap,
+        tree_diff::TreeDiff,
+        Tower,
     },
     crate::consensus_new::VoteHistory,
     solana_measure::measure::Measure,
@@ -48,6 +50,7 @@ enum UpdateLabel {
     // why the actual slot is included here).
     MarkInvalid(Slot),
     Subtract,
+    Quorum,
 }
 
 pub trait GetSlotHash {
@@ -74,6 +77,7 @@ enum UpdateOperation {
     // marked as invalid.
     MarkInvalid(Slot),
     Subtract(u64),
+    Quorum(QuorumSlot),
     Aggregate,
 }
 
@@ -85,6 +89,31 @@ impl UpdateOperation {
             Self::MarkValid(_slot) => panic!("Should not get here"),
             Self::MarkInvalid(_slot) => panic!("Should not get here"),
             Self::Subtract(stake) => *stake += new_stake,
+            Self::Quorum(quorum) => panic!("Should not get here"),
+        }
+    }
+}
+
+impl QuorumSlot {
+    pub fn greatest_quorum_slot<'a>(
+        q1: &'a Option<QuorumSlot>,
+        q2: &'a Option<QuorumSlot>,
+    ) -> &'a Option<QuorumSlot> {
+        Self::is_greater(q1, q2).then(|| q1).unwrap_or(q2)
+    }
+
+    pub fn is_greater(q1: &Option<QuorumSlot>, q2: &Option<QuorumSlot>) -> bool {
+        match (q1, q2) {
+            (Some(q1), None) => true,
+            (None, Some(q2)) => false,
+            (Some(q1), Some(q2)) => {
+                if q1.quorum_slot > q2.quorum_slot {
+                    true
+                } else {
+                    false
+                }
+            }
+            (None, None) => false,
         }
     }
 }
@@ -113,6 +142,8 @@ struct ForkInfo {
     latest_invalid_ancestor: Option<Slot>,
     // Set to true if this slot or a child node was duplicate confirmed.
     is_duplicate_confirmed: bool,
+    // Greatest slot in your descendants that has reached quorum
+    greatest_quorum_slot: Option<QuorumSlot>,
 }
 
 impl ForkInfo {
@@ -317,6 +348,12 @@ impl HeaviestSubtreeForkChoice {
             .map(|fork_info| fork_info.stake_voted_subtree)
     }
 
+    pub fn greatest_quorum_slot(&self, key: &SlotHashKey) -> Option<QuorumSlot> {
+        self.fork_infos
+            .get(key)
+            .and_then(|fork_info| fork_info.greatest_quorum_slot.clone())
+    }
+
     pub fn height(&self, key: &SlotHashKey) -> Option<usize> {
         self.fork_infos.get(key).map(|fork_info| fork_info.height)
     }
@@ -342,10 +379,15 @@ impl HeaviestSubtreeForkChoice {
         pubkey_votes: impl Iterator<Item = impl Borrow<(Pubkey, SlotHashKey)> + 'b>,
         epoch_stakes: &HashMap<Epoch, EpochStakes>,
         epoch_schedule: &EpochSchedule,
+        greatest_quorom_slot: Option<QuorumSlot>,
     ) -> SlotHashKey {
         // Generate the set of updates
-        let update_operations_batch =
-            self.generate_update_operations(pubkey_votes, epoch_stakes, epoch_schedule);
+        let update_operations_batch = self.generate_update_operations(
+            pubkey_votes,
+            epoch_stakes,
+            epoch_schedule,
+            greatest_quorom_slot,
+        );
 
         // Finalize all updates
         self.process_update_operations(update_operations_batch);
@@ -438,6 +480,7 @@ impl HeaviestSubtreeForkChoice {
             parent: None,
             latest_invalid_ancestor: None,
             is_duplicate_confirmed: root_info.is_duplicate_confirmed,
+            greatest_quorum_slot: root_info.greatest_quorum_slot.clone(),
         };
         self.fork_infos.insert(root_parent, root_parent_info);
         self.tree_root = root_parent;
@@ -473,6 +516,7 @@ impl HeaviestSubtreeForkChoice {
                 // If the parent is none, then this is the root, which implies this must
                 // have reached the duplicate confirmed threshold
                 is_duplicate_confirmed: parent.is_none(),
+                greatest_quorum_slot: None,
             });
 
         if parent.is_none() {
@@ -493,10 +537,15 @@ impl HeaviestSubtreeForkChoice {
         self.propagate_new_leaf(&slot_hash_key, &parent);
     }
 
+    // landed_slot is the slot at which a quorum for quorum_slot was
+    // achieved. Mark all children of
+    fn add_quorum(&self, landed_slot: Slot, quorum_slot: Slot) {}
+
     // Returns true if the given `maybe_best_child` is the heaviest among the children
     // of the parent. Breaks ties by slot # (lower is heavier).
     fn is_best_child(&self, maybe_best_child: &SlotHashKey) -> bool {
         let maybe_best_child_weight = self.stake_voted_subtree(maybe_best_child).unwrap();
+        let maybe_best_child_greatest_quorum = self.greatest_quorum_slot(maybe_best_child);
         let parent = self.parent(maybe_best_child);
         // If there's no parent, this must be the root
         if parent.is_none() {
@@ -507,12 +556,18 @@ impl HeaviestSubtreeForkChoice {
                 .stake_voted_subtree(child)
                 .expect("child must exist in `self.fork_infos`");
 
+            let child_greatest_quorum = self.greatest_quorum_slot(child);
+
             // Don't count children currently marked as invalid
             if !self.is_candidate(child).expect("child must exist in tree") {
                 continue;
             }
 
-            if child_weight > maybe_best_child_weight
+            if QuorumSlot::is_greater(&child_greatest_quorum, &maybe_best_child_greatest_quorum) {
+                return false;
+            }
+            // If two blocks have landed the same quorum, then pick the one with more weight
+            else if child_weight > maybe_best_child_weight
                 || (maybe_best_child_weight == child_weight && *child < *maybe_best_child)
             {
                 return false;
@@ -653,6 +708,10 @@ impl HeaviestSubtreeForkChoice {
         epoch_schedule: &EpochSchedule,
     ) {
         assert!(self.fork_infos.contains_key(merge_leaf));
+        let my_greatest_quorum_slot = self.greatest_quorum_slot(&self.tree_root());
+        let other_greatest_quorum_slot = other.greatest_quorum_slot(&other.tree_root());
+        let greatest_quorom_slot =
+            QuorumSlot::greatest_quorum_slot(&my_greatest_quorum_slot, &other_greatest_quorum_slot);
 
         // Add all the nodes from `other` into our tree
         let mut other_slots_nodes: Vec<_> = other
@@ -670,7 +729,12 @@ impl HeaviestSubtreeForkChoice {
 
         // Add all votes, the outdated ones should be filtered out by
         // self.add_votes()
-        self.add_votes(other.latest_votes.into_iter(), epoch_stakes, epoch_schedule);
+        self.add_votes(
+            other.latest_votes.into_iter(),
+            epoch_stakes,
+            epoch_schedule,
+            greatest_quorom_slot.clone(),
+        );
     }
 
     pub fn stake_voted_at(&self, slot: &SlotHashKey) -> Option<u64> {
@@ -847,12 +911,14 @@ impl HeaviestSubtreeForkChoice {
     }
 
     fn aggregate_slot(&mut self, slot_hash_key: SlotHashKey) {
+        let mut greatest_quorum_slot = None;
         let mut stake_voted_subtree;
         let mut deepest_child_height = 0;
         let mut best_slot_hash_key = slot_hash_key;
         let mut deepest_slot_hash_key = slot_hash_key;
         let mut is_duplicate_confirmed = false;
         if let Some(fork_info) = self.fork_infos.get(&slot_hash_key) {
+            greatest_quorum_slot = fork_info.greatest_quorum_slot.clone();
             stake_voted_subtree = fork_info.stake_voted_at;
             let mut best_child_stake_voted_subtree = 0;
             let mut best_child_slot_key = slot_hash_key;
@@ -864,6 +930,7 @@ impl HeaviestSubtreeForkChoice {
                     .get(child_key)
                     .expect("Child must exist in fork_info map");
                 let child_stake_voted_subtree = child_fork_info.stake_voted_subtree;
+                let child_quorum = &child_fork_info.greatest_quorum_slot;
                 let child_height = child_fork_info.height;
                 is_duplicate_confirmed |= child_fork_info.is_duplicate_confirmed;
 
@@ -888,14 +955,24 @@ impl HeaviestSubtreeForkChoice {
                 // See comment above for why this check is outside of the `is_candidate` check.
                 stake_voted_subtree += child_stake_voted_subtree;
 
+                // TODO: handle case where the observed slot with greatest quorum
+                // is a duplicate. Still need to return the duplicate as the best slot until
+                // another slot observes the same quorum
+                if QuorumSlot::is_greater(child_quorum, &greatest_quorum_slot) {
+                    greatest_quorum_slot = child_quorum.clone();
+                    best_child_stake_voted_subtree = child_stake_voted_subtree;
+                    best_child_slot_key = *child_key;
+                    best_slot_hash_key = child_fork_info.best_slot;
+                } else if
                 // Note: If there's no valid children, then the best slot should default to the
                 // input `slot` itself.
-                if child_fork_info.is_candidate()
+                child_fork_info.is_candidate()
                     && (best_child_slot_key == slot_hash_key ||
                     child_stake_voted_subtree > best_child_stake_voted_subtree ||
                 // tiebreaker by slot height, prioritize earlier slot
                 (child_stake_voted_subtree == best_child_stake_voted_subtree && child_key < &best_child_slot_key))
                 {
+                    greatest_quorum_slot = child_quorum.clone();
                     best_child_stake_voted_subtree = child_stake_voted_subtree;
                     best_child_slot_key = *child_key;
                     best_slot_hash_key = child_fork_info.best_slot;
@@ -937,6 +1014,7 @@ impl HeaviestSubtreeForkChoice {
             }
             fork_info.set_duplicate_confirmed();
         }
+        fork_info.greatest_quorum_slot = greatest_quorum_slot;
         fork_info.stake_voted_subtree = stake_voted_subtree;
         fork_info.height = deepest_child_height + 1;
         fork_info.best_slot = best_slot_hash_key;
@@ -970,10 +1048,19 @@ impl HeaviestSubtreeForkChoice {
         pubkey_votes: impl Iterator<Item = impl Borrow<(Pubkey, SlotHashKey)> + 'b>,
         epoch_stakes: &HashMap<Epoch, EpochStakes>,
         epoch_schedule: &EpochSchedule,
+        quorum_slot: Option<QuorumSlot>,
     ) -> UpdateOperations {
         let mut update_operations: BTreeMap<(SlotHashKey, UpdateLabel), UpdateOperation> =
             BTreeMap::new();
         let mut observed_pubkeys: HashMap<Pubkey, Slot> = HashMap::new();
+
+        if let Some(qs) = quorum_slot {
+            self.insert_aggregate_operations(&mut update_operations, qs.landed_slot_hash);
+            update_operations.insert(
+                (qs.landed_slot_hash, UpdateLabel::Quorum),
+                UpdateOperation::Quorum(qs),
+            );
+        }
         // Sort the `pubkey_votes` in a BTreeMap by the slot voted
         for pubkey_vote in pubkey_votes {
             let (pubkey, new_vote_slot_hash) = pubkey_vote.borrow();
@@ -1097,6 +1184,9 @@ impl HeaviestSubtreeForkChoice {
                 UpdateOperation::Aggregate => self.aggregate_slot(slot_hash_key),
                 UpdateOperation::Add(stake) => self.add_slot_stake(&slot_hash_key, stake),
                 UpdateOperation::Subtract(stake) => self.subtract_slot_stake(&slot_hash_key, stake),
+                UpdateOperation::Quorum(quorum) => {
+                    self.compare_swap_quorum_slot(&slot_hash_key, quorum)
+                }
             }
         }
     }
@@ -1112,6 +1202,14 @@ impl HeaviestSubtreeForkChoice {
         if let Some(fork_info) = self.fork_infos.get_mut(slot_hash_key) {
             fork_info.stake_voted_at -= stake;
             fork_info.stake_voted_subtree -= stake;
+        }
+    }
+
+    fn compare_swap_quorum_slot(&mut self, slot_hash_key: &SlotHashKey, quorum: QuorumSlot) {
+        if let Some(fork_info) = self.fork_infos.get_mut(slot_hash_key) {
+            fork_info.greatest_quorum_slot =
+                QuorumSlot::greatest_quorum_slot(&fork_info.greatest_quorum_slot, &Some(quorum))
+                    .clone();
         }
     }
 
@@ -1248,6 +1346,7 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
         &mut self,
         bank: &Bank,
         latest_validator_votes_for_frozen_banks: &mut LatestValidatorVotesForFrozenBanks,
+        greatest_quorom_slot: Option<QuorumSlot>,
     ) {
         let mut start = Measure::start("compute_bank_stats_time");
         // Update `heaviest_subtree_fork_choice` to find the best fork to build on
@@ -1257,6 +1356,7 @@ impl ForkChoice for HeaviestSubtreeForkChoice {
             new_votes.into_iter(),
             bank.epoch_stakes_map(),
             bank.epoch_schedule(),
+            greatest_quorom_slot,
         );
         start.stop();
 

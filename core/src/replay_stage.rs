@@ -11,7 +11,8 @@ use {
         commitment_service::{AggregateCommitmentService, CommitmentAggregationData},
         consensus::{
             fork_choice::{
-                select_vote_and_reset_forks_new, ForkChoice, SelectVoteAndResetForkResult,
+                select_vote_and_reset_forks_new, ForkChoice, QuorumSlot,
+                SelectVoteAndResetForkResult,
             },
             heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
             latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
@@ -3472,8 +3473,13 @@ impl ReplayStage {
                     );
                     // Notify any listeners of the votes found in this newly computed
                     // bank
-                    heaviest_subtree_fork_choice
-                        .compute_bank_stats(bank, latest_validator_votes_for_frozen_banks);
+                    heaviest_subtree_fork_choice.compute_bank_stats(
+                        bank,
+                        latest_validator_votes_for_frozen_banks,
+                        computed_bank_state.last_quorum_vote.map(|quorum_vote| {
+                            QuorumSlot::new((bank_slot, bank.hash()), quorum_vote.slot)
+                        }),
+                    );
                     let stats = progress
                         .get_fork_stats_mut(bank_slot)
                         .expect("All frozen banks must exist in the Progress map");

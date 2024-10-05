@@ -198,6 +198,7 @@ impl RepairWeight {
                     .map(|(pubkey, slot)| (*pubkey, (*slot, Hash::default()))),
                 epoch_stakes,
                 epoch_schedule,
+                None,
             );
         }
     }

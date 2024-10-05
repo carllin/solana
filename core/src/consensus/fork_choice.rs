@@ -9,12 +9,27 @@ use {
         replay_stage::HeaviestForkFailures,
     },
     solana_runtime::{bank::Bank, bank_forks::BankForks},
-    solana_sdk::clock::Slot,
+    solana_sdk::{clock::Slot, hash::Hash},
     std::{
         collections::{HashMap, HashSet},
         sync::{Arc, RwLock},
     },
 };
+
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub(crate) struct QuorumSlot {
+    pub landed_slot_hash: (Slot, Hash),
+    pub quorum_slot: Slot,
+}
+
+impl QuorumSlot {
+    pub fn new(landed_slot_hash: (Slot, Hash), quorum_slot: Slot) -> Self {
+        Self {
+            landed_slot_hash,
+            quorum_slot,
+        }
+    }
+}
 
 pub struct SelectVoteAndResetForkResult {
     pub vote_bank: Option<(Arc<Bank>, SwitchForkDecision)>,
@@ -38,6 +53,7 @@ pub trait ForkChoice {
         &mut self,
         bank: &Bank,
         latest_validator_votes_for_frozen_banks: &mut LatestValidatorVotesForFrozenBanks,
+        greatest_quorom_slot: Option<QuorumSlot>,
     );
 
     // Returns:
