@@ -640,8 +640,8 @@ mod tests {
             transaction::{self, Transaction},
         },
         solana_stake_program::stake_state,
-        solana_vote::vote_transaction::VoteTransaction,
-        solana_vote_program::vote_state::Vote,
+        solana_vote_new::vote_transaction::VoteTransaction,
+        solana_vote_new_program::vote_state_new::{Vote, VoteRange},
         std::{
             sync::{
                 atomic::{AtomicBool, AtomicU64},
@@ -1365,11 +1365,7 @@ mod tests {
         let (rpc, mut receiver) = rpc_pubsub_service::test_connection(&subscriptions);
         rpc.vote_subscribe().unwrap();
 
-        let vote = Vote {
-            slots: vec![1, 2],
-            hash: Hash::default(),
-            timestamp: None,
-        };
+        let vote = Vote::new(VoteRange::new(0, 2), Hash::default());
         subscriptions.notify_vote(
             Pubkey::default(),
             VoteTransaction::from(vote),

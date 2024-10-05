@@ -33,7 +33,7 @@ use {
         timing::AtomicInterval,
         transaction::Transaction,
     },
-    solana_vote::{
+    solana_vote_new::{
         vote_parser::{self, ParsedVote},
         vote_transaction::VoteTransaction,
     },
@@ -289,7 +289,7 @@ impl ClusterInfoVoteListener {
             })
             .filter_map(|(tx, packet_batch)| {
                 let (vote_account_key, vote, ..) = vote_parser::parse_vote_transaction(&tx)?;
-                let slot = vote.last_voted_slot()?;
+                let slot = vote.last_voted_slot();
                 let epoch = epoch_schedule.get_epoch(slot);
                 let authorized_voter = root_bank
                     .epoch_stakes(epoch)?
@@ -467,116 +467,106 @@ impl ClusterInfoVoteListener {
         duplicate_confirmed_slot_sender: &Option<DuplicateConfirmedSlotsSender>,
         latest_vote_slot_per_validator: &mut HashMap<Pubkey, Slot>,
     ) {
-        if vote.is_empty() {
-            return;
-        }
-
-        let (last_vote_slot, last_vote_hash) = vote.last_voted_slot_hash().unwrap();
-
+        let (last_vote_slot, last_vote_hash) = vote.last_voted_slot_hash();
         let latest_vote_slot = latest_vote_slot_per_validator
             .entry(*vote_pubkey)
             .or_insert(0);
 
         let root = root_bank.slot();
         let mut is_new_vote = false;
-        let vote_slots = vote.slots();
+        let slot = vote.last_voted_slot();
         // If slot is before the root, ignore it
-        for slot in vote_slots.iter().filter(|slot| **slot > root).rev() {
-            let slot = *slot;
-
+        if slot > root {
             // if we don't have stake information, ignore it
             let epoch = root_bank.epoch_schedule().get_epoch(slot);
-            let epoch_stakes = root_bank.epoch_stakes(epoch);
-            if epoch_stakes.is_none() {
-                continue;
-            }
-            let epoch_stakes = epoch_stakes.unwrap();
+            if let Some(epoch_stakes) = root_bank.epoch_stakes(epoch) {
+                // The last vote slot, which is the greatest slot in the stack
+                // of votes in a vote transaction, qualifies for optimistic confirmation.
+                // We cannot count any other slots in this vote toward optimistic confirmation because:
+                // 1) There may have been a switch between the earlier vote and the last vote
+                // 2) We do not know the hash of the earlier slot
+                if slot == last_vote_slot {
+                    let vote_accounts = epoch_stakes.stakes().vote_accounts();
+                    let stake = vote_accounts.get_delegated_stake(vote_pubkey);
+                    let total_stake = epoch_stakes.total_stake();
 
-            // The last vote slot, which is the greatest slot in the stack
-            // of votes in a vote transaction, qualifies for optimistic confirmation.
-            // We cannot count any other slots in this vote toward optimistic confirmation because:
-            // 1) There may have been a switch between the earlier vote and the last vote
-            // 2) We do not know the hash of the earlier slot
-            if slot == last_vote_slot {
-                let vote_accounts = epoch_stakes.stakes().vote_accounts();
-                let stake = vote_accounts.get_delegated_stake(vote_pubkey);
-                let total_stake = epoch_stakes.total_stake();
+                    // Fast track processing of the last slot in a vote transactions
+                    // so that notifications for optimistic confirmation can be sent
+                    // as soon as possible.
+                    let (reached_threshold_results, is_new) =
+                        Self::track_optimistic_confirmation_vote(
+                            vote_tracker,
+                            last_vote_slot,
+                            last_vote_hash,
+                            *vote_pubkey,
+                            stake,
+                            total_stake,
+                        );
 
-                // Fast track processing of the last slot in a vote transactions
-                // so that notifications for optimistic confirmation can be sent
-                // as soon as possible.
-                let (reached_threshold_results, is_new) = Self::track_optimistic_confirmation_vote(
-                    vote_tracker,
-                    last_vote_slot,
-                    last_vote_hash,
-                    *vote_pubkey,
-                    stake,
-                    total_stake,
-                );
-
-                if is_gossip_vote && is_new && stake > 0 {
-                    let _ = gossip_verified_vote_hash_sender.send((
-                        *vote_pubkey,
-                        last_vote_slot,
-                        last_vote_hash,
-                    ));
-                }
-
-                if reached_threshold_results[0] {
-                    if let Some(sender) = duplicate_confirmed_slot_sender {
-                        let _ = sender.send(vec![(last_vote_slot, last_vote_hash)]);
+                    if is_gossip_vote && is_new && stake > 0 {
+                        let _ = gossip_verified_vote_hash_sender.send((
+                            *vote_pubkey,
+                            last_vote_slot,
+                            last_vote_hash,
+                        ));
                     }
-                }
-                if reached_threshold_results[1] {
-                    new_optimistic_confirmed_slots.push((last_vote_slot, last_vote_hash));
-                    // Notify subscribers about new optimistic confirmation
-                    if let Some(sender) = bank_notification_sender {
-                        sender
-                            .send(BankNotification::OptimisticallyConfirmed(last_vote_slot))
-                            .unwrap_or_else(|err| {
-                                warn!("bank_notification_sender failed: {:?}", err)
-                            });
+
+                    if reached_threshold_results[0] {
+                        if let Some(sender) = duplicate_confirmed_slot_sender {
+                            let _ = sender.send(vec![(last_vote_slot, last_vote_hash)]);
+                        }
                     }
+                    if reached_threshold_results[1] {
+                        new_optimistic_confirmed_slots.push((last_vote_slot, last_vote_hash));
+                        // Notify subscribers about new optimistic confirmation
+                        if let Some(sender) = bank_notification_sender {
+                            sender
+                                .send(BankNotification::OptimisticallyConfirmed(last_vote_slot))
+                                .unwrap_or_else(|err| {
+                                    warn!("bank_notification_sender failed: {:?}", err)
+                                });
+                        }
+                    }
+
+                    if !is_new && !is_gossip_vote {
+                        // By now:
+                        // 1) The vote must have come from ReplayStage,
+                        // 2) We've seen this vote from replay for this hash before
+                        // (`track_optimistic_confirmation_vote()` will not set `is_new == true`
+                        // for same slot different hash), so short circuit because this vote
+                        // has no new information
+
+                        // Note gossip votes will always be processed because those should be unique
+                        // and we need to update the gossip-only stake in the `VoteTracker`.
+                        return;
+                    }
+
+                    is_new_vote = is_new;
                 }
 
-                if !is_new && !is_gossip_vote {
-                    // By now:
-                    // 1) The vote must have come from ReplayStage,
-                    // 2) We've seen this vote from replay for this hash before
-                    // (`track_optimistic_confirmation_vote()` will not set `is_new == true`
-                    // for same slot different hash), so short circuit because this vote
-                    // has no new information
+                if slot >= *latest_vote_slot {
+                    // Important that we filter after the `last_vote_slot` check, as even if this vote
+                    // is old, we still need to track optimistic confirmations.
+                    // However it is fine to filter the rest of the slots for the propagated check tracking below,
+                    // as the propagated check is able to roll up votes for descendants unlike optimistic confirmation.
 
-                    // Note gossip votes will always be processed because those should be unique
-                    // and we need to update the gossip-only stake in the `VoteTracker`.
-                    return;
+                    diff.entry(slot)
+                        .or_default()
+                        .entry(*vote_pubkey)
+                        .and_modify(|seen_in_gossip_previously| {
+                            *seen_in_gossip_previously =
+                                *seen_in_gossip_previously || is_gossip_vote
+                        })
+                        .or_insert(is_gossip_vote);
                 }
 
-                is_new_vote = is_new;
+                *latest_vote_slot = max(*latest_vote_slot, last_vote_slot);
+
+                if is_new_vote {
+                    subscriptions.notify_vote(*vote_pubkey, vote, vote_transaction_signature);
+                    let _ = verified_vote_sender.send((*vote_pubkey, vec![slot]));
+                }
             }
-
-            if slot < *latest_vote_slot {
-                // Important that we filter after the `last_vote_slot` check, as even if this vote
-                // is old, we still need to track optimistic confirmations.
-                // However it is fine to filter the rest of the slots for the propagated check tracking below,
-                // as the propagated check is able to roll up votes for descendants unlike optimistic confirmation.
-                continue;
-            }
-
-            diff.entry(slot)
-                .or_default()
-                .entry(*vote_pubkey)
-                .and_modify(|seen_in_gossip_previously| {
-                    *seen_in_gossip_previously = *seen_in_gossip_previously || is_gossip_vote
-                })
-                .or_insert(is_gossip_vote);
-        }
-
-        *latest_vote_slot = max(*latest_vote_slot, last_vote_slot);
-
-        if is_new_vote {
-            subscriptions.notify_vote(*vote_pubkey, vote, vote_transaction_signature);
-            let _ = verified_vote_sender.send((*vote_pubkey, vote_slots));
         }
     }
 
@@ -733,9 +723,9 @@ mod tests {
             pubkey::Pubkey,
             signature::{Keypair, Signature, Signer},
         },
-        solana_vote_program::{
-            vote_state::{TowerSync, Vote, MAX_LOCKOUT_HISTORY},
-            vote_transaction,
+        solana_vote_new_program::{
+            vote_state_new::{Vote, VoteRange},
+            vote_transaction_new,
         },
         std::{
             collections::BTreeSet,
@@ -749,9 +739,9 @@ mod tests {
         solana_logger::setup();
         let node_keypair = Keypair::new();
         let vote_keypair = Keypair::new();
-        let tower_sync = TowerSync::new_from_slot(MAX_LOCKOUT_HISTORY as u64, Hash::default());
-        let vote_tx = vote_transaction::new_tower_sync_transaction(
-            tower_sync,
+        let vote = Vote::new(VoteRange::new(0, 1), Hash::default());
+        let vote_tx = vote_transaction_new::new_vote_transaction(
+            vote,
             Hash::default(),
             &node_keypair,
             &vote_keypair,
@@ -847,10 +837,9 @@ mod tests {
             &Pubkey::default(),
             3,
         ));
-        let vote_slots = vec![1, 2];
         send_vote_txs(
-            vote_slots,
-            vec![],
+            2,
+            0,
             &validator_voting_keypairs,
             None,
             &votes_sender,
@@ -880,10 +869,9 @@ mod tests {
         let first_slot_in_unknown_epoch = bank3
             .epoch_schedule()
             .get_first_slot_in_epoch(unknown_epoch);
-        let vote_slots = vec![first_slot_in_unknown_epoch, first_slot_in_unknown_epoch + 1];
         send_vote_txs(
-            vote_slots,
-            vec![],
+            first_slot_in_unknown_epoch + 1,
+            0,
             &validator_voting_keypairs,
             None,
             &votes_sender,
@@ -909,19 +897,19 @@ mod tests {
     }
 
     fn send_vote_txs(
-        gossip_vote_slots: Vec<Slot>,
-        replay_vote_slots: Vec<Slot>,
+        gossip_vote_slot: Slot,
+        replay_vote_slot: Slot,
         validator_voting_keypairs: &[ValidatorVoteKeypairs],
         switch_proof_hash: Option<Hash>,
         votes_sender: &VerifiedVoteTransactionsSender,
         replay_votes_sender: &ReplayVoteSender,
     ) {
-        let tower_sync = TowerSync::new_from_slots(gossip_vote_slots, Hash::default(), None);
+        let vote = Vote::new(VoteRange::new(0, gossip_vote_slot), Hash::default());
         validator_voting_keypairs.iter().for_each(|keypairs| {
             let node_keypair = &keypairs.node_keypair;
             let vote_keypair = &keypairs.vote_keypair;
-            let vote_tx = vote_transaction::new_tower_sync_transaction(
-                tower_sync.clone(),
+            let vote_tx = vote_transaction_new::new_vote_transaction(
+                vote.clone(),
                 Hash::default(),
                 node_keypair,
                 vote_keypair,
@@ -929,7 +917,7 @@ mod tests {
                 switch_proof_hash,
             );
             votes_sender.send(vec![vote_tx]).unwrap();
-            let replay_vote = Vote::new(replay_vote_slots.clone(), Hash::default());
+            let replay_vote = Vote::new(VoteRange::new(0, replay_vote_slot), Hash::default());
             // Send same vote twice, but should only notify once
             for _ in 0..2 {
                 replay_votes_sender
@@ -962,11 +950,11 @@ mod tests {
             );
         let bank0 = Bank::new_for_tests(&genesis_config);
 
-        let gossip_vote_slots = vec![1, 2];
-        let replay_vote_slots = vec![3, 4];
+        let gossip_vote_slot = 2;
+        let replay_vote_slot = 4;
         send_vote_txs(
-            gossip_vote_slots.clone(),
-            replay_vote_slots.clone(),
+            2,
+            4,
             &validator_voting_keypairs,
             hash,
             &votes_txs_sender,
@@ -1010,9 +998,8 @@ mod tests {
         // Only the last vote in the `gossip_vote` set should count towards
         // the `voted_hash_updates` set. Important to note here that replay votes
         // should not count
-        let last_gossip_vote_slot = *gossip_vote_slots.last().unwrap();
         assert_eq!(gossip_verified_votes.len(), 1);
-        let slot_hashes = gossip_verified_votes.get(&last_gossip_vote_slot).unwrap();
+        let slot_hashes = gossip_verified_votes.get(&gossip_vote_slot).unwrap();
         assert_eq!(slot_hashes.len(), 1);
         let slot_hash_votes = slot_hashes.get(&Hash::default()).unwrap();
         assert_eq!(slot_hash_votes.len(), validator_voting_keypairs.len());
@@ -1023,10 +1010,8 @@ mod tests {
 
         // Check that the received votes were pushed to other components
         // subscribing via `verified_vote_receiver`
-        let all_expected_slots: BTreeSet<_> = gossip_vote_slots
-            .clone()
+        let all_expected_slots: BTreeSet<_> = vec![gossip_vote_slot, replay_vote_slot]
             .into_iter()
-            .chain(replay_vote_slots.clone())
             .collect();
         let mut pubkey_to_votes: HashMap<Pubkey, BTreeSet<Slot>> = HashMap::new();
         for (received_pubkey, new_votes) in verified_vote_receiver.try_iter() {
@@ -1058,13 +1043,9 @@ mod tests {
                     .as_ref()
                     .unwrap()
                     .contains(&Arc::new(pubkey)));
-                // Only the last vote in the stack of `gossip_vote` and `replay_vote_slots`
-                // should count towards the `optimistic` vote set,
                 let optimistic_votes_tracker =
                     r_slot_vote_tracker.optimistic_votes_tracker(&Hash::default());
-                if vote_slot == *gossip_vote_slots.last().unwrap()
-                    || vote_slot == *replay_vote_slots.last().unwrap()
-                {
+                if vote_slot == gossip_vote_slot || vote_slot == replay_vote_slot {
                     let optimistic_votes_tracker = optimistic_votes_tracker.unwrap();
                     assert!(optimistic_votes_tracker.voted().contains(&pubkey));
                     assert_eq!(
@@ -1119,10 +1100,9 @@ mod tests {
                     let node_keypair = &keypairs.node_keypair;
                     let vote_keypair = &keypairs.vote_keypair;
                     expected_votes.push((vote_keypair.pubkey(), vec![i as Slot + 1]));
-                    let tower_sync =
-                        TowerSync::new_from_slots(vec![(i as u64 + 1)], bank_hash, None);
-                    vote_transaction::new_tower_sync_transaction(
-                        tower_sync,
+                    let vote = Vote::new(VoteRange::new(0, i as u64 + 1), bank_hash);
+                    vote_transaction_new::new_vote_transaction(
+                        vote,
                         Hash::default(),
                         node_keypair,
                         vote_keypair,
@@ -1217,10 +1197,9 @@ mod tests {
             for &e in &events {
                 if e == 0 || e == 2 {
                     // Create vote transaction
-                    let tower_sync =
-                        TowerSync::new_from_slots(vec![(vote_slot)], vote_bank_hash, None);
-                    let vote_tx = vote_transaction::new_tower_sync_transaction(
-                        tower_sync,
+                    let vote = Vote::new(VoteRange::new(0, vote_slot), vote_bank_hash);
+                    let vote_tx = vote_transaction_new::new_vote_transaction(
+                        vote,
                         Hash::default(),
                         node_keypair,
                         vote_keypair,
@@ -1233,7 +1212,10 @@ mod tests {
                     replay_votes_sender
                         .send((
                             vote_keypair.pubkey(),
-                            VoteTransaction::from(Vote::new(vec![vote_slot], Hash::default())),
+                            VoteTransaction::from(Vote::new(
+                                VoteRange::new(0, vote_slot),
+                                Hash::default(),
+                            )),
                             switch_proof_hash,
                             Signature::default(),
                         ))
@@ -1315,9 +1297,9 @@ mod tests {
         // in the tracker
         let validator0_keypairs = &validator_keypairs[0];
         let voted_slot = bank.slot() + 1;
-        let vote_tx = vec![vote_transaction::new_tower_sync_transaction(
+        let vote_tx = vec![vote_transaction_new::new_vote_transaction(
             // Must vote > root to be processed
-            TowerSync::from(vec![(voted_slot, 1)]),
+            Vote::new(VoteRange::new(0, voted_slot), Hash::default()),
             Hash::default(),
             &validator0_keypairs.node_keypair,
             &validator0_keypairs.vote_keypair,
@@ -1333,7 +1315,7 @@ mod tests {
             // Add gossip vote for same slot, should not affect outcome
             vec![(
                 validator0_keypairs.vote_keypair.pubkey(),
-                VoteTransaction::from(Vote::new(vec![voted_slot], Hash::default())),
+                VoteTransaction::from(Vote::new(VoteRange::new(0, voted_slot), Hash::default())),
                 None,
                 Signature::default(),
             )],
@@ -1361,9 +1343,9 @@ mod tests {
         let vote_txs: Vec<_> = [first_slot_in_new_epoch - 1, first_slot_in_new_epoch]
             .iter()
             .map(|slot| {
-                vote_transaction::new_tower_sync_transaction(
+                vote_transaction_new::new_vote_transaction(
                     // Must vote > root to be processed
-                    TowerSync::from(vec![(*slot, 1)]),
+                    Vote::new(VoteRange::new(0, *slot), Hash::default()),
                     Hash::default(),
                     &validator0_keypairs.node_keypair,
                     &validator0_keypairs.vote_keypair,
@@ -1380,7 +1362,10 @@ mod tests {
             vote_txs,
             vec![(
                 validator_keypairs[1].vote_keypair.pubkey(),
-                VoteTransaction::from(Vote::new(vec![first_slot_in_new_epoch], Hash::default())),
+                VoteTransaction::from(Vote::new(
+                    VoteRange::new(0, first_slot_in_new_epoch),
+                    Hash::default(),
+                )),
                 None,
                 Signature::default(),
             )],
@@ -1460,8 +1445,8 @@ mod tests {
         let validator_vote_keypair = validator_vote_keypairs.unwrap_or(&other);
         // TODO authorized_voter_keypair should be different from vote-keypair
         // but that is what create_genesis_... currently generates.
-        vote_transaction::new_tower_sync_transaction(
-            TowerSync::from(vec![(0, 1)]),
+        vote_transaction_new::new_vote_transaction(
+            Vote::new(VoteRange::new(0, 1), Hash::default()),
             Hash::default(),
             &validator_vote_keypair.node_keypair,
             &validator_vote_keypair.vote_keypair,
@@ -1574,8 +1559,8 @@ mod tests {
 
         let validator0_keypairs = &validator_keypairs[0];
         let (vote_pubkey, vote, _, signature) =
-            vote_parser::parse_vote_transaction(&vote_transaction::new_tower_sync_transaction(
-                TowerSync::from(vec![(1, 3), (2, 2), (6, 1)]),
+            vote_parser::parse_vote_transaction(&vote_transaction_new::new_vote_transaction(
+                Vote::new(VoteRange::new(0, 6), Hash::default()),
                 Hash::default(),
                 &validator0_keypairs.node_keypair,
                 &validator0_keypairs.vote_keypair,
@@ -1600,13 +1585,13 @@ mod tests {
             &None,
             &mut latest_vote_slot_per_validator,
         );
-        assert_eq!(diff.keys().copied().sorted().collect_vec(), vec![1, 2, 6]);
+        assert_eq!(diff.keys().copied().sorted().collect_vec(), vec![6]);
 
         // Vote on a new slot, only those later than 6 should show up. 4 is skipped.
         diff.clear();
         let (vote_pubkey, vote, _, signature) =
-            vote_parser::parse_vote_transaction(&vote_transaction::new_tower_sync_transaction(
-                TowerSync::from(vec![(1, 6), (2, 5), (3, 4), (4, 3), (7, 2), (8, 1)]),
+            vote_parser::parse_vote_transaction(&vote_transaction_new::new_vote_transaction(
+                Vote::new(VoteRange::new(0, 8), Hash::default()),
                 Hash::default(),
                 &validator0_keypairs.node_keypair,
                 &validator0_keypairs.vote_keypair,

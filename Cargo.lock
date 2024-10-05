@@ -7407,6 +7407,7 @@ dependencies = [
  "solana-transaction-status",
  "solana-version",
  "solana-vote",
+ "solana-vote-new",
  "solana-vote-new-program",
  "solana-vote-program",
  "spl-pod",

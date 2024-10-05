@@ -41,7 +41,7 @@ use {
     solana_transaction_status::{
         BlockEncodingOptions, ConfirmedBlock, EncodeError, VersionedConfirmedBlock,
     },
-    solana_vote::vote_transaction::VoteTransaction,
+    solana_vote_new::vote_transaction::VoteTransaction,
     std::{
         cell::RefCell,
         collections::{HashMap, VecDeque},
@@ -827,7 +827,7 @@ impl RpcSubscriptions {
                             {
                                 let rpc_vote = RpcVote {
                                     vote_pubkey: vote_pubkey.to_string(),
-                                    slots: vote_info.slots(),
+                                    slots: vec![vote_info.last_voted_slot()],
                                     hash: bs58::encode(vote_info.hash()).into_string(),
                                     timestamp: vote_info.timestamp(),
                                     signature: signature.to_string(),

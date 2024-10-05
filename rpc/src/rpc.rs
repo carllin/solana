@@ -2646,16 +2646,17 @@ pub mod rpc_minimal {
                 RpcHealthStatus::Unknown => {
                     println!("health status unkown");
                     Err(RpcCustomError::NodeUnhealthy {
-                    num_slots_behind: None,
+                        num_slots_behind: None,
+                    }
+                    .into())
                 }
-                .into())
-            },
                 RpcHealthStatus::Behind { num_slots } => {
                     println!("health status behind");
                     Err(RpcCustomError::NodeUnhealthy {
-                    num_slots_behind: Some(num_slots),
+                        num_slots_behind: Some(num_slots),
+                    }
+                    .into())
                 }
-                .into())},
             }
         }
 
