@@ -188,6 +188,7 @@ pub mod test {
             [(vote_pubkeys[0], (5, Hash::default()))].iter(),
             bank.epoch_stakes_map(),
             bank.epoch_schedule(),
+            None,
         );
 
         let weighted_traversal = RepairWeightTraversal::new(&heaviest_subtree_fork_choice);

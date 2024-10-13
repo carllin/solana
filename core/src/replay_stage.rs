@@ -11,8 +11,7 @@ use {
         commitment_service::{AggregateCommitmentService, CommitmentAggregationData},
         consensus::{
             fork_choice::{
-                select_vote_and_reset_forks_new, ForkChoice, QuorumSlot,
-                SelectVoteAndResetForkResult,
+                select_vote_and_reset_forks_new, ForkChoice, SelectVoteAndResetForkResult,
             },
             heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
             latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
@@ -110,7 +109,8 @@ const MAX_REPAIR_RETRY_LOOP_ATTEMPTS: usize = 10;
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum HeaviestForkFailures {
-    LockedOut(u64),
+    LockedOut(Slot),
+    LowerScore(Slot),
     FailedThreshold(
         Slot,
         /* vote depth */ u64,
@@ -3476,9 +3476,10 @@ impl ReplayStage {
                     heaviest_subtree_fork_choice.compute_bank_stats(
                         bank,
                         latest_validator_votes_for_frozen_banks,
-                        computed_bank_state.last_quorum_vote.map(|quorum_vote| {
-                            QuorumSlot::new((bank_slot, bank.hash()), quorum_vote.slot)
-                        }),
+                        computed_bank_state
+                            .last_quorum_vote
+                            .map(|quorum_vote| quorum_vote.slot)
+                            .unwrap_or(0),
                     );
                     let stats = progress
                         .get_fork_stats_mut(bank_slot)
@@ -3494,6 +3495,12 @@ impl ReplayStage {
                     .get_fork_stats_mut(bank_slot)
                     .expect("All frozen banks must exist in the Progress map");
                 stats.is_locked_out = !vote_history.is_recent(bank_slot);
+                stats.is_lower_score = stats
+                    .computed_bank_state
+                    .last_quorum_vote
+                    .map(|vote_range| vote_range.slot)
+                    .unwrap_or(0)
+                    < vote_history.last_vote_quorum()
             }
             Self::update_propagation_status(
                 progress,
@@ -4016,6 +4023,9 @@ impl ReplayStage {
                             ("in_partition", in_partition, bool),
                         );
                     }
+                }
+                HeaviestForkFailures::LowerScore(slot) => {
+                    datapoint_info!("replay_stage-lower-score", ("slot", *slot as i64, i64),);
                 }
                 // These are already logged in the partition info
                 HeaviestForkFailures::LockedOut(_)

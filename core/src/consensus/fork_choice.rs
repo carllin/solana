@@ -16,21 +16,6 @@ use {
     },
 };
 
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub(crate) struct QuorumSlot {
-    pub landed_slot_hash: (Slot, Hash),
-    pub quorum_slot: Slot,
-}
-
-impl QuorumSlot {
-    pub fn new(landed_slot_hash: (Slot, Hash), quorum_slot: Slot) -> Self {
-        Self {
-            landed_slot_hash,
-            quorum_slot,
-        }
-    }
-}
-
 pub struct SelectVoteAndResetForkResult {
     pub vote_bank: Option<(Arc<Bank>, SwitchForkDecision)>,
     pub reset_bank: Option<Arc<Bank>>,
@@ -53,7 +38,7 @@ pub trait ForkChoice {
         &mut self,
         bank: &Bank,
         latest_validator_votes_for_frozen_banks: &mut LatestValidatorVotesForFrozenBanks,
-        greatest_quorom_slot: Option<QuorumSlot>,
+        greatest_quorom_slot: Slot,
     );
 
     // Returns:
@@ -333,12 +318,13 @@ fn can_vote_on_candidate_bank_new(
     progress: &ProgressMap,
     failure_reasons: &mut Vec<HeaviestForkFailures>,
 ) -> bool {
-    let (is_locked_out, propagated_stake, is_leader_slot, total_epoch_stake) = {
+    let (is_lower_score, is_locked_out, propagated_stake, is_leader_slot, total_epoch_stake) = {
         let fork_stats = progress.get_fork_stats(candidate_vote_bank_slot).unwrap();
         let propagated_stats = &progress
             .get_propagated_stats(candidate_vote_bank_slot)
             .unwrap();
         (
+            fork_stats.is_lower_score,
             fork_stats.is_locked_out,
             propagated_stats.propagated_validators_stake,
             propagated_stats.is_leader_slot,
@@ -349,6 +335,10 @@ fn can_vote_on_candidate_bank_new(
     // Check if we are locked out.
     if is_locked_out {
         failure_reasons.push(HeaviestForkFailures::LockedOut(candidate_vote_bank_slot));
+    }
+
+    if is_lower_score {
+        failure_reasons.push(HeaviestForkFailures::LowerScore(candidate_vote_bank_slot));
     }
 
     // Check if our last leader slot has been propagated.

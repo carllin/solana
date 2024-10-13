@@ -76,6 +76,7 @@ pub struct ForkStats {
     pub block_height: u64,
     pub bank_hash: Option<Hash>,
     pub is_locked_out: bool,
+    pub is_lower_score: bool,
     pub duplicate_confirmed_hash: Option<Hash>,
     pub lockout_intervals: LockoutIntervals,
 }

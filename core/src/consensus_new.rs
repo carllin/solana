@@ -389,6 +389,10 @@ impl VoteHistory {
         self.last_vote_tx_blockhash
     }
 
+    pub(crate) fn last_vote_quorum(&self) -> Slot {
+        self.last_vote_quorum
+    }
+
     pub fn refresh_last_vote_timestamp(&mut self, heaviest_slot_on_same_fork: Slot) {
         let timestamp = if let Some(last_vote_timestamp) =
             self.last_vote.as_ref().and_then(|last_vote| {
