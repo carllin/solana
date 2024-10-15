@@ -2405,17 +2405,46 @@ impl ReplayStage {
         if bank.is_empty() {
             datapoint_info!("replay_stage-voted_empty_bank", ("slot", bank.slot(), i64));
         }
-        let last_vote_slot = vote_history.last_voted_slot().unwrap_or(0);
+        // If there's no vote, then `last_vote_slot` then the reference slot
+        // will be whatever slot we're currently voting on.
+        let last_vote_slot = vote_history.last_voted_slot();
         Self::adjust_old_reference_slots_for_vote(reference_slot, bank, vote_account_pubkey);
-        let same_fork = ancestors
-            .get(&bank.slot())
-            .map(|ancestors| ancestors.contains(&last_vote_slot))
-            .unwrap_or(false);
+        let mut same_fork = if let Some(last_vote_slot) = last_vote_slot {
+            ancestors
+                .get(&bank.slot())
+                .map(|ancestors| ancestors.contains(&last_vote_slot))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if same_fork {
+            // At this point we know the last_vote_slot exists and thus must exist in ancestors
+            // and thus must exist in bank_forks
+            let last_vote_slot = last_vote_slot.unwrap();
+            let current_hash = bank_forks
+                .read()
+                .unwrap()
+                .get(last_vote_slot)
+                .expect("exists in ancestors must exist in bank forks")
+                .hash();
+            // Check that the last vote wasn't on a different duplicate
+            same_fork = current_hash == vote_history.last_voted_slot_hash().unwrap().1;
+        }
         if !same_fork {
             *reference_slot = bank.slot();
         }
         info!("vote_bank: {} {}", bank.slot(), *reference_slot);
-        vote_history.record_bank_vote(bank, *reference_slot);
+        vote_history.record_bank_vote(
+            bank,
+            *reference_slot,
+            progress
+                .get_fork_stats(bank.slot())
+                .unwrap()
+                .computed_bank_state
+                .last_quorum_vote
+                .map(|vote_range| vote_range.slot)
+                .unwrap_or(0),
+        );
 
         if let Some(new_root) = new_root {
             // get the root bank before squash

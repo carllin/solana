@@ -151,6 +151,7 @@ pub struct VoteHistory {
     pub node_pubkey: Pubkey,
     threshold_size: f64,
     last_vote: Option<VoteTransaction>,
+    last_vote_quorum: Slot,
     pub root: Slot,
     #[serde(skip)]
     // The blockhash used in the last vote transaction, may or may not equal the
@@ -170,6 +171,7 @@ impl Default for VoteHistory {
             node_pubkey: Pubkey::default(),
             threshold_size: VOTE_THRESHOLD_SIZE,
             last_vote: None,
+            last_vote_quorum: 0,
             last_vote_tx_blockhash: BlockhashStatus::default(),
             last_timestamp: BlockTimestamp::default(),
             root: 0,
@@ -448,23 +450,36 @@ impl VoteHistory {
         Some(vote_state.slot())
     }*/
 
-    fn update_latest_vote(&mut self, reference_slot: Slot, vote_slot: Slot, vote_hash: Hash) {
+    fn update_latest_vote(
+        &mut self,
+        reference_slot: Slot,
+        vote_slot: Slot,
+        vote_hash: Hash,
+        last_quorum_slot: Slot,
+    ) {
         let vote_transaction = VoteTransaction::from(Vote::new(
             VoteRange::new(reference_slot, vote_slot),
             vote_hash,
         ));
         self.last_vote = Some(vote_transaction);
+        self.last_vote_quorum = last_quorum_slot;
     }
 
-    pub fn record_bank_vote(&mut self, bank: &Bank, reference_slot: Slot) {
+    pub fn record_bank_vote(&mut self, bank: &Bank, reference_slot: Slot, last_quorum_slot: Slot) {
         // Returns the new root if one is made after applying a vote for the given bank to
         // `self.vote_state`
-        self.update_latest_vote(reference_slot, bank.slot(), bank.hash())
+        self.update_latest_vote(reference_slot, bank.slot(), bank.hash(), last_quorum_slot)
     }
 
     #[cfg(feature = "dev-context-only-utils")]
-    pub fn record_vote(&mut self, reference_slot: Slot, slot: Slot, hash: Hash) {
-        self.update_latest_vote(reference_slot, slot, hash)
+    pub fn record_vote(
+        &mut self,
+        reference_slot: Slot,
+        slot: Slot,
+        hash: Hash,
+        last_quorum_slot: Slot,
+    ) {
+        self.update_latest_vote(reference_slot, slot, hash, last_quorum_slot)
     }
 
     pub fn last_voted_slot(&self) -> Option<Slot> {
