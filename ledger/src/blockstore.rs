@@ -231,6 +231,7 @@ pub struct BlockstoreSignals {
 
 // ledger window
 pub struct Blockstore {
+    id: Pubkey,
     ledger_path: PathBuf,
     db: Arc<Rocks>,
     // Column families
@@ -364,15 +365,19 @@ impl Blockstore {
     }
 
     /// Opens a Ledger in directory, provides "infinite" window of shreds
-    pub fn open(ledger_path: &Path) -> Result<Blockstore> {
-        Self::do_open(ledger_path, BlockstoreOptions::default())
+    pub fn open(id: &Pubkey, ledger_path: &Path) -> Result<Blockstore> {
+        Self::do_open(id, ledger_path, BlockstoreOptions::default())
     }
 
-    pub fn open_with_options(ledger_path: &Path, options: BlockstoreOptions) -> Result<Blockstore> {
-        Self::do_open(ledger_path, options)
+    pub fn open_with_options(
+        id: &Pubkey,
+        ledger_path: &Path,
+        options: BlockstoreOptions,
+    ) -> Result<Blockstore> {
+        Self::do_open(id, ledger_path, options)
     }
 
-    fn do_open(ledger_path: &Path, options: BlockstoreOptions) -> Result<Blockstore> {
+    fn do_open(id: &Pubkey, ledger_path: &Path, options: BlockstoreOptions) -> Result<Blockstore> {
         fs::create_dir_all(ledger_path)?;
         let blockstore_path = ledger_path.join(BLOCKSTORE_DIRECTORY_ROCKS_LEVEL);
 
@@ -416,6 +421,7 @@ impl Blockstore {
         measure.stop();
         info!("Opening blockstore done; {measure}");
         let blockstore = Blockstore {
+            id: *id,
             ledger_path: ledger_path.to_path_buf(),
             db,
             address_signatures_cf,
@@ -456,10 +462,11 @@ impl Blockstore {
     }
 
     pub fn open_with_signal(
+        id: &Pubkey,
         ledger_path: &Path,
         options: BlockstoreOptions,
     ) -> Result<BlockstoreSignals> {
-        let blockstore = Self::open_with_options(ledger_path, options)?;
+        let blockstore = Self::open_with_options(id, ledger_path, options)?;
         let (ledger_signal_sender, ledger_signal_receiver) = bounded(MAX_REPLAY_WAKE_UP_SIGNALS);
         let (completed_slots_sender, completed_slots_receiver) =
             bounded(MAX_COMPLETED_SLOTS_IN_CHANNEL);
@@ -1743,9 +1750,9 @@ impl Blockstore {
                 // replayed entries past the newly detected "last" shred, then mark the slot as dead
                 // and wait for replay to dump and repair the correct version.
                 warn!(
-                    "Received *last* shred index {} less than previous shred index {}, and slot \
+                    "{} Received *last* shred index {} less than previous shred index {}, and slot \
                      {} is not full, marking slot dead",
-                    shred_index, slot_meta.received, slot
+                    self.id, shred_index, slot_meta.received, slot
                 );
                 self.dead_slots_cf
                     .put_in_batch(write_batch, slot, &true)
@@ -1761,6 +1768,13 @@ impl Blockstore {
                 shred_source,
                 duplicate_shreds,
             ) {
+                info!(
+                    "{} Failed insert check dropping slot {}, index: {}, signature: {}",
+                    self.id,
+                    slot,
+                    shred.index(),
+                    shred.signature(),
+                );
                 return Err(InsertDataShredError::InvalidShred);
             }
 
@@ -1784,6 +1798,14 @@ impl Blockstore {
                     self.dead_slots_cf
                         .put_in_batch(write_batch, slot, &true)
                         .unwrap();
+                    info!(
+                        "{} Different merkle root dropping slot {}, index: {}, signature: {:?}, merkle_root: {:?}",
+                        self.id,
+                        slot,
+                        shred.index(),
+                        shred.signature(),
+                        merkle_root_meta.as_ref().merkle_root()
+                    );
                     return Err(InsertDataShredError::InvalidShred);
                 }
             }
@@ -1889,9 +1911,10 @@ impl Blockstore {
         }
 
         warn!(
-            "Received conflicting merkle roots for slot: {}, erasure_set: {:?} original merkle \
+            "{:?} Received conflicting merkle roots for slot: {}, erasure_set: {:?} original merkle \
              root meta {:?} vs conflicting merkle root {:?} shred index {} type {:?}. Reporting \
              as duplicate",
+            self.id,
             slot,
             shred.erasure_set(),
             merkle_root_meta,
@@ -1911,10 +1934,10 @@ impl Blockstore {
                 .map(Cow::into_owned)
             else {
                 error!(
-                    "Shred {shred_id:?} indiciated by merkle root meta {merkle_root_meta:?} is \
+                    "{:?} Shred {shred_id:?} indiciated by merkle root meta {merkle_root_meta:?} is \
                      missing from blockstore. This should only happen in extreme cases where \
                      blockstore cleanup has caught up to the root. Skipping the merkle root \
-                     consistency check"
+                     consistency check", self.id
                 );
                 return true;
             };
@@ -1924,9 +1947,9 @@ impl Blockstore {
                 shred.clone().into_payload(),
             ) {
                 warn!(
-                    "Unable to store conflicting merkle root duplicate proof for {slot} \
+                    "{:?} Unable to store conflicting merkle root duplicate proof for {slot} \
                      {:?} {e}",
-                    shred.erasure_set(),
+                     self.id, shred.erasure_set(),
                 );
             }
             duplicate_shreds.push(PossibleDuplicateShred::MerkleRootConflict(
@@ -2148,10 +2171,10 @@ impl Blockstore {
                     .map(Cow::into_owned)
                 else {
                     error!(
-                        "Last index data shred {shred_id:?} indiciated by slot meta {slot_meta:?} \
+                        "{:?} Last index data shred {shred_id:?} indiciated by slot meta {slot_meta:?} \
                          is missing from blockstore. This should only happen in extreme cases \
                          where blockstore cleanup has caught up to the root. Skipping data shred \
-                         insertion"
+                         insertion", self.id
                     );
                     return false;
                 };
@@ -2198,10 +2221,10 @@ impl Blockstore {
                     .map(Cow::into_owned)
                 else {
                     error!(
-                        "Last received data shred {shred_id:?} indiciated by slot meta \
+                        "{:?} Last received data shred {shred_id:?} indiciated by slot meta \
                          {slot_meta:?} is missing from blockstore. This should only happen in \
                          extreme cases where blockstore cleanup has caught up to the root. \
-                         Skipping data shred insertion"
+                         Skipping data shred insertion", self.id
                     );
                     return false;
                 };
@@ -4961,6 +4984,7 @@ fn slot_has_updates(slot_meta: &SlotMeta, slot_meta_backup: &Option<SlotMeta>) -
 //
 // Returns the blockhash that can be used to append entries with.
 pub fn create_new_ledger(
+    id: &Pubkey,
     ledger_path: &Path,
     genesis_config: &GenesisConfig,
     max_genesis_archive_unpacked_size: u64,
@@ -4972,6 +4996,7 @@ pub fn create_new_ledger(
     // Fill slot 0 with ticks that link back to the genesis_config to bootstrap the ledger.
     let blockstore_dir = BLOCKSTORE_DIRECTORY_ROCKS_LEVEL;
     let blockstore = Blockstore::open_with_options(
+        id,
         ledger_path,
         BlockstoreOptions {
             access_type: AccessType::Primary,
@@ -5128,6 +5153,7 @@ pub fn get_ledger_path_from_name(name: &str) -> PathBuf {
 macro_rules! create_new_tmp_ledger {
     ($genesis_config:expr) => {
         $crate::blockstore::create_new_ledger_from_name(
+            &Pubkey::default(),
             $crate::tmp_ledger_name!(),
             $genesis_config,
             $crate::macro_reexports::MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
@@ -5143,6 +5169,7 @@ macro_rules! create_new_tmp_ledger_with_size {
         $max_genesis_archive_unpacked_size:expr $(,)?
     ) => {
         $crate::blockstore::create_new_ledger_from_name(
+            &Pubkey::default(),
             $crate::tmp_ledger_name!(),
             $genesis_config,
             $max_genesis_archive_unpacked_size,
@@ -5155,6 +5182,7 @@ macro_rules! create_new_tmp_ledger_with_size {
 macro_rules! create_new_tmp_ledger_auto_delete {
     ($genesis_config:expr) => {
         $crate::blockstore::create_new_ledger_from_name_auto_delete(
+            &Pubkey::default(),
             $crate::tmp_ledger_name!(),
             $genesis_config,
             $crate::macro_reexports::MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
@@ -5177,12 +5205,14 @@ pub(crate) fn verify_shred_slots(slot: Slot, parent: Slot, root: Slot) -> bool {
 // Note: like `create_new_ledger` the returned ledger will have slot 0 full of ticks (and only
 // ticks)
 pub fn create_new_ledger_from_name(
+    id: &Pubkey,
     name: &str,
     genesis_config: &GenesisConfig,
     max_genesis_archive_unpacked_size: u64,
     column_options: LedgerColumnOptions,
 ) -> (PathBuf, Hash) {
     let (ledger_path, blockhash) = create_new_ledger_from_name_auto_delete(
+        id,
         name,
         genesis_config,
         max_genesis_archive_unpacked_size,
@@ -5196,6 +5226,7 @@ pub fn create_new_ledger_from_name(
 // Note: like `create_new_ledger` the returned ledger will have slot 0 full of ticks (and only
 // ticks)
 pub fn create_new_ledger_from_name_auto_delete(
+    id: &Pubkey,
     name: &str,
     genesis_config: &GenesisConfig,
     max_genesis_archive_unpacked_size: u64,
@@ -5203,6 +5234,7 @@ pub fn create_new_ledger_from_name_auto_delete(
 ) -> (TempDir, Hash) {
     let ledger_path = get_ledger_path_from_name_auto_delete(name);
     let blockhash = create_new_ledger(
+        id,
         ledger_path.path(),
         genesis_config,
         max_genesis_archive_unpacked_size,

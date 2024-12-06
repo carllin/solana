@@ -2022,7 +2022,7 @@ fn load_frozen_forks(
             m.stop();
             voting_us += m.as_us();
 
-            if let Some(new_root_bank) = new_root_bank {
+            /*if let Some(new_root_bank) = new_root_bank {
                 let mut m = Measure::start("set_root");
                 root = new_root_bank.slot();
 
@@ -2043,7 +2043,7 @@ fn load_frozen_forks(
                 all_banks.retain(|_, bank| bank.ancestors.contains_key(&root));
                 m.stop();
                 root_retain_us += m.as_us();
-            }
+            }*/
 
             slots_processed += 1;
             total_slots_processed += 1;
@@ -2420,6 +2420,7 @@ pub mod tests {
             }
             AccessType::Secondary => {
                 let secondary_blockstore = Blockstore::open_with_options(
+                    &Pubkey::default(),
                     blockstore.ledger_path(),
                     BlockstoreOptions {
                         access_type,

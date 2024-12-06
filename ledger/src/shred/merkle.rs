@@ -1091,6 +1091,10 @@ pub(super) fn make_shreds_from_data(
             .find_map(|proof_size| {
                 let data_buffer_size = ShredData::capacity(proof_size, chained, resigned).ok()?;
                 let num_data_shreds = (data.len() + data_buffer_size - 1) / data_buffer_size;
+                info!(
+                    "slot {} actual num data shreds: {}, min: {}",
+                    slot, num_data_shreds, min_num_data_shreds
+                );
                 let num_data_shreds = num_data_shreds.max(min_num_data_shreds);
                 let erasure_batch_size =
                     shredder::get_erasure_batch_size(num_data_shreds, is_last_in_slot);
@@ -1148,6 +1152,8 @@ pub(super) fn make_shreds_from_data(
         })
     })?;
     stats.gen_data_elapsed += now.elapsed().as_micros() as u64;
+
+    info!("slot {} produced {} data shreds", slot, shreds.len());
     stats.record_num_data_shreds(shreds.len());
     let now = Instant::now();
     // Group shreds by their respective erasure-batch.

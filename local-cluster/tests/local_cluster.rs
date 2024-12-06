@@ -1398,7 +1398,7 @@ fn test_snapshots_blockstore_floor() {
     // Check the validator ledger doesn't contain any slots < slot_floor
     cluster.close_preserve_ledgers();
     let validator_ledger_path = &cluster.validators[&validator_id];
-    let blockstore = Blockstore::open(&validator_ledger_path.info.ledger_path).unwrap();
+    let blockstore = Blockstore::open(&Pubkey::default(), &validator_ledger_path.info.ledger_path).unwrap();
 
     // Skip the zeroth slot in blockstore that the ledger is initialized with
     let (first_slot, _) = blockstore.slot_meta_iterator(1).unwrap().next().unwrap();
@@ -1627,7 +1627,7 @@ fn test_no_voting() {
     cluster.close_preserve_ledgers();
     let leader_pubkey = *cluster.entry_point_info.pubkey();
     let ledger_path = cluster.validators[&leader_pubkey].info.ledger_path.clone();
-    let ledger = Blockstore::open(&ledger_path).unwrap();
+    let ledger = Blockstore::open(&Pubkey::default(), &ledger_path).unwrap();
     for i in 0..2 * VOTE_THRESHOLD_DEPTH {
         let meta = ledger.meta(i as u64).unwrap().unwrap();
         let parent = meta.parent_slot;
@@ -2349,7 +2349,7 @@ fn test_hard_fork_with_gap_in_roots() {
     // procedure with `agave-ledger-tool create-snapshot`
     let genesis_slot = 0;
     {
-        let blockstore_a = Blockstore::open(&val_a_ledger_path).unwrap();
+        let blockstore_a = Blockstore::open(&Pubkey::default(), &val_a_ledger_path).unwrap();
         create_snapshot_to_hard_fork(&blockstore_a, hard_fork_slot, vec![hard_fork_slot]);
 
         // Intentionally make agave-validator unbootable by replaying blocks from the genesis to
@@ -2403,8 +2403,8 @@ fn test_hard_fork_with_gap_in_roots() {
         (last_vote_a.min(last_vote_b), root_a.min(root_b))
     };
 
-    let blockstore_a = Blockstore::open(&val_a_ledger_path).unwrap();
-    let blockstore_b = Blockstore::open(&val_b_ledger_path).unwrap();
+    let blockstore_a = Blockstore::open(&Pubkey::default(), &val_a_ledger_path).unwrap();
+    let blockstore_b = Blockstore::open(&Pubkey::default(), &val_b_ledger_path).unwrap();
 
     // collect all slot/root parents
     let mut slots_a = AncestorIterator::new(common_last_vote, &blockstore_a).collect::<Vec<_>>();
@@ -3939,14 +3939,30 @@ fn run_duplicate_shreds_broadcast_leader(vote_on_duplicate: bool) {
 
     // This is why it's important our node was last in `node_stakes`
     let our_id = validator_keys.last().unwrap().pubkey();
+    let good_id = validator_keys[2].pubkey();
+    let partition_id = validator_keys[1].pubkey();
+    let bad_leader_id = *cluster.entry_point_info.pubkey();
+    let bad_leader_ledger_path = cluster.ledger_path(&bad_leader_id);
+
+    info!(
+        "our node id: {}, path: {:?}
+           bad leader id: {}, path: {:?}
+           good id: {}, path: {:?}
+           partition id: {}, path: {:?}",
+        our_id,
+        cluster.ledger_path(&our_id),
+        bad_leader_id,
+        cluster.ledger_path(&bad_leader_id),
+        good_id,
+        cluster.ledger_path(&good_id),
+        partition_id,
+        cluster.ledger_path(&partition_id)
+    );
 
     // 2) Kill our node and start up a thread to simulate votes to control our voting behavior
     let our_info = cluster.exit_node(&our_id);
     let node_keypair = our_info.info.keypair;
     let vote_keypair = our_info.info.voting_keypair;
-    let bad_leader_id = *cluster.entry_point_info.pubkey();
-    let bad_leader_ledger_path = cluster.validators[&bad_leader_id].info.ledger_path.clone();
-    info!("our node id: {}", node_keypair.pubkey());
 
     // 3) Start up a gossip instance to listen for and push votes
     let voter_thread_sleep_ms = 100;

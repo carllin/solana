@@ -222,14 +222,19 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                     &self.reed_solomon_cache,
                     &mut ProcessShredsStats::default(),
                 );
-                let sigs: Vec<_> = partition_last_data_shred
+                let sigs: Vec<_> = original_last_data_shred
+                    .iter()
+                    .map(|s| (s.signature(), s.index()))
+                    .collect();
+                let dup_sigs: Vec<_> = partition_last_data_shred
                     .iter()
                     .map(|s| (s.signature(), s.index()))
                     .collect();
                 info!(
-                    "duplicate signatures for slot {}, sigs: {:?}",
+                    "duplicate signatures for slot {}, sigs: {:?}, dup sigs: {:?}",
                     bank.slot(),
                     sigs,
+                    dup_sigs,
                 );
 
                 assert_eq!(

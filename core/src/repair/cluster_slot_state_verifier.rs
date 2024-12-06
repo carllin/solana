@@ -10,7 +10,7 @@ use {
         },
     },
     solana_ledger::blockstore::Blockstore,
-    solana_sdk::{clock::Slot, hash::Hash},
+    solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey},
     std::collections::{BTreeMap, BTreeSet, HashMap},
 };
 
@@ -791,6 +791,7 @@ fn get_duplicate_confirmed_hash(
 }
 
 fn apply_state_changes(
+    id: &Pubkey,
     slot: Slot,
     fork_choice: &mut HeaviestSubtreeForkChoice,
     duplicate_slots_to_repair: &mut DuplicateSlotsToRepair,
@@ -813,6 +814,10 @@ fn apply_state_changes(
                 }
             }
             ResultingStateChange::MarkSlotDuplicate(bank_frozen_hash) => {
+                info!(
+                    "{} marking slot invalid candidate {} {}",
+                    id, slot, bank_frozen_hash
+                );
                 fork_choice.mark_fork_invalid_candidate(&(slot, bank_frozen_hash));
             }
             ResultingStateChange::RepairDuplicateConfirmedVersion(duplicate_confirmed_hash) => {
@@ -846,6 +851,7 @@ fn apply_state_changes(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn check_slot_agrees_with_cluster(
+    id: &Pubkey,
     slot: Slot,
     root: Slot,
     blockstore: &Blockstore,
@@ -858,8 +864,8 @@ pub(crate) fn check_slot_agrees_with_cluster(
     slot_state_update: SlotStateUpdate,
 ) {
     info!(
-        "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {:?}",
-        slot, root, slot_state_update
+        "{} check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {:?}",
+        id, slot, root, slot_state_update
     );
 
     if slot <= root {
@@ -939,6 +945,7 @@ pub(crate) fn check_slot_agrees_with_cluster(
 
     let state_changes = slot_state_update.into_state_changes(slot);
     apply_state_changes(
+        id,
         slot,
         fork_choice,
         duplicate_slots_to_repair,

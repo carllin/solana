@@ -559,7 +559,7 @@ impl RpcSubscriptions {
         optimistically_confirmed_bank: Arc<RwLock<OptimisticallyConfirmedBank>>,
     ) -> Self {
         let ledger_path = get_tmp_ledger_path!();
-        let blockstore = Blockstore::open(&ledger_path).unwrap();
+        let blockstore = Blockstore::open(&Pubkey::default(), &ledger_path).unwrap();
         let blockstore = Arc::new(blockstore);
 
         Self::new_for_tests_with_blockstore(
@@ -686,7 +686,7 @@ impl RpcSubscriptions {
         bank_forks: Arc<RwLock<BankForks>>,
     ) -> Self {
         let ledger_path = get_tmp_ledger_path!();
-        let blockstore = Blockstore::open(&ledger_path).unwrap();
+        let blockstore = Blockstore::open(&Pubkey::default(), &ledger_path).unwrap();
         let blockstore = Arc::new(blockstore);
         let optimistically_confirmed_bank =
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks);

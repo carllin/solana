@@ -218,6 +218,7 @@ pub fn load_and_process_ledger(
                 blockstore.ledger_path()
             );
             Blockstore::open_with_options(
+                &Pubkey::default(),
                 blockstore.ledger_path(),
                 BlockstoreOptions {
                     access_type: AccessType::PrimaryForMaintenance,
@@ -465,6 +466,7 @@ pub fn open_blockstore(
     let enforce_ulimit_nofile = !matches.is_present("ignore_ulimit_nofile_error");
 
     match Blockstore::open_with_options(
+        &Pubkey::default(),
         ledger_path,
         BlockstoreOptions {
             access_type: access_type.clone(),
@@ -539,6 +541,7 @@ fn open_blockstore_with_temporary_primary_access(
     info!("Attempting to temporarily open blockstore with Primary access in order to update");
     {
         let _ = Blockstore::open_with_options(
+            &Pubkey::default(),
             ledger_path,
             BlockstoreOptions {
                 access_type: AccessType::PrimaryForMaintenance,
@@ -554,6 +557,7 @@ fn open_blockstore_with_temporary_primary_access(
         original_access_type
     );
     Blockstore::open_with_options(
+        &Pubkey::default(),
         ledger_path,
         BlockstoreOptions {
             access_type: original_access_type,

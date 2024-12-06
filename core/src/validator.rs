@@ -756,6 +756,7 @@ impl Validator {
             pruned_banks_receiver,
             entry_notifier_service,
         ) = load_blockstore(
+            &id,
             config,
             ledger_path,
             &genesis_config,
@@ -800,6 +801,7 @@ impl Validator {
         )? {
             *start_progress.write().unwrap() = ValidatorStartProgress::CleaningBlockStore;
             cleanup_blockstore_incorrect_shred_versions(
+                &id,
                 &blockstore,
                 config,
                 start_slot,
@@ -1931,6 +1933,7 @@ fn load_genesis(
 
 #[allow(clippy::type_complexity)]
 fn load_blockstore(
+    id: &Pubkey,
     config: &ValidatorConfig,
     ledger_path: &Path,
     genesis_config: &GenesisConfig,
@@ -1960,7 +1963,7 @@ fn load_blockstore(
     *start_progress.write().unwrap() = ValidatorStartProgress::LoadingLedger;
 
     let mut blockstore =
-        Blockstore::open_with_options(ledger_path, config.blockstore_options.clone())
+        Blockstore::open_with_options(id, ledger_path, config.blockstore_options.clone())
             .map_err(|err| format!("Failed to open Blockstore: {err:?}"))?;
 
     let (ledger_signal_sender, ledger_signal_receiver) = bounded(MAX_REPLAY_WAKE_UP_SIGNALS);
@@ -2368,6 +2371,7 @@ fn scan_blockstore_for_incorrect_shred_version(
 /// If the blockstore contains any shreds with the incorrect shred version,
 /// copy them to a backup blockstore and purge them from the actual blockstore.
 fn cleanup_blockstore_incorrect_shred_versions(
+    id: &Pubkey,
     blockstore: &Blockstore,
     config: &ValidatorConfig,
     start_slot: Slot,
@@ -2393,6 +2397,7 @@ fn cleanup_blockstore_incorrect_shred_versions(
         BLOCKSTORE_DIRECTORY_ROCKS_LEVEL, incorrect_shred_version, start_slot, end_slot
     );
     match Blockstore::open_with_options(
+        id,
         &blockstore.ledger_path().join(backup_folder),
         config.blockstore_options.clone(),
     ) {

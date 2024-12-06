@@ -703,6 +703,7 @@ impl ReplayStage {
                 let mut generate_new_bank_forks_time =
                     Measure::start("generate_new_bank_forks_time");
                 Self::generate_new_bank_forks(
+                    &my_pubkey,
                     &blockstore,
                     &bank_forks,
                     &leader_schedule_cache,
@@ -784,6 +785,7 @@ impl ReplayStage {
                 let mut process_duplicate_confirmed_slots_time =
                     Measure::start("process_duplicate_confirmed_slots");
                 Self::process_duplicate_confirmed_slots(
+                    &my_pubkey,
                     &duplicate_confirmed_slots_receiver,
                     &blockstore,
                     &mut duplicate_slots_tracker,
@@ -835,6 +837,7 @@ impl ReplayStage {
                 let mut process_duplicate_slots_time = Measure::start("process_duplicate_slots");
                 if !tpu_has_bank {
                     Self::process_duplicate_slots(
+                        &my_pubkey,
                         &blockstore,
                         &duplicate_slots_receiver,
                         &mut duplicate_slots_tracker,
@@ -888,6 +891,7 @@ impl ReplayStage {
                     );
 
                     Self::mark_slots_duplicate_confirmed(
+                        &my_pubkey,
                         &duplicate_confirmed_forks,
                         &blockstore,
                         &bank_forks,
@@ -1040,7 +1044,8 @@ impl ReplayStage {
                         }
                     } else {
                         info!(
-                            "vote bank: {:?} reset bank: {:?}",
+                            "{} vote bank: {:?} reset bank: {:?}",
+                            my_pubkey,
                             vote_bank
                                 .as_ref()
                                 .map(|(b, switch_fork_decision)| (b.slot(), switch_fork_decision)),
@@ -1676,6 +1681,7 @@ impl ReplayStage {
                 request_type.is_pruned(),
             );
             check_slot_agrees_with_cluster(
+                pubkey,
                 epoch_slots_frozen_slot,
                 root,
                 blockstore,
@@ -1848,6 +1854,7 @@ impl ReplayStage {
                     continue;
                 }
                 check_slot_agrees_with_cluster(
+                    &Pubkey::default(),
                     new_popular_pruned_slot,
                     root,
                     blockstore,
@@ -1869,6 +1876,7 @@ impl ReplayStage {
     // for duplicate slot recovery.
     #[allow(clippy::too_many_arguments)]
     fn process_duplicate_confirmed_slots(
+        id: &Pubkey,
         duplicate_confirmed_slots_receiver: &DuplicateConfirmedSlotsReceiver,
         blockstore: &Blockstore,
         duplicate_slots_tracker: &mut DuplicateSlotsTracker,
@@ -1904,6 +1912,7 @@ impl ReplayStage {
                     || bank_forks.read().unwrap().bank_hash(confirmed_slot),
                 );
                 check_slot_agrees_with_cluster(
+                    id,
                     confirmed_slot,
                     root,
                     blockstore,
@@ -1941,6 +1950,7 @@ impl ReplayStage {
     // Checks for and handle forks with duplicate slots.
     #[allow(clippy::too_many_arguments)]
     fn process_duplicate_slots(
+        id: &Pubkey,
         blockstore: &Blockstore,
         duplicate_slots_receiver: &DuplicateSlotReceiver,
         duplicate_slots_tracker: &mut DuplicateSlotsTracker,
@@ -1966,6 +1976,7 @@ impl ReplayStage {
         for (duplicate_slot, bank_hash) in
             new_duplicate_slots.into_iter().zip(bank_hashes.into_iter())
         {
+            info!("{} Found duplicate slot {}", id, duplicate_slot);
             // WindowService should only send the signal once per slot
             let duplicate_state = DuplicateState::new_from_state(
                 duplicate_slot,
@@ -1975,6 +1986,7 @@ impl ReplayStage {
                 || bank_hash,
             );
             check_slot_agrees_with_cluster(
+                id,
                 duplicate_slot,
                 root_slot,
                 blockstore,
@@ -2195,8 +2207,8 @@ impl ReplayStage {
             let root_slot = bank_forks.read().unwrap().root();
             datapoint_info!("replay_stage-my_leader_slot", ("slot", poh_slot, i64),);
             info!(
-                "new fork:{} parent:{} (leader) root:{}",
-                poh_slot, parent_slot, root_slot
+                "{} new fork:{} parent:{} (leader) root:{}",
+                my_pubkey, poh_slot, parent_slot, root_slot
             );
 
             let root_distance = poh_slot - root_slot;
@@ -2274,6 +2286,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn mark_dead_slot(
+        id: &Pubkey,
         blockstore: &Blockstore,
         bank: &Bank,
         root: Slot,
@@ -2343,6 +2356,7 @@ impl ReplayStage {
             epoch_slots_frozen_slots,
         );
         check_slot_agrees_with_cluster(
+            id,
             slot,
             root,
             blockstore,
@@ -2366,6 +2380,7 @@ impl ReplayStage {
                 || None,
             );
             check_slot_agrees_with_cluster(
+                id,
                 slot,
                 root,
                 blockstore,
@@ -3077,7 +3092,13 @@ impl ReplayStage {
                     Ok(replay_tx_count) => tx_count += replay_tx_count,
                     Err(err) => {
                         let root = bank_forks.read().unwrap().root();
+                        info!(
+                            "{} marking dead slot {} from error 1",
+                            my_pubkey,
+                            bank.slot()
+                        );
                         Self::mark_dead_slot(
+                            my_pubkey,
                             blockstore,
                             bank,
                             root,
@@ -3126,7 +3147,13 @@ impl ReplayStage {
 
                     if let Err(err) = result {
                         let root = bank_forks.read().unwrap().root();
+                        info!(
+                            "{} marking dead slot {} from error 2",
+                            my_pubkey,
+                            bank.slot()
+                        );
                         Self::mark_dead_slot(
+                            &my_pubkey,
                             blockstore,
                             bank,
                             root,
@@ -3158,7 +3185,13 @@ impl ReplayStage {
                         Ok(block_id) => block_id,
                         Err(result_err) => {
                             let root = bank_forks.read().unwrap().root();
+                            info!(
+                                "{} marking dead slot {} from fec set error",
+                                my_pubkey,
+                                bank.slot()
+                            );
                             Self::mark_dead_slot(
+                                &my_pubkey,
                                 blockstore,
                                 bank,
                                 root,
@@ -3197,6 +3230,7 @@ impl ReplayStage {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);
                 }
                 bank.freeze();
+                info!("{} bank frozen: {}", my_pubkey, bank.slot());
                 datapoint_info!(
                     "bank_frozen",
                     ("slot", bank_slot, i64),
@@ -3229,6 +3263,7 @@ impl ReplayStage {
                     epoch_slots_frozen_slots,
                 );
                 check_slot_agrees_with_cluster(
+                    &my_pubkey,
                     bank.slot(),
                     bank_forks.read().unwrap().root(),
                     blockstore,
@@ -3252,6 +3287,7 @@ impl ReplayStage {
                         || Some(bank.hash()),
                     );
                     check_slot_agrees_with_cluster(
+                        &my_pubkey,
                         bank.slot(),
                         bank_forks.read().unwrap().root(),
                         blockstore,
@@ -3870,6 +3906,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn mark_slots_duplicate_confirmed(
+        id: &Pubkey,
         confirmed_slots: &[(Slot, Hash)],
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
@@ -3907,6 +3944,7 @@ impl ReplayStage {
                 || Some(*frozen_hash),
             );
             check_slot_agrees_with_cluster(
+                id,
                 *slot,
                 root_slot,
                 blockstore,
@@ -4027,6 +4065,7 @@ impl ReplayStage {
     }
 
     fn generate_new_bank_forks(
+        my_pubkey: &Pubkey,
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
@@ -4075,7 +4114,8 @@ impl ReplayStage {
                     .slot_leader_at(child_slot, Some(parent_bank))
                     .unwrap();
                 info!(
-                    "new fork:{} parent:{} root:{}",
+                    "{} new fork:{} parent:{} root:{}",
+                    my_pubkey,
                     child_slot,
                     parent_slot,
                     forks.root()

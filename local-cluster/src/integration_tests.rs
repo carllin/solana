@@ -104,6 +104,7 @@ pub fn remove_tower(tower_path: &Path, node_pubkey: &Pubkey) {
 
 pub fn open_blockstore(ledger_path: &Path) -> Blockstore {
     Blockstore::open_with_options(
+        &Pubkey::default(),
         ledger_path,
         BlockstoreOptions {
             access_type: AccessType::Primary,
@@ -116,6 +117,7 @@ pub fn open_blockstore(ledger_path: &Path) -> Blockstore {
     // a handle to Blockstore is being held somewhere else
     .unwrap_or_else(|_| {
         Blockstore::open_with_options(
+            &Pubkey::default(),
             ledger_path,
             BlockstoreOptions {
                 access_type: AccessType::Secondary,
