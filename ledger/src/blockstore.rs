@@ -1806,6 +1806,15 @@ impl Blockstore {
                         shred.signature(),
                         merkle_root_meta.as_ref().merkle_root()
                     );
+                    // This indicates there is an alternate version of this block.
+                    // Similar to the last index case above, we might never get all the
+                    // shreds for our current version, never replay this slot, and make no
+                    // progress. We cannot determine if we have the version that will eventually
+                    // be complete, so we take the conservative approach and mark the slot as dead
+                    // so that replay can dump and repair the correct version.
+                    self.dead_slots_cf
+                        .put_in_batch(write_batch, slot, &true)
+                        .unwrap();
                     return Err(InsertDataShredError::InvalidShred);
                 }
             }
@@ -1949,7 +1958,8 @@ impl Blockstore {
                 warn!(
                     "{:?} Unable to store conflicting merkle root duplicate proof for {slot} \
                      {:?} {e}",
-                     self.id, shred.erasure_set(),
+                    self.id,
+                    shred.erasure_set(),
                 );
             }
             duplicate_shreds.push(PossibleDuplicateShred::MerkleRootConflict(
@@ -2224,7 +2234,8 @@ impl Blockstore {
                         "{:?} Last received data shred {shred_id:?} indiciated by slot meta \
                          {slot_meta:?} is missing from blockstore. This should only happen in \
                          extreme cases where blockstore cleanup has caught up to the root. \
-                         Skipping data shred insertion", self.id
+                         Skipping data shred insertion",
+                        self.id
                     );
                     return false;
                 };

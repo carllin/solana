@@ -3927,7 +3927,7 @@ fn run_duplicate_shreds_broadcast_leader(vote_on_duplicate: bool) {
             > DUPLICATE_THRESHOLD
     );
     assert!(
-        (bad_leader_stake as f64 / total_stake as f64) >= 1 - DUPLICATE_THRESHOLD
+        (bad_leader_stake as f64 / total_stake as f64) >= 1.0 - DUPLICATE_THRESHOLD
     );
 
     // Important that the partition node stake is the smallest so that it gets selected
