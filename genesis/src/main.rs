@@ -796,6 +796,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     solana_logger::setup();
     create_new_ledger(
+        &Pubkey::default(),
         &ledger_path,
         &genesis_config,
         max_genesis_archive_unpacked_size,
