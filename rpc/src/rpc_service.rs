@@ -346,7 +346,7 @@ impl JsonRpcService {
         poh_recorder: Option<Arc<RwLock<PohRecorder>>>,
         genesis_hash: Hash,
         ledger_path: &Path,
-        validator_exit: Arc<RwLock<Exit>>,
+        validator_exit: Arc<Exit>,
         exit: Arc<AtomicBool>,
         override_health_check: Arc<AtomicBool>,
         startup_verification_complete: Arc<AtomicBool>,
@@ -560,12 +560,9 @@ impl JsonRpcService {
 
         let close_handle = close_handle_receiver.recv().unwrap()?;
         let close_handle_ = close_handle.clone();
-        validator_exit
-            .write()
-            .unwrap()
-            .register_exit(Box::new(move || {
-                close_handle_.close();
-            }));
+        validator_exit.register_exit(Box::new(move || {
+            close_handle_.close();
+        }));
         Ok(Self {
             thread_hdl,
             #[cfg(test)]

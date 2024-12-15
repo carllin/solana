@@ -414,7 +414,7 @@ fn main() {
             Dashboard::new(
                 &ledger_path,
                 Some(&validator_log_symlink),
-                Some(&mut genesis.validator_exit.write().unwrap()),
+                Some(genesis.validator_exit.clone()),
             )
             .unwrap(),
         )

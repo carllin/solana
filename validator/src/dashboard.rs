@@ -34,7 +34,7 @@ impl Dashboard {
     pub fn new(
         ledger_path: &Path,
         log_path: Option<&Path>,
-        validator_exit: Option<&mut Exit>,
+        validator_exit: Option<Arc<Exit>>,
     ) -> Result<Self, io::Error> {
         println_name_value("Ledger location:", &format!("{}", ledger_path.display()));
         if let Some(log_path) = log_path {

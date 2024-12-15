@@ -210,7 +210,7 @@ pub struct JsonRpcRequestProcessor {
     config: JsonRpcConfig,
     snapshot_config: Option<SnapshotConfig>,
     #[allow(dead_code)]
-    validator_exit: Arc<RwLock<Exit>>,
+    validator_exit: Arc<Exit>,
     health: Arc<RpcHealth>,
     cluster_info: Arc<ClusterInfo>,
     genesis_hash: Hash,
@@ -317,7 +317,7 @@ impl JsonRpcRequestProcessor {
         bank_forks: Arc<RwLock<BankForks>>,
         block_commitment_cache: Arc<RwLock<BlockCommitmentCache>>,
         blockstore: Arc<Blockstore>,
-        validator_exit: Arc<RwLock<Exit>>,
+        validator_exit: Arc<Exit>,
         health: Arc<RpcHealth>,
         cluster_info: Arc<ClusterInfo>,
         genesis_hash: Hash,
@@ -4234,10 +4234,10 @@ fn sanitize_transaction(
     .map_err(|err| Error::invalid_params(format!("invalid transaction: {err}")))
 }
 
-pub fn create_validator_exit(exit: Arc<AtomicBool>) -> Arc<RwLock<Exit>> {
-    let mut validator_exit = Exit::default();
+pub fn create_validator_exit(exit: Arc<AtomicBool>) -> Arc<Exit> {
+    let validator_exit = Exit::default();
     validator_exit.register_exit(Box::new(move || exit.store(true, Ordering::Relaxed)));
-    Arc::new(RwLock::new(validator_exit))
+    Arc::new(validator_exit)
 }
 
 pub fn create_test_transaction_entries(

@@ -42,7 +42,7 @@ pub struct AdminRpcRequestMetadata {
     pub rpc_addr: Option<SocketAddr>,
     pub start_time: SystemTime,
     pub start_progress: Arc<RwLock<ValidatorStartProgress>>,
-    pub validator_exit: Arc<RwLock<Exit>>,
+    pub validator_exit: Arc<Exit>,
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
     pub tower_storage: Arc<dyn TowerStorage>,
     pub staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
@@ -260,7 +260,7 @@ impl AdminRpc for AdminRpcImpl {
                 thread::sleep(Duration::from_millis(100));
 
                 warn!("validator exit requested");
-                meta.validator_exit.write().unwrap().exit();
+                meta.validator_exit.exit();
 
                 // TODO: Debug why Exit doesn't always cause the validator to fully exit
                 // (rocksdb background processing or some other stuck thread perhaps?).
@@ -773,12 +773,9 @@ pub fn run(ledger_path: &Path, metadata: AdminRpcRequestMetadata) {
                 Ok(server) => {
                     info!("started admin rpc service!");
                     let close_handle = server.close_handle();
-                    validator_exit
-                        .write()
-                        .unwrap()
-                        .register_exit(Box::new(move || {
-                            close_handle.close();
-                        }));
+                    validator_exit.register_exit(Box::new(move || {
+                        close_handle.close();
+                    }));
 
                     server.wait();
                 }

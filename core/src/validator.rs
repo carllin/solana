@@ -267,7 +267,7 @@ pub struct ValidatorConfig {
     pub accounts_db_force_initial_clean: bool,
     pub tpu_coalesce: Duration,
     pub staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
-    pub validator_exit: Arc<RwLock<Exit>>,
+    pub validator_exit: Arc<Exit>,
     pub no_wait_for_vote_to_start_leader: bool,
     pub wait_to_vote_slot: Option<Slot>,
     pub runtime_config: RuntimeConfig,
@@ -338,7 +338,7 @@ impl Default for ValidatorConfig {
             accounts_db_force_initial_clean: false,
             tpu_coalesce: DEFAULT_TPU_COALESCE,
             staked_nodes_overrides: Arc::new(RwLock::new(HashMap::new())),
-            validator_exit: Arc::new(RwLock::new(Exit::default())),
+            validator_exit: Arc::new(Exit::default()),
             no_wait_for_vote_to_start_leader: true,
             accounts_db_config: None,
             wait_to_vote_slot: None,
@@ -491,7 +491,7 @@ pub struct ValidatorTpuConfig {
 }
 
 pub struct Validator {
-    validator_exit: Arc<RwLock<Exit>>,
+    validator_exit: Arc<Exit>,
     json_rpc_service: Option<JsonRpcService>,
     pubsub_service: Option<PubSubService>,
     rpc_completed_slots_service: Option<JoinHandle<()>>,
@@ -687,8 +687,6 @@ impl Validator {
             let exit = exit.clone();
             config
                 .validator_exit
-                .write()
-                .unwrap()
                 .register_exit(Box::new(move || exit.store(true, Ordering::Relaxed)));
         }
 
@@ -1121,8 +1119,6 @@ impl Validator {
                 );
                 config
                     .validator_exit
-                    .write()
-                    .unwrap()
                     .register_exit(Box::new(move || trigger.cancel()));
 
                 Some(pubsub_service)
@@ -1605,7 +1601,7 @@ impl Validator {
 
     // Used for notifying many nodes in parallel to exit
     pub fn exit(&mut self) {
-        self.validator_exit.write().unwrap().exit();
+        self.validator_exit.exit();
 
         // drop all signals in blockstore
         self.blockstore.drop_signal();
