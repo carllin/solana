@@ -622,7 +622,6 @@ impl ReplayStage {
                             my_old_pubkey, my_pubkey, err
                         );
                         // drop(_exit) will set the exit flag, eventually tearing down the entire process
-                        std::process::exit(1);
                         return;
                     }
                 };
@@ -1021,7 +1020,7 @@ impl ReplayStage {
                         wait_to_vote_slot,
                     ) {
                         error!("Unable to set root: {e}");
-                        std::process::exit(1);
+                        return;
                     }
                 }
                 voting_time.stop();
@@ -1080,7 +1079,6 @@ impl ReplayStage {
                                         my_old_pubkey, my_pubkey, err
                                     );
                                     // drop(_exit) will set the exit flag, eventually tearing down the entire process
-                                    std::process::exit(1);
                                     return;
                                 }
                             };
@@ -2731,10 +2729,7 @@ impl ReplayStage {
                     tx: vote_tx,
                     last_voted_slot,
                 })
-                .unwrap_or_else(|err| {
-                    warn!("Error: {:?}", err);
-                    std::process::exit(1);
-                });
+                .unwrap_or_else(|err| warn!("Error: {:?}", err));
             last_vote_refresh_time.last_refresh_time = Instant::now();
         } else if vote_tx_result.is_non_voting() {
             tower.mark_last_vote_tx_blockhash_non_voting();
@@ -2786,10 +2781,7 @@ impl ReplayStage {
                     tower_slots,
                     saved_tower: SavedTowerVersions::from(saved_tower),
                 })
-                .unwrap_or_else(|err| {
-                    warn!("Error: {:?}", err);
-                    std::process::exit(1);
-                });
+                .unwrap_or_else(|err| warn!("Error: {:?}", err));
         } else if vote_tx_result.is_non_voting() {
             tower.mark_last_vote_tx_blockhash_non_voting();
         }
@@ -3216,8 +3208,7 @@ impl ReplayStage {
                         bank: bank.clone_without_scheduler(),
                     })
                     .unwrap_or_else(|err| {
-                        warn!("cost_update_sender failed sending bank stats: {:?}", err);
-                        std::process::exit(1);
+                        warn!("cost_update_sender failed sending bank stats: {:?}", err)
                     });
 
                 assert_ne!(bank.hash(), Hash::default());
@@ -3277,10 +3268,7 @@ impl ReplayStage {
                     sender
                         .sender
                         .send(BankNotification::Frozen(bank.clone_without_scheduler()))
-                        .unwrap_or_else(|err| {
-                            warn!("bank_notification_sender failed: {:?}", err);
-                            std::process::exit(1);
-                        });
+                        .unwrap_or_else(|err| warn!("bank_notification_sender failed: {:?}", err));
                 }
                 blockstore_processor::cache_block_meta(bank, cache_block_meta_sender);
 
