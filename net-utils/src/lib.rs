@@ -429,8 +429,8 @@ fn udp_socket_with_config(config: SocketConfig) -> io::Result<Socket> {
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
 
     // Set recv and send buffer sizes to 128MB
-    sock.set_recv_buffer_size(DEFAULT_RECV_BUFFER_SIZE)?;
-    sock.set_send_buffer_size(DEFAULT_SEND_BUFFER_SIZE)?;
+    /*sock.set_recv_buffer_size(DEFAULT_RECV_BUFFER_SIZE)?;
+    sock.set_send_buffer_size(DEFAULT_SEND_BUFFER_SIZE)?;*/
 
     if reuseport {
         setsockopt(&sock, ReusePort, &true).ok();
@@ -599,7 +599,11 @@ pub fn bind_to_with_config(
     port: u16,
     config: SocketConfig,
 ) -> io::Result<UdpSocket> {
-    let sock = udp_socket_with_config(config)?;
+    let sock = udp_socket_with_config(config);
+    if let Err(e) = &sock {
+        info!("bind socket error: {:?}", sock);
+    }
+    let sock = sock?;
 
     let addr = SocketAddr::new(ip_addr, port);
 
