@@ -30,7 +30,7 @@ use {
         voting_service::VoteOp,
         window_service::DuplicateSlotReceiver,
     },
-    crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
+    crossbeam_channel::{Receiver, RecvTimeoutError, SendError, Sender},
     rayon::{prelude::*, ThreadPool},
     solana_accounts_db::contains::Contains,
     solana_entry::entry::VerifyRecyclers,
@@ -87,6 +87,7 @@ use {
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
     },
+    thiserror::Error,
 };
 
 pub const MAX_ENTRY_RECV_PER_ITER: usize = 512;
@@ -98,6 +99,14 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 const MAX_VOTE_SIGNATURES: usize = 200;
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 const MAX_REPAIR_RETRY_LOOP_ATTEMPTS: usize = 10;
+
+#[derive(Debug, Error)]
+pub enum VoteError {
+    #[error("SetRoot")]
+    SetRoot(#[from] SetRootError),
+    #[error("Send")]
+    Send(#[from] Box<crossbeam_channel::SendError<VoteOp>>),
+}
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum HeaviestForkFailures {
@@ -1019,7 +1028,7 @@ impl ReplayStage {
                         &drop_bank_sender,
                         wait_to_vote_slot,
                     ) {
-                        error!("Unable to set root: {e}");
+                        error!("Vote error: {e}");
                         return;
                     }
                 }
@@ -2408,7 +2417,7 @@ impl ReplayStage {
         epoch_slots_frozen_slots: &mut EpochSlotsFrozenSlots,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         wait_to_vote_slot: Option<Slot>,
-    ) -> Result<(), SetRootError> {
+    ) -> Result<(), VoteError> {
         if bank.is_empty() {
             datapoint_info!("replay_stage-voted_empty_bank", ("slot", bank.slot(), i64));
         }
@@ -2525,7 +2534,7 @@ impl ReplayStage {
             replay_timing,
             voting_sender,
             wait_to_vote_slot,
-        );
+        )?;
         Ok(())
     }
 
@@ -2751,7 +2760,7 @@ impl ReplayStage {
         replay_timing: &mut ReplayLoopTiming,
         voting_sender: &Sender<VoteOp>,
         wait_to_vote_slot: Option<Slot>,
-    ) {
+    ) -> Result<(), Box<SendError<VoteOp>>> {
         let mut generate_time = Measure::start("generate_vote");
         let vote_tx_result = Self::generate_vote_tx(
             identity_keypair,
@@ -2775,16 +2784,16 @@ impl ReplayStage {
             });
 
             let tower_slots = tower.tower_slots();
-            voting_sender
-                .send(VoteOp::PushVote {
-                    tx: vote_tx,
-                    tower_slots,
-                    saved_tower: SavedTowerVersions::from(saved_tower),
-                })
-                .unwrap_or_else(|err| warn!("Error: {:?}", err));
+            voting_sender.send(VoteOp::PushVote {
+                tx: vote_tx,
+                tower_slots,
+                saved_tower: SavedTowerVersions::from(saved_tower),
+            })?;
         } else if vote_tx_result.is_non_voting() {
             tower.mark_last_vote_tx_blockhash_non_voting();
         }
+
+        Ok(())
     }
 
     fn update_commitment_cache(
@@ -7545,7 +7554,8 @@ pub(crate) mod tests {
             &mut ReplayLoopTiming::default(),
             &voting_sender,
             None,
-        );
+        )
+        .unwrap();
         let vote_info = voting_receiver
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
@@ -7634,7 +7644,8 @@ pub(crate) mod tests {
             &mut ReplayLoopTiming::default(),
             &voting_sender,
             None,
-        );
+        )
+        .unwrap();
         let vote_info = voting_receiver
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
@@ -7860,7 +7871,8 @@ pub(crate) mod tests {
             &mut ReplayLoopTiming::default(),
             voting_sender,
             None,
-        );
+        )
+        .unwrap();
         let vote_info = voting_receiver
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
