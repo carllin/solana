@@ -222,7 +222,9 @@ fn test_local_cluster_signature_subscribe() {
         .unwrap();
     let non_bootstrap_info = cluster.get_contact_info(&non_bootstrap_id).unwrap();
 
-    let tx_client = cluster.build_tpu_quic_client().unwrap();
+    let tx_client = cluster
+        .build_tpu_quic_client(&cluster.entry_point_info)
+        .unwrap();
 
     let (blockhash, _) = tx_client
         .rpc_client()
@@ -431,7 +433,9 @@ fn test_mainnet_beta_cluster_type() {
     .unwrap();
     assert_eq!(cluster_nodes.len(), 1);
 
-    let client = cluster.build_tpu_quic_client().unwrap();
+    let client = cluster
+        .build_tpu_quic_client(&cluster.entry_point_info)
+        .unwrap();
 
     // Programs that are available at epoch 0
     for program_id in [
@@ -1682,6 +1686,7 @@ fn test_optimistic_confirmation_violation_detection() {
             .rpc_client()
             .get_slot_with_commitment(CommitmentConfig::processed())
             .unwrap();
+        info!("last voted slot: {}", last_voted_slot);
         if last_voted_slot > 50 {
             if prev_voted_slot == 0 {
                 prev_voted_slot = last_voted_slot;
@@ -1692,7 +1697,10 @@ fn test_optimistic_confirmation_violation_detection() {
         sleep(Duration::from_millis(100));
     }
 
+    info!("exiting node");
+    drop(client);
     let exited_validator_info = cluster.exit_node(&node_to_restart);
+    info!("exiting node success");
 
     // Mark fork as dead on the heavier validator, this should make the fork effectively
     // dead, even though it was optimistically confirmed. The smaller validator should
@@ -1733,6 +1741,7 @@ fn test_optimistic_confirmation_violation_detection() {
         // violated
         let client = cluster.get_validator_client(&node_to_restart).unwrap();
         loop {
+            info!("Client connecting to: {}", client.rpc_client().url());
             let last_root = client
                 .rpc_client()
                 .get_slot_with_commitment(CommitmentConfig::finalized());
@@ -2716,7 +2725,9 @@ fn test_oc_bad_signatures() {
     );
 
     // 3) Start up a spy to listen for and push votes to leader TPU
-    let client = cluster.build_tpu_quic_client().unwrap();
+    let client = cluster
+        .build_tpu_quic_client(&cluster.entry_point_info)
+        .unwrap();
     let cluster_funding_keypair = cluster.funding_keypair.insecure_clone();
     let voter_thread_sleep_ms: usize = 100;
     let num_votes_simulated = Arc::new(AtomicUsize::new(0));

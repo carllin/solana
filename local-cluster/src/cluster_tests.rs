@@ -45,7 +45,7 @@ use {
         path::Path,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, RwLock,
+            Arc,
         },
         thread::{sleep, JoinHandle},
         time::{Duration, Instant},
@@ -229,7 +229,7 @@ pub fn sleep_n_epochs(
 
 pub fn kill_entry_and_spend_and_verify_rest(
     entry_point_info: &ContactInfo,
-    entry_point_validator_exit: &Arc<RwLock<Exit>>,
+    entry_point_validator_exit: &Arc<Exit>,
     funding_keypair: &Keypair,
     connection_cache: &Arc<ConnectionCache>,
     nodes: usize,
@@ -256,7 +256,7 @@ pub fn kill_entry_and_spend_and_verify_rest(
 
     // Kill the entry point node and wait for it to die.
     info!("killing entry point: {}", entry_point_info.pubkey());
-    entry_point_validator_exit.write().unwrap().exit();
+    entry_point_validator_exit.exit();
     info!("sleeping for some time to let entry point exit and partitions to resolve...");
     sleep(Duration::from_millis(slot_millis * MINIMUM_SLOTS_PER_EPOCH));
     info!("done sleeping");
