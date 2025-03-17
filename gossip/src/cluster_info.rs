@@ -1307,10 +1307,14 @@ impl ClusterInfo {
                 .collect()
         };
         let entries = Rc::new(entries);
+        let id = self.id();
         push_messages
             .into_iter()
             .flat_map(move |(peer, msgs): (SocketAddr, Vec<usize>)| {
                 let entries = Rc::clone(&entries);
+                for index in &msgs {
+                    info!("{} sending message {:?} to peer {}", id, entries[*index].data, peer);
+                }
                 let msgs = msgs.into_iter().map(move |k| entries[k].clone());
                 let msgs = split_gossip_messages(PUSH_MESSAGE_MAX_PAYLOAD_SIZE, msgs)
                     .map(move |msgs| Protocol::PushMessage(self_id, msgs));
@@ -1350,6 +1354,12 @@ impl ClusterInfo {
         sender: &PacketBatchSender,
         generate_pull_requests: bool,
     ) -> Result<(), GossipError> {
+        info!(
+            "{} running gossip, staked nodes: {:?}, gossip validators: {:?}",
+            self.id(),
+            stakes,
+            gossip_validators
+        );
         let _st = ScopedTimer::from(&self.stats.gossip_transmit_loop_time);
         let mut packet_batch = PacketBatch::new_unpinned_with_recycler(recycler, 0, "run_gossip");
         self.generate_new_gossip_requests(

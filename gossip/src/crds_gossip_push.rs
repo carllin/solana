@@ -206,6 +206,7 @@ impl CrdsGossipPush {
                 values.push(value.clone())
             }
             for &node in nodes {
+                info!("{} pushing gossip entry to {}", pubkey, node);
                 push_messages.entry(node).or_default().push(index);
                 num_pushes += 1;
                 if num_pushes >= MAX_NUM_PUSHES {
