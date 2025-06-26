@@ -253,7 +253,7 @@ impl VotingLoop {
 
         // TODO(ashwin): Start loop once migration is complete current_slot from vote history
         loop {
-            if last_stats_report.elapsed() > Duration::from_secs(10) {
+            /*if last_stats_report.elapsed() > Duration::from_secs(10) {
                 // Report stats every 10 seconds
                 datapoint_info!(
                     "alpenglow_voting_loop",
@@ -483,7 +483,34 @@ impl VotingLoop {
 
             // TODO(ashwin): If we were the leader for `current_slot` and the bank has not completed,
             // we can abandon the bank now
-        }
+        }*/
+
+        Self::notify_block_creation_loop_of_leader_window(
+            &my_pubkey,
+            &leader_window_notifier,
+            start_slot,
+            leader_end_slot,
+            parent_block,
+            skip_timer,
+        );
+        ReplayStage::check_and_handle_new_root(
+            &ctx.my_pubkey,
+            slot,
+            new_root,
+            ctx.bank_forks_t.as_ref(),
+            &mut ctx.progress,
+            ctx.blockstore.as_ref(),
+            &ctx.leader_schedule_cache,
+            accounts_background_request_sender,
+            &ctx.rpc_subscriptions,
+            Some(new_root),
+            bank_notification_sender,
+            &mut vctx.has_new_vote_been_rooted,
+            &mut vctx.voted_signatures,
+            drop_bank_sender,
+            None,
+            2,
+        ).unwrap();
     }
 
     /// Checks if any slots between `vote_history`'s current root
