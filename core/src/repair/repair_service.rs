@@ -759,7 +759,7 @@ impl RepairService {
                     repair_info.cluster_info.clone(),
                     repair_info.bank_forks.clone(),
                     repair_info.repair_whitelist.clone(),
-                    StandardRepairHandler::new(blockstore.clone()),
+                    Box::new(StandardRepairHandler::new(blockstore.clone())),
                 )
             },
             repair_metrics: RepairMetrics::default(),

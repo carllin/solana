@@ -608,7 +608,7 @@ impl AncestorHashesService {
                 repair_info.cluster_info.clone(),
                 repair_info.bank_forks.clone(),
                 repair_info.repair_whitelist.clone(),
-                StandardRepairHandler::new(blockstore),
+                Box::new(StandardRepairHandler::new(blockstore)),
             )
         };
         let mut repair_stats = AncestorRepairRequestsStats::default();

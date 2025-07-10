@@ -402,13 +402,13 @@ impl ServeRepair {
         cluster_info: Arc<ClusterInfo>,
         bank_forks: Arc<RwLock<BankForks>>,
         repair_whitelist: Arc<RwLock<HashSet<Pubkey>>>,
-        repair_handler: impl RepairHandler + Send + Sync + 'static,
+        repair_handler: Box<dyn RepairHandler + Send + Sync>,
     ) -> Self {
         Self {
             cluster_info,
             root_bank_cache: RootBankCache::new(bank_forks),
             repair_whitelist,
-            repair_handler: Box::new(repair_handler),
+            repair_handler,
         }
     }
 
