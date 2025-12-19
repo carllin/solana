@@ -17,7 +17,7 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_signer::Signer,
     solana_transaction::Transaction,
-    solana_votor_messages::{
+    agave_votor_messages::{
         consensus_message::{ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },

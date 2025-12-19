@@ -14,7 +14,7 @@ use {
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::bank_forks::BankForks,
     solana_transaction_error::TransportError,
-    solana_votor_messages::consensus_message::{Certificate, ConsensusMessage},
+    agave_votor_messages::consensus_message::{Certificate, ConsensusMessage},
     std::{
         collections::HashMap,
         net::SocketAddr,
@@ -289,7 +289,7 @@ mod tests {
             socket::SocketAddrSpace,
             streamer::StakedNodes,
         },
-        solana_votor_messages::{
+        agave_votor_messages::{
             consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
             vote::Vote,
         },

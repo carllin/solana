@@ -2,7 +2,7 @@ use {
     crate::common::Stake,
     solana_hash::Hash,
     solana_pubkey::Pubkey,
-    solana_votor_messages::consensus_message::VoteMessage,
+    agave_votor_messages::consensus_message::VoteMessage,
     std::collections::{BTreeMap, BTreeSet},
 };
 
@@ -132,7 +132,7 @@ mod test {
     use {
         super::*,
         solana_bls_signatures::Signature as BLSSignature,
-        solana_votor_messages::{consensus_message::VoteMessage, vote::Vote},
+        agave_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     };
 
     #[test]

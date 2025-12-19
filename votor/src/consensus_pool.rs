@@ -20,7 +20,7 @@ use {
     solana_hash::Hash,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
-    solana_votor_messages::{
+    agave_votor_messages::{
         consensus_message::{Block, Certificate, CertificateType, ConsensusMessage, VoteMessage},
         migration::MigrationStatus,
         vote::{Vote, VoteType},
@@ -685,7 +685,7 @@ mod tests {
             },
         },
         solana_signer::Signer,
-        solana_votor_messages::consensus_message::{VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        agave_votor_messages::consensus_message::{VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         std::sync::{Arc, RwLock},
         test_case::test_case,
     };

@@ -22,7 +22,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
-    solana_votor_messages::{
+    agave_votor_messages::{
         consensus_message::{Certificate, ConsensusMessage},
         migration::MigrationStatus,
     },
@@ -460,7 +460,7 @@ mod tests {
         },
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
-        solana_votor_messages::{
+        agave_votor_messages::{
             consensus_message::{CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
             vote::Vote,
         },
