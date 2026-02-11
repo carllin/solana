@@ -101,6 +101,14 @@ Non-reusable for MCP wire correctness:
 - `feature-set/src/lib.rs`:
   - Add `pub mod mcp_protocol_v1 { declare_id!("..."); }`.
   - Register in `FEATURE_NAMES`.
+- Slot-effective feature check pattern (referenced as "slot feature gate" throughout plan):
+  ```rust
+  if let Some(activated_slot) = bank.feature_set.activated_slot(&mcp_protocol_v1::id()) {
+      if slot >= activated_slot {
+          // MCP active for this slot
+      }
+  }
+  ```
 
 ### 1.2 MCP constants and wire types
 
@@ -110,7 +118,7 @@ Non-reusable for MCP wire correctness:
     - `NUM_RELAYS = 200`
     - `DATA_SHREDS_PER_FEC_BLOCK = 40`
     - `CODING_SHREDS_PER_FEC_BLOCK = 160`
-    - `SHRED_DATA_BYTES = 863`
+    - `WITNESS_LEN = 8` (ceil(log2(NUM_RELAYS)))
     - `ATTESTATION_THRESHOLD = 0.60` (`ceil -> 120`)
     - `INCLUSION_THRESHOLD = 0.40` (`ceil -> 80`)
     - `RECONSTRUCTION_THRESHOLD = 0.20` (`ceil -> 40`)
@@ -145,15 +153,35 @@ Non-reusable for MCP wire correctness:
 ### 1.4 MCP shred wire format
 
 - Add `ledger/src/shred/mcp_shred.rs`:
+  - Wire size constants:
+    - `SIZE_OF_SLOT = 8` (u64)
+    - `SIZE_OF_PROPOSER_INDEX = 4` (u32)
+    - `SIZE_OF_SHRED_INDEX = 4` (u32)
+    - `SIZE_OF_COMMITMENT = 32`
+    - `SIZE_OF_WITNESS_LEN = 1` (u8)
+    - `SIZE_OF_WITNESS = 32 * WITNESS_LEN = 256`
+    - `SIZE_OF_PROPOSER_SIG = 64`
+    - `MCP_SHRED_OVERHEAD = 8 + 4 + 4 + 32 + 1 + 256 + 64 = 369`
+    - `SHRED_DATA_BYTES = solana_packet::PACKET_DATA_SIZE - MCP_SHRED_OVERHEAD = 1232 - 369 = 863`
+    - `MCP_SHRED_WIRE_SIZE = solana_packet::PACKET_DATA_SIZE = 1232`
   - Format: `slot:u64 + proposer_index:u32 + shred_index:u32 + commitment:[u8;32] + shred_data + witness_len:u8 + witness + proposer_sig:[u8;64]`
+  - Data and coding shreds use the same wire format. Unlike Agave where RS encodes entire data shreds (headers + payload) into coding shreds, MCP RS-encodes only the payload bytes. Headers are added after RS encoding, so all 200 shreds share the same structure.
+    - `shred_index` 0 to DATA_SHREDS_PER_FEC_BLOCK-1 (0-39) = data shreds (original payload bytes)
+    - `shred_index` DATA_SHREDS_PER_FEC_BLOCK to NUM_RELAYS-1 (40-199) = coding shreds (RS parity bytes)
+    - The `shred_data` field contains either original or parity depending on index
+    - Headers are added after RS encoding, not encoded by RS (see section on SHRED_DATA_BYTES derivation)
   - `is_mcp_shred_packet(packet)` classifier
   - strict parse + verify helpers
   - enforce `witness_len == ceil(log2(NUM_RELAYS))`
 
-### 1.5 Reed-Solomon helper visibility
+### 1.5 Reed-Solomon and shredding
 
-- Keep RS internals in `ledger` crate.
-- Add ledger-level MCP helpers for encode/decode/reconstruct so `core` code does not call `pub(crate)` RS APIs directly.
+- Add `ledger/src/mcp_shredder.rs` mirroring `ledger/src/shredder.rs` for MCP:
+  - RS encode: payload bytes → 40 data shards + 160 coding shards
+  - RS decode/reconstruct: recover payload from any 40 shards
+  - Merkle tree construction and witness generation (using `mcp_merkle.rs`)
+  - Build complete `McpShred` structs with signatures
+- Follow the same pattern as `shredder.rs`: wrap RS encoding/decoding so `core` uses the wrapper, not the RS library directly.
 
 ### 1.6 Tests
 
@@ -163,6 +191,32 @@ Non-reusable for MCP wire correctness:
 - Attestation sorting/duplicate rejection.
 - `witness_len` enforcement.
 - MCP shred packet size and classifier tests.
+- Constants verification:
+  - Size constants match actual serialized sizes.
+  - `MCP_SHRED_WIRE_SIZE == MCP_SHRED_OVERHEAD + SHRED_DATA_BYTES`.
+- Wire layout verification:
+  - Field offsets match expected positions.
+  - Getters extract correct bytes at correct offsets.
+- RS encode/decode round-trip:
+  - Encode payload into 40+160 shards, decode back.
+  - Recover from exactly `REQUIRED_RECONSTRUCTION` (40) shreds.
+  - Fail recovery from 39 shreds.
+  - Recovery with various erasure patterns (all data lost, all coding lost, mixed).
+- Invalid field rejection:
+  - Invalid proposer_index (>= NUM_PROPOSERS).
+  - Invalid shred_index (>= NUM_RELAYS).
+  - Truncated packet (< MCP_SHRED_WIRE_SIZE).
+  - Oversized packet (> MCP_SHRED_WIRE_SIZE).
+- Signature/witness mutation:
+  - Mutated commitment fails signature verification.
+  - Mutated shred_data fails witness verification.
+  - Wrong shred_index fails witness verification.
+- Commitment recomputation:
+  - Given all 200 shards, recompute Merkle root and verify it matches commitment.
+- Boundary values:
+  - Edge slot values (0, u64::MAX).
+  - Edge indices (0, NUM_PROPOSERS-1, 0, NUM_RELAYS-1).
+  - Max payload size (exactly MAX_PROPOSER_PAYLOAD bytes).
 
 ---
 
@@ -175,9 +229,24 @@ Non-reusable for MCP wire correctness:
 - `ledger/src/leader_schedule.rs`:
   - Add helper that reuses stake-weighted leader sampling with domain-separated seed.
   - `NUM_PROPOSERS`/`NUM_RELAYS` must be imported from `ledger::mcp` (single source of truth), not duplicated locally.
+  - Seed construction (32 bytes):
+    - `seed[0..8] = epoch.to_le_bytes()`
+    - `seed[8..8+domain.len()] = domain`
+    - remaining bytes = 0
   - Domains:
-    - proposer: `b"mcp:proposer"`
-    - relay: `b"mcp:relay"`
+    - proposer: `b"mcp:proposer"` (12 bytes)
+    - relay: `b"mcp:relay"` (9 bytes)
+  - Key differences from leader schedule:
+    - Multiple samples per slot: NUM_PROPOSERS (16) for proposers, NUM_RELAYS (200) for relays
+    - No repeat/consecutive slots: each position is an independent sample (leader schedule repeats same leader for 4 consecutive slots)
+    - Duplicates allowed: same validator can appear multiple times in a slot's list
+  - Sampling pattern (contrast with leader schedule's `if i % repeat == 0` logic):
+    ```rust
+    (0..slots_in_epoch * count)
+        .map(|_| keys[weighted_index.sample(rng)])
+        .collect()
+    ```
+  - This ensures proposer, relay, and leader schedules produce independent random sequences from the same stake set.
 
 ### 2.2 Stake source parity with leader schedule
 
@@ -195,7 +264,8 @@ Non-reusable for MCP wire correctness:
     - `relays_at_slot(slot, bank) -> Option<Vec<Pubkey>>` (len=200)
     - `proposer_indices_at_slot(slot, pubkey, bank) -> Vec<u32>`
     - `relay_indices_at_slot(slot, pubkey, bank) -> Vec<u32>`
-  - Duplicate identities return all indices (spec §5).
+  - Feature gate check: all helpers must check if `mcp_protocol_v1` is active for the slot by checking inside the given bank; if not, return `None` or empty `Vec`. This ensures proposer/relay logic (e.g., section 5.1 proposer activation) does not activate when MCP is disabled.
+  - Duplicate identities: if a validator appears multiple times in a schedule (e.g., at proposer indices 3, 7, 15), the index lookup returns all positions (spec §5). This applies to both proposer and relay schedules.
 
 ### 2.4 Tests
 
@@ -238,7 +308,8 @@ Non-reusable for MCP wire correctness:
   - MCP partition classifier MUST be strict (`McpShred` wire-size/layout + witness-length/path checks), not a loose size-only check.
   - Agave packets: unchanged existing path.
   - MCP packets:
-    - apply slot feature gate
+    - apply slot feature gate (see §1.1) using the `working_bank` that `run_shred_sigverify()` already uses
+    - feature is the only filter (no proposer/relay role check) because all validators need MCP shreds for vote gate (spec §3.5: count locally stored shreds >= RECONSTRUCTION_THRESHOLD) and reconstruction
     - bypass Agave shred-id/leader-sigverify assumptions
     - forward through existing `verified_sender` channel for MCP-specific verification in `window_service`
 
@@ -248,6 +319,8 @@ Non-reusable for MCP wire correctness:
 - classifier rejects valid Agave Merkle shreds.
 - Valid MCP shred passes, bad signature/proof fails.
 - MCP CF put/get + purge behavior.
+- Feature flag can toggle between MCP/non MCP pipelines starting from
+packet ingestion, into dedup and sigverify
 
 ---
 
@@ -329,7 +402,53 @@ Non-reusable for MCP wire correctness:
   - reject slot-mismatch vs PoH recorder start slot
   - reject malformed inputs (`mixins.len() != transaction_batches.len()` or any empty transaction batch)
 
-### 5.3 Forwarding stage changes
+### 5.4 TPU proposer worker
+
+**Implementation: `core/src/mcp_proposer.rs` + `core/src/tpu.rs`**
+
+The MCP proposer is **bankless** (no execution, no PoH) but needs to validate transactions and extract ordering fees. This is achieved via `McpProposerContext`, a lightweight struct that extracts only what's needed from a frozen parent bank:
+
+```rust
+pub struct McpProposerContext {
+    feature_set: Arc<FeatureSet>,
+    fee_structure: FeeStructure,
+    rent: Rent,
+    lamports_per_signature: u64,
+    accounts: Arc<Accounts>,        // For loading fee payer balances
+    ancestors: Ancestors,
+    cost_tracker: RwLock<CostTracker>,  // 1/16th limits
+}
+```
+
+**Key methods (reuse patterns from consumer.rs:460-493):**
+- `validate_fee_payer()` — Extracts compute budget limits, calculates fee, loads fee payer account, validates balance
+- `try_add_cost()` — Enforces per-proposer 1/16th CU limits via CostTracker
+- `extract_ordering_fee()` — Returns `compute_unit_price` from transaction's compute budget instructions
+
+
+**Thread flow (If feature is active, `tpu.rs` spawns "solMcpProposer" thread):**
+1. Wait for slot where this validator is a proposer (via `leader_schedule_cache.proposer_indices_at_slot()`)
+2. Create `McpProposerContext::new(&parent_bank)` — cost tracker initialized with 1/16th limits
+3. Receive cloned packets from sigverify (via `mcp_proposer_receiver`)
+4. For each packet:
+   - Deserialize via `ImmutableDeserializedPacket::new()` pattern
+   - Build `RuntimeTransaction` via `build_sanitized_transaction()`
+   - Validate fee payer: `context.validate_fee_payer(&tx)` → returns `ordering_fee`
+   - Validate cost budget: `context.try_add_cost(&tx)` → rejects if exceeds 1/16th
+   - Collect valid transactions as `ValidatedTransaction { transaction, ordering_fee }`
+5. Sort by ordering_fee descending (stable sort preserves insertion order for ties)
+6. Serialize to `McpPayload` (max `MAX_PROPOSER_PAYLOAD` = `DATA_SHREDS * SHRED_DATA_BYTES`)
+7. RS encode via `reed_solomon_erasure::ReedSolomon::new(40, 160)` directly
+8. Compute Merkle commitment per spec section 6 using `mcp_merkle_tree()` from `mcp_merkle.rs`
+9. Build `McpShred` for each relay index (0..199) with witness + proposer_signature
+   - Relay `i` receives shred with `shred_index = i`
+   - Relays 0-39 receive data shreds (original payload), relays 40-199 receive coding shreds (RS parity)
+10. Look up relay addresses via `relays_at_slot()` + `ClusterInfo::lookup_contact_info()`
+11. Send one shred per relay to their TVU address
+
+**MCP transaction format note (PENDING SPEC AMENDMENT):** See SPEC AMENDMENT REQUIREMENT in section 1.2. McpPayload carries standard Solana wire-format transactions. The `ordering_fee` is derived from the existing `compute_unit_price` set via `SetComputeUnitPrice` instruction. Transactions without `SetComputeUnitPrice` get `ordering_fee = 0`.
+
+### 5.5 Forwarding stage changes
 
 - `core/src/forwarding_stage.rs` + `core/src/next_leader.rs`:
   - MCP mode resolves proposer forward addresses using schedule cache and same lookahead slot-offset policy used today.
@@ -338,18 +457,41 @@ Non-reusable for MCP wire correctness:
     - `TpuClientNext`: `get_forward_addresses_from_tpu_info` must also resolve MCP proposer addresses when `mcp_protocol_v1` is active, using the same schedule cache lookup
   - preserve non-MCP behavior unchanged.
 
-### 5.4 Explicit non-change
+### 5.6 Explicit non-change
 
 - Do not globally divide BankingStage QoS limits in `core/src/banking_stage/qos_service.rs` in v1.
 - Per-proposer limits are handled by proposer admission and replay validation paths.
 
-### 5.5 Tests
+### 5.7 Per-proposer CU budgets
+
+**Handled directly in `McpProposerContext::new()`:**
+
+The `CostTracker` is initialized with 1/16th of block limits:
+```rust
+cost_tracker.set_limits(
+    account_cost_limit / NUM_PROPOSERS,
+    block_cost_limit / NUM_PROPOSERS,
+    vote_cost_limit / NUM_PROPOSERS,
+);
+```
+
+This ensures each proposer's payload doesn't exceed its share. No changes needed to `qos_service.rs` — the per-proposer tracking is local to the MCP proposer thread.
+
+### 5.8 Tests
 
 - MCP dispatch removes completed slot state and emits one shred per relay index per owned proposer index.
+
+- Context created with 1/16th limits
+- Rejects tx when payer has no balance
+- Correctly extracts compute_unit_price (0 if no SetComputeUnitPrice)
+- Transactions sorted descending, ties preserve insertion order
+- Proposer produces 200 shreds (one per relay)
+- Payload size within `DATA_SHREDS * SHRED_DATA_BYTES` = 34,520 bytes
+- RS encode -> decode round-trip
+- TransactionSigVerifier clones to MCP proposer channel
+- Proposer worker emits exactly one shred per relay index.
 - Payload bound enforcement.
 - Forwarding routes to proposer addresses in MCP mode for both forwarding clients.
-
----
 
 ## Pass 6 — Leader Aggregation + ConsensusBlock
 
