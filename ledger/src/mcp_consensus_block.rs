@@ -427,8 +427,15 @@ pub const MCP_CONTROL_MSG_CONSENSUS_BLOCK_FRAGMENT: u8 = 0x03;
 pub const FRAGMENT_OVERHEAD: usize = 1 + 8 + 2 + 2 + 32;
 /// Maximum data payload per fragment.
 pub const MAX_FRAGMENT_DATA: usize = PACKET_DATA_SIZE - FRAGMENT_OVERHEAD;
+/// Maximum number of fragments a single ConsensusBlock can produce.
+/// Derived from the protocol wire-size bound so `total` in a fragment header
+/// can be validated without trusting the sender.
+pub const MAX_FRAGMENT_COUNT: usize = MAX_CONSENSUS_BLOCK_WIRE_BYTES.div_ceil(MAX_FRAGMENT_DATA);
 
 const MAX_PENDING_REASSEMBLIES: usize = 64;
+/// Maximum number of distinct cb_hash reassemblies tracked per slot.
+/// One leader produces one ConsensusBlock per slot, so >2 is adversarial.
+const MAX_PENDING_PER_SLOT: usize = 2;
 
 /// Split ConsensusBlock wire bytes into MTU-sized fragments.
 pub fn fragment_consensus_block(slot: Slot, consensus_wire_bytes: &[u8]) -> Vec<Vec<u8>> {
@@ -473,7 +480,7 @@ pub fn parse_fragment_header(bytes: &[u8]) -> Option<(FragmentHeader, &[u8])> {
     let slot = u64::from_le_bytes(bytes[1..9].try_into().ok()?);
     let frag_idx = u16::from_le_bytes(bytes[9..11].try_into().ok()?);
     let total = u16::from_le_bytes(bytes[11..13].try_into().ok()?);
-    if total == 0 || frag_idx >= total {
+    if total == 0 || total as usize > MAX_FRAGMENT_COUNT || frag_idx >= total {
         return None;
     }
     let mut cb_hash = [0u8; 32];
@@ -502,6 +509,15 @@ impl ConsensusBlockFragmentCollector {
         let ((slot, frag_idx, total, cb_hash), data) = parse_fragment_header(fragment_bytes)?;
         let key = (slot, cb_hash);
         let frag_idx = frag_idx as usize;
+
+        // Before creating a new reassembly entry, enforce the per-slot cap so a
+        // single attacker-controlled slot cannot monopolize the pending buffer.
+        if !self.pending.contains_key(&key) {
+            let slot_count = self.pending.keys().filter(|(s, _)| *s == slot).count();
+            if slot_count >= MAX_PENDING_PER_SLOT {
+                return None;
+            }
+        }
 
         let state = self.pending.entry(key).or_insert_with(|| FragmentState {
             total,
@@ -1009,5 +1025,90 @@ mod tests {
         }
         // Hash mismatch should prevent reassembly.
         assert!(result.is_none());
+    }
+
+    // ── Adversarial fragment header tests ────────────────────────────────
+
+    fn make_fragment(slot: Slot, frag_idx: u16, total: u16, cb_hash: [u8; 32]) -> Vec<u8> {
+        let data = vec![0u8; 64]; // arbitrary payload, 1 byte past FRAGMENT_OVERHEAD
+        let mut buf = Vec::with_capacity(FRAGMENT_OVERHEAD + data.len());
+        buf.push(MCP_CONTROL_MSG_CONSENSUS_BLOCK_FRAGMENT);
+        buf.extend_from_slice(&slot.to_le_bytes());
+        buf.extend_from_slice(&frag_idx.to_le_bytes());
+        buf.extend_from_slice(&total.to_le_bytes());
+        buf.extend_from_slice(&cb_hash);
+        buf.extend_from_slice(&data);
+        buf
+    }
+
+    #[test]
+    fn test_parse_fragment_rejects_total_exceeds_max() {
+        let cb_hash = [1u8; 32];
+        // MAX_FRAGMENT_COUNT is the legitimate ceiling; one above must be rejected.
+        let oversized = (MAX_FRAGMENT_COUNT + 1) as u16;
+        let frag = make_fragment(1, 0, oversized, cb_hash);
+        assert!(parse_fragment_header(&frag).is_none());
+
+        // MAX_FRAGMENT_COUNT itself should parse fine.
+        let max = MAX_FRAGMENT_COUNT as u16;
+        let frag = make_fragment(1, 0, max, cb_hash);
+        assert!(parse_fragment_header(&frag).is_some());
+    }
+
+    #[test]
+    fn test_parse_fragment_rejects_frag_idx_out_of_range() {
+        let cb_hash = [2u8; 32];
+        // frag_idx equal to total is out of range (valid range is 0..total-1).
+        let frag = make_fragment(1, 3, 3, cb_hash);
+        assert!(parse_fragment_header(&frag).is_none());
+
+        // frag_idx strictly less than total is valid.
+        let frag = make_fragment(1, 2, 3, cb_hash);
+        assert!(parse_fragment_header(&frag).is_some());
+    }
+
+    #[test]
+    fn test_collector_per_slot_cap_blocks_third_hash() {
+        let mut collector = ConsensusBlockFragmentCollector::default();
+        let slot = 99u64;
+
+        // First two distinct cb_hashes for the same slot are accepted.
+        let frag1 = make_fragment(slot, 0, 2, [0xAAu8; 32]);
+        let frag2 = make_fragment(slot, 0, 2, [0xBBu8; 32]);
+        let frag3 = make_fragment(slot, 0, 2, [0xCCu8; 32]);
+
+        assert!(collector.ingest(&frag1).is_none()); // pending: 1
+        assert!(collector.ingest(&frag2).is_none()); // pending: 2
+        assert_eq!(collector.pending.len(), 2);
+
+        // Third distinct cb_hash for the same slot must be silently dropped.
+        assert!(collector.ingest(&frag3).is_none());
+        assert_eq!(collector.pending.len(), 2, "third hash should not create a new entry");
+
+        // A fragment for a different slot is unaffected by the per-slot cap.
+        let frag_other = make_fragment(slot + 1, 0, 2, [0xCCu8; 32]);
+        assert!(collector.ingest(&frag_other).is_none());
+        assert_eq!(collector.pending.len(), 3);
+    }
+
+    #[test]
+    fn test_collector_rejects_mismatched_total_for_same_key() {
+        let mut collector = ConsensusBlockFragmentCollector::default();
+        let slot = 7u64;
+        let cb_hash = [0x42u8; 32];
+
+        // Establish the entry with total=3.
+        let frag_a = make_fragment(slot, 0, 3, cb_hash);
+        assert!(collector.ingest(&frag_a).is_none());
+        assert_eq!(collector.pending.len(), 1);
+
+        // Same (slot, cb_hash) but different total must be rejected.
+        let frag_b = make_fragment(slot, 1, 5, cb_hash);
+        assert!(collector.ingest(&frag_b).is_none());
+        // The mismatched fragment must not alter the stored total.
+        let state = collector.pending.get(&(slot, cb_hash)).unwrap();
+        assert_eq!(state.total, 3);
+        // Nor should it have been stored as received.
+        assert_eq!(state.received_count, 1);
     }
 }
