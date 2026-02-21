@@ -19,7 +19,11 @@ use {
         mcp_consensus_block::{
             ConsensusBlock, MCP_CONTROL_MSG_CONSENSUS_BLOCK_FRAGMENT, FRAGMENT_OVERHEAD,
         },
-        shred::{self, mcp_shred::is_mcp_shred_bytes, should_discard_shred, ShredFetchStats},
+        shred::{
+            self,
+            mcp_shred::{is_mcp_shred_bytes, OFFSET_SLOT},
+            should_discard_shred, ShredFetchStats,
+        },
     },
     solana_metrics::inc_new_counter_error,
     solana_packet::{Meta, PACKET_DATA_SIZE},
@@ -432,8 +436,9 @@ fn is_active_mcp_shred_packet(
     if !is_mcp_shred_bytes(data) {
         return false;
     }
-    let Ok(slot_bytes) =
-        <[u8; std::mem::size_of::<Slot>()]>::try_from(&data[..std::mem::size_of::<Slot>()])
+    // Slot is at OFFSET_SLOT (byte 65) in the new wire format
+    let slot_end = OFFSET_SLOT + std::mem::size_of::<Slot>();
+    let Ok(slot_bytes) = <[u8; std::mem::size_of::<Slot>()]>::try_from(&data[OFFSET_SLOT..slot_end])
     else {
         return false;
     };
@@ -557,7 +562,8 @@ mod tests {
         solana_ledger::{
             mcp,
             shred::mcp_shred::{
-                McpShred, MCP_SHRED_DATA_BYTES, MCP_SHRED_WIRE_SIZE, MCP_WITNESS_LEN,
+                McpShred, MCP_SHRED_DATA_BYTES, MCP_SHRED_DISCRIMINATOR, MCP_SHRED_WIRE_SIZE,
+                MCP_WITNESS_LEN, OFFSET_DISCRIMINATOR, OFFSET_SLOT, OFFSET_WITNESS_LEN,
             },
         },
         solana_packet::PacketFlags,
@@ -694,14 +700,14 @@ mod tests {
     #[test]
     fn test_is_active_mcp_shred_packet_obeys_feature_slot_gate() {
         let slot = 500_000u64;
-        let witness_len_offset = std::mem::size_of::<Slot>()
-            + std::mem::size_of::<u32>()
-            + std::mem::size_of::<u32>()
-            + 32
-            + MCP_SHRED_DATA_BYTES;
         let mut mcp_bytes = vec![0u8; MCP_SHRED_WIRE_SIZE];
-        mcp_bytes[..std::mem::size_of::<Slot>()].copy_from_slice(&slot.to_le_bytes());
-        mcp_bytes[witness_len_offset] = MCP_WITNESS_LEN as u8;
+        // Set discriminator at byte 64
+        mcp_bytes[OFFSET_DISCRIMINATOR] = MCP_SHRED_DISCRIMINATOR;
+        // Set slot at new offset (byte 65)
+        mcp_bytes[OFFSET_SLOT..OFFSET_SLOT + std::mem::size_of::<Slot>()]
+            .copy_from_slice(&slot.to_le_bytes());
+        // Set witness_len at new offset
+        mcp_bytes[OFFSET_WITNESS_LEN] = MCP_WITNESS_LEN as u8;
 
         let mut packet = solana_perf::packet::Packet::default();
         packet.buffer_mut()[..mcp_bytes.len()].copy_from_slice(&mcp_bytes);

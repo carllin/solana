@@ -3,9 +3,11 @@ use solana_sha256_hasher::hashv;
 use {
     crate::{mcp, mcp_merkle},
     solana_clock::Slot,
+    solana_packet::PACKET_DATA_SIZE,
     solana_perf::packet::{Packet, PacketRef},
     solana_pubkey::Pubkey,
     solana_signature::{Signature, SIGNATURE_BYTES},
+    static_assertions::const_assert_eq,
     thiserror::Error,
 };
 
@@ -14,20 +16,40 @@ pub const MCP_NUM_PROPOSERS: usize = mcp::NUM_PROPOSERS;
 pub const MCP_SHRED_DATA_BYTES: usize = mcp::SHRED_DATA_BYTES;
 pub const MCP_WITNESS_LEN: usize = mcp_witness_len(MCP_NUM_RELAYS);
 
-pub const MCP_SHRED_WIRE_SIZE: usize = std::mem::size_of::<Slot>() // slot
-    + std::mem::size_of::<u32>() // proposer_index
-    + std::mem::size_of::<u32>() // shred_index
-    + 32 // commitment
-    + MCP_SHRED_DATA_BYTES
-    + 1 // witness_len
-    + (32 * MCP_WITNESS_LEN)
-    + SIGNATURE_BYTES;
+/// MCP shred discriminator byte placed at offset 64 (where ShredVariant lives in legacy shreds).
+/// Value 0x03 is in the range 0x00-0x3F, which is disjoint from valid ShredVariant bytes (0x40-0xBF).
+pub const MCP_SHRED_DISCRIMINATOR: u8 = 0x03;
 
-const OFFSET_WITNESS_LEN: usize = std::mem::size_of::<Slot>()
-    + std::mem::size_of::<u32>()
-    + std::mem::size_of::<u32>()
-    + 32
-    + MCP_SHRED_DATA_BYTES;
+/// Offset of the discriminator byte in the wire format.
+/// This is byte 64, immediately after the 64-byte proposer signature.
+pub const OFFSET_DISCRIMINATOR: usize = SIGNATURE_BYTES; // 64
+
+/// Wire format (1232 bytes total):
+/// ```text
+/// proposer_sig:[u8;64] + discriminator:u8(0x03) + slot:u64 + proposer_index:u32 +
+/// shred_index:u32 + commitment:[u8;32] + shred_data:[u8;862] + witness_len:u8 + witness:[u8;256]
+/// ```
+pub const MCP_SHRED_WIRE_SIZE: usize = SIGNATURE_BYTES // proposer_sig (64)
+    + 1 // discriminator
+    + std::mem::size_of::<Slot>() // slot (8)
+    + std::mem::size_of::<u32>() // proposer_index (4)
+    + std::mem::size_of::<u32>() // shred_index (4)
+    + 32 // commitment
+    + MCP_SHRED_DATA_BYTES // shred_data (862)
+    + 1 // witness_len
+    + (32 * MCP_WITNESS_LEN); // witness (256)
+
+// Ensure MCP shred wire size matches UDP packet data size.
+const_assert_eq!(MCP_SHRED_WIRE_SIZE, PACKET_DATA_SIZE);
+
+// Field offsets in the new wire format (public for testing)
+pub const OFFSET_SLOT: usize = OFFSET_DISCRIMINATOR + 1; // 65
+pub const OFFSET_PROPOSER_INDEX: usize = OFFSET_SLOT + std::mem::size_of::<Slot>(); // 73
+pub const OFFSET_SHRED_INDEX: usize = OFFSET_PROPOSER_INDEX + std::mem::size_of::<u32>(); // 77
+const OFFSET_COMMITMENT: usize = OFFSET_SHRED_INDEX + std::mem::size_of::<u32>(); // 81
+const OFFSET_SHRED_DATA: usize = OFFSET_COMMITMENT + 32; // 113
+pub const OFFSET_WITNESS_LEN: usize = OFFSET_SHRED_DATA + MCP_SHRED_DATA_BYTES; // 975
+const OFFSET_WITNESS: usize = OFFSET_WITNESS_LEN + 1; // 976
 
 #[cfg(test)]
 const LEAF_DOMAIN: [u8; 1] = [0x00];
@@ -68,25 +90,31 @@ const fn mcp_witness_len(num_relays: usize) -> usize {
 }
 
 pub fn is_mcp_shred_bytes(data: &[u8]) -> bool {
+    // Fast path: check discriminator at byte 64 first (zero collision with ShredVariant).
+    // MCP discriminator 0x03 is in range 0x00-0x3F, disjoint from ShredVariant (0x40-0xBF).
     if data.len() != MCP_SHRED_WIRE_SIZE
-        || data
-            .get(OFFSET_WITNESS_LEN)
-            .is_none_or(|len| *len as usize != MCP_WITNESS_LEN)
+        || data.get(OFFSET_DISCRIMINATOR) != Some(&MCP_SHRED_DISCRIMINATOR)
+    {
+        return false;
+    }
+
+    // Additional validation: check witness_len and bounded indices.
+    if data
+        .get(OFFSET_WITNESS_LEN)
+        .is_none_or(|len| *len as usize != MCP_WITNESS_LEN)
     {
         return false;
     }
 
     // Keep classifier cost low: only check fixed layout and bounded indices.
     // Full signature and witness verification happens in MCP-specific verify paths.
-    let proposer_index_offset = std::mem::size_of::<Slot>();
-    let shred_index_offset = proposer_index_offset + std::mem::size_of::<u32>();
     let proposer_index = u32::from_le_bytes(
-        data[proposer_index_offset..proposer_index_offset + std::mem::size_of::<u32>()]
+        data[OFFSET_PROPOSER_INDEX..OFFSET_PROPOSER_INDEX + std::mem::size_of::<u32>()]
             .try_into()
             .unwrap(),
     );
     let shred_index = u32::from_le_bytes(
-        data[shred_index_offset..shred_index_offset + std::mem::size_of::<u32>()]
+        data[OFFSET_SHRED_INDEX..OFFSET_SHRED_INDEX + std::mem::size_of::<u32>()]
             .try_into()
             .unwrap(),
     );
@@ -110,6 +138,14 @@ impl McpShred {
             });
         }
 
+        // Check discriminator at byte 64
+        if data[OFFSET_DISCRIMINATOR] != MCP_SHRED_DISCRIMINATOR {
+            return Err(McpShredError::InvalidSize {
+                expected: MCP_SHRED_WIRE_SIZE,
+                actual: data.len(),
+            });
+        }
+
         let witness_len = data[OFFSET_WITNESS_LEN] as usize;
         if witness_len != MCP_WITNESS_LEN {
             return Err(McpShredError::InvalidWitnessLength {
@@ -118,54 +154,53 @@ impl McpShred {
             });
         }
 
-        let mut offset = 0usize;
-        let slot = Slot::from_le_bytes(
-            data[offset..offset + std::mem::size_of::<Slot>()]
-                .try_into()
-                .unwrap(),
+        // Parse signature (bytes 0-63)
+        let proposer_signature = Signature::from(
+            <[u8; SIGNATURE_BYTES]>::try_from(&data[0..SIGNATURE_BYTES]).unwrap(),
         );
-        offset += std::mem::size_of::<Slot>();
 
-        let proposer_index = u32::from_le_bytes(
-            data[offset..offset + std::mem::size_of::<u32>()]
+        // Parse slot (bytes 65-72)
+        let slot = Slot::from_le_bytes(
+            data[OFFSET_SLOT..OFFSET_SLOT + std::mem::size_of::<Slot>()]
                 .try_into()
                 .unwrap(),
         );
-        offset += std::mem::size_of::<u32>();
+
+        // Parse proposer_index (bytes 73-76)
+        let proposer_index = u32::from_le_bytes(
+            data[OFFSET_PROPOSER_INDEX..OFFSET_PROPOSER_INDEX + std::mem::size_of::<u32>()]
+                .try_into()
+                .unwrap(),
+        );
         if (proposer_index as usize) >= MCP_NUM_PROPOSERS {
             return Err(McpShredError::InvalidProposerIndex(proposer_index));
         }
 
+        // Parse shred_index (bytes 77-80)
         let shred_index = u32::from_le_bytes(
-            data[offset..offset + std::mem::size_of::<u32>()]
+            data[OFFSET_SHRED_INDEX..OFFSET_SHRED_INDEX + std::mem::size_of::<u32>()]
                 .try_into()
                 .unwrap(),
         );
-        offset += std::mem::size_of::<u32>();
         if (shred_index as usize) >= MCP_NUM_RELAYS {
             return Err(McpShredError::InvalidShredIndex(shred_index));
         }
 
+        // Parse commitment (bytes 81-112)
         let mut commitment = [0u8; 32];
-        commitment.copy_from_slice(&data[offset..offset + 32]);
-        offset += 32;
+        commitment.copy_from_slice(&data[OFFSET_COMMITMENT..OFFSET_COMMITMENT + 32]);
 
+        // Parse shred_data (bytes 113-974)
         let mut shred_data = [0u8; MCP_SHRED_DATA_BYTES];
-        shred_data.copy_from_slice(&data[offset..offset + MCP_SHRED_DATA_BYTES]);
-        offset += MCP_SHRED_DATA_BYTES;
+        shred_data.copy_from_slice(&data[OFFSET_SHRED_DATA..OFFSET_SHRED_DATA + MCP_SHRED_DATA_BYTES]);
 
-        // witness_len has already been validated above.
-        offset += 1;
-
+        // Parse witness (bytes 976-1231)
         let mut witness = [[0u8; 32]; MCP_WITNESS_LEN];
+        let mut offset = OFFSET_WITNESS;
         for sibling in &mut witness {
             sibling.copy_from_slice(&data[offset..offset + 32]);
             offset += 32;
         }
-
-        let proposer_signature = Signature::from(
-            <[u8; SIGNATURE_BYTES]>::try_from(&data[offset..offset + SIGNATURE_BYTES]).unwrap(),
-        );
 
         Ok(Self {
             slot,
@@ -180,35 +215,41 @@ impl McpShred {
 
     pub fn to_bytes(&self) -> [u8; MCP_SHRED_WIRE_SIZE] {
         let mut data = [0u8; MCP_SHRED_WIRE_SIZE];
-        let mut offset = 0usize;
 
-        data[offset..offset + std::mem::size_of::<Slot>()]
+        // Write signature (bytes 0-63)
+        data[0..SIGNATURE_BYTES].copy_from_slice(self.proposer_signature.as_ref());
+
+        // Write discriminator (byte 64)
+        data[OFFSET_DISCRIMINATOR] = MCP_SHRED_DISCRIMINATOR;
+
+        // Write slot (bytes 65-72)
+        data[OFFSET_SLOT..OFFSET_SLOT + std::mem::size_of::<Slot>()]
             .copy_from_slice(&self.slot.to_le_bytes());
-        offset += std::mem::size_of::<Slot>();
 
-        data[offset..offset + std::mem::size_of::<u32>()]
+        // Write proposer_index (bytes 73-76)
+        data[OFFSET_PROPOSER_INDEX..OFFSET_PROPOSER_INDEX + std::mem::size_of::<u32>()]
             .copy_from_slice(&self.proposer_index.to_le_bytes());
-        offset += std::mem::size_of::<u32>();
 
-        data[offset..offset + std::mem::size_of::<u32>()]
+        // Write shred_index (bytes 77-80)
+        data[OFFSET_SHRED_INDEX..OFFSET_SHRED_INDEX + std::mem::size_of::<u32>()]
             .copy_from_slice(&self.shred_index.to_le_bytes());
-        offset += std::mem::size_of::<u32>();
 
-        data[offset..offset + 32].copy_from_slice(&self.commitment);
-        offset += 32;
+        // Write commitment (bytes 81-112)
+        data[OFFSET_COMMITMENT..OFFSET_COMMITMENT + 32].copy_from_slice(&self.commitment);
 
-        data[offset..offset + MCP_SHRED_DATA_BYTES].copy_from_slice(&self.shred_data);
-        offset += MCP_SHRED_DATA_BYTES;
+        // Write shred_data (bytes 113-974)
+        data[OFFSET_SHRED_DATA..OFFSET_SHRED_DATA + MCP_SHRED_DATA_BYTES].copy_from_slice(&self.shred_data);
 
-        data[offset] = MCP_WITNESS_LEN as u8;
-        offset += 1;
+        // Write witness_len (byte 975)
+        data[OFFSET_WITNESS_LEN] = MCP_WITNESS_LEN as u8;
 
+        // Write witness (bytes 976-1231)
+        let mut offset = OFFSET_WITNESS;
         for sibling in &self.witness {
             data[offset..offset + 32].copy_from_slice(sibling);
             offset += 32;
         }
 
-        data[offset..offset + SIGNATURE_BYTES].copy_from_slice(self.proposer_signature.as_ref());
         data
     }
 
@@ -340,6 +381,8 @@ mod tests {
     #[test]
     fn test_mcp_shred_rejects_wrong_witness_len() {
         let mut bytes = [0u8; MCP_SHRED_WIRE_SIZE];
+        // Set discriminator so parsing proceeds past that check
+        bytes[OFFSET_DISCRIMINATOR] = MCP_SHRED_DISCRIMINATOR;
         bytes[OFFSET_WITNESS_LEN] = (MCP_WITNESS_LEN as u8).saturating_sub(1);
         let err = McpShred::from_bytes(&bytes).unwrap_err();
         assert_eq!(
@@ -397,8 +440,8 @@ mod tests {
             proposer_signature,
         };
         let mut bytes = shred.to_bytes();
-        let shred_index_offset = std::mem::size_of::<Slot>() + std::mem::size_of::<u32>();
-        bytes[shred_index_offset..shred_index_offset + std::mem::size_of::<u32>()]
+        // Modify shred_index at its new offset (OFFSET_SHRED_INDEX = 77)
+        bytes[OFFSET_SHRED_INDEX..OFFSET_SHRED_INDEX + std::mem::size_of::<u32>()]
             .copy_from_slice(&(MCP_NUM_RELAYS as u32).to_le_bytes());
         let err = McpShred::from_bytes(&bytes).unwrap_err();
         assert_eq!(err, McpShredError::InvalidShredIndex(MCP_NUM_RELAYS as u32));
@@ -507,8 +550,8 @@ mod tests {
             proposer_signature,
         };
         let mut bytes = shred.to_bytes();
-        let shred_index_offset = std::mem::size_of::<Slot>() + std::mem::size_of::<u32>();
-        bytes[shred_index_offset..shred_index_offset + std::mem::size_of::<u32>()]
+        // Modify shred_index at its new offset (OFFSET_SHRED_INDEX = 77)
+        bytes[OFFSET_SHRED_INDEX..OFFSET_SHRED_INDEX + std::mem::size_of::<u32>()]
             .copy_from_slice(&(MCP_NUM_RELAYS as u32).to_le_bytes());
         assert!(!is_mcp_shred_bytes(&bytes));
     }

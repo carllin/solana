@@ -277,6 +277,29 @@ recomputes the commitment for the given index and leaf.
 This specification defines version value 1 for all messages that include a
 version field. Messages with unknown versions MUST be rejected.
 
+7.0. Packet Classification
+
+MCP messages share the TVU channel with legacy Solana shreds. To distinguish
+MCP packets from legacy shreds without collision risk, MCP uses byte 64 as a
+discriminator. In legacy Merkle shreds, byte 64 contains the ShredVariant enum
+which uses values in the ranges 0x40-0x4F, 0x60-0x7F, 0x80-0x9F, and 0xB0-0xBF.
+
+7.0.1. MCP Shred Classification (Byte 64)
+
+MCP Shred discriminator values are chosen from 0x00-0x3F, which is guaranteed
+disjoint from all valid ShredVariant bytes:
+
+- 0x03: MCP Shred
+
+For MCP Shreds, the proposer signature occupies bytes 0-63, and the discriminator
+is at byte 64. This placement ensures the discriminator is at the same offset
+where ShredVariant would appear in a legacy shred, enabling fast and reliable
+packet classification with zero collision probability.
+
+Receivers MUST check byte 64 to determine packet type before further parsing.
+Packets with byte 64 in the range 0x00-0x3F are MCP shreds; packets with byte 64
+in the range 0x40-0xBF are legacy Solana shreds.
+
 7.1. Transaction
 
 A Transaction message is serialized as a sequence of fields in this order:
@@ -327,30 +350,36 @@ Transaction Wire Format (variable length)
 7.2. Shred
 
 A Shred message carries a single erasure-coded shred from a proposer. It is
-serialized as slot (u64), proposer_index (u32), shred_index (u32), commitment
-(32 bytes), shred_data (SHRED_DATA_BYTES bytes), witness_len (u8), witness
-(witness_len consecutive 32-byte hashes), and proposer_signature (64 bytes).
-The proposer_signature is computed by the proposer over the 32-byte commitment.
-The shred_index MUST equal the relay index for the intended relay. The
-witness_len value MUST match the Merkle proof length implied by NUM_RELAYS and
-the Merkle construction in Section 6. The witness MUST be a valid Merkle proof
-for shred_index under the commitment.
+serialized as proposer_signature (64 bytes), discriminator (1 byte, value 0x03),
+slot (u64), proposer_index (u32), shred_index (u32), commitment (32 bytes),
+shred_data (SHRED_DATA_BYTES = 862 bytes), witness_len (u8), and witness
+(witness_len consecutive 32-byte hashes).
+
+The proposer_signature is computed by the proposer over the 32-byte commitment
+and is placed at the beginning of the wire format for efficient signature
+verification. The discriminator byte at offset 64 enables packet classification
+(see Section 7.0). The shred_index MUST equal the relay index for the intended
+relay. The witness_len value MUST match the Merkle proof length implied by
+NUM_RELAYS and the Merkle construction in Section 6. The witness MUST be a valid
+Merkle proof for shred_index under the commitment.
 
 
-Shred Wire Format (variable length)
+Shred Wire Format (fixed length = 1232 bytes)
 ```text
-+-----------------+------------------------------+
-| Field           | Size (bytes)                 |
-+-----------------+------------------------------+
-| slot            | 8                            |
-| proposer_index  | 4                            |
-| shred_index     | 4                            |
-| commitment      | 32                           |
-| shred_data      | SHRED_DATA_BYTES             |
-| witness_len     | 1                            |
-| witness         | 32 * witness_len             |
-| proposer_sig    | 64                           |
-+-----------------+------------------------------+
++-----------------+------------------------------+--------+
+| Field           | Size (bytes)                 | Offset |
++-----------------+------------------------------+--------+
+| proposer_sig    | 64                           | 0      |
+| discriminator   | 1 (value 0x03)               | 64     |
+| slot            | 8                            | 65     |
+| proposer_index  | 4                            | 73     |
+| shred_index     | 4                            | 77     |
+| commitment      | 32                           | 81     |
+| shred_data      | 862 (SHRED_DATA_BYTES)       | 113    |
+| witness_len     | 1                            | 975    |
+| witness         | 256 (32 * 8)                 | 976    |
++-----------------+------------------------------+--------+
+Total: 1232 bytes (PACKET_DATA_SIZE)
 ```
 
 7.3. RelayAttestation

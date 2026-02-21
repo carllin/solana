@@ -14,7 +14,9 @@ pub const DATA_SHREDS_PER_FEC_BLOCK: usize = 40;
 pub const CODING_SHREDS_PER_FEC_BLOCK: usize = 160;
 
 /// Data bytes carried by each MCP shred.
-pub const SHRED_DATA_BYTES: usize = 863;
+/// Note: 862 = PACKET_DATA_SIZE - MCP_SHRED_OVERHEAD (370), where overhead includes
+/// the 1-byte discriminator at byte 64 for packet classification.
+pub const SHRED_DATA_BYTES: usize = 862;
 /// QUIC control payload cap used by MCP control message codecs.
 pub const MAX_QUIC_CONTROL_PAYLOAD_BYTES: usize = 512 * 1024;
 /// Slot window retained for in-memory MCP consensus block caches.

@@ -186,25 +186,50 @@ Non-reusable for MCP wire correctness:
 
 ### 1.4 MCP shred wire format
 
+#### 1.4.1 Packet classification via byte 64
+
+MCP shreds and control messages share the TVU channel with legacy Agave shreds. To distinguish
+them without collision risk, MCP uses byte 64 as a discriminator:
+
+- In legacy Merkle shreds, byte 64 contains the `ShredVariant` enum which uses values in the
+  ranges 0x40-0x4F, 0x60-0x7F, 0x80-0x9F, and 0xB0-0xBF.
+- MCP discriminator values are chosen from 0x00-0x3F, which is guaranteed disjoint:
+  - `0x03`: MCP Shred
+
+This ensures zero collision probability between MCP and legacy shreds. MCP shreds place the
+proposer signature at bytes 0-63, followed by the discriminator at byte 64.
+
+#### 1.4.2 Wire format
+
 - Add `ledger/src/shred/mcp_shred.rs`:
   - Wire size constants:
+    - `SIZE_OF_PROPOSER_SIG = 64`
+    - `SIZE_OF_DISCRIMINATOR = 1`
     - `SIZE_OF_SLOT = 8` (u64)
     - `SIZE_OF_PROPOSER_INDEX = 4` (u32)
     - `SIZE_OF_SHRED_INDEX = 4` (u32)
     - `SIZE_OF_COMMITMENT = 32`
     - `SIZE_OF_WITNESS_LEN = 1` (u8)
     - `SIZE_OF_WITNESS = 32 * WITNESS_LEN = 256`
-    - `SIZE_OF_PROPOSER_SIG = 64`
-    - `MCP_SHRED_OVERHEAD = 8 + 4 + 4 + 32 + 1 + 256 + 64 = 369`
-    - `SHRED_DATA_BYTES = solana_packet::PACKET_DATA_SIZE - MCP_SHRED_OVERHEAD = 1232 - 369 = 863`
+    - `MCP_SHRED_OVERHEAD = 64 + 1 + 8 + 4 + 4 + 32 + 1 + 256 = 370`
+    - `SHRED_DATA_BYTES = solana_packet::PACKET_DATA_SIZE - MCP_SHRED_OVERHEAD = 1232 - 370 = 862`
     - `MCP_SHRED_WIRE_SIZE = solana_packet::PACKET_DATA_SIZE = 1232`
-  - Format: `slot:u64 + proposer_index:u32 + shred_index:u32 + commitment:[u8;32] + shred_data + witness_len:u8 + witness + proposer_sig:[u8;64]`
+  - Format: `proposer_sig:[u8;64] + discriminator:u8(0x03) + slot:u64 + proposer_index:u32 + shred_index:u32 + commitment:[u8;32] + shred_data:[u8;862] + witness_len:u8 + witness:[u8;256]`
+  - Field offsets:
+    - `OFFSET_DISCRIMINATOR = 64` (byte 64, where ShredVariant lives in legacy shreds)
+    - `OFFSET_SLOT = 65`
+    - `OFFSET_PROPOSER_INDEX = 73`
+    - `OFFSET_SHRED_INDEX = 77`
+    - `OFFSET_COMMITMENT = 81`
+    - `OFFSET_SHRED_DATA = 113`
+    - `OFFSET_WITNESS_LEN = 975`
+    - `OFFSET_WITNESS = 976`
   - Data and coding shreds use the same wire format. Unlike Agave where RS encodes entire data shreds (headers + payload) into coding shreds, MCP RS-encodes only the payload bytes. Headers are added after RS encoding, so all 200 shreds share the same structure.
     - `shred_index` 0 to DATA_SHREDS_PER_FEC_BLOCK-1 (0-39) = data shreds (original payload bytes)
     - `shred_index` DATA_SHREDS_PER_FEC_BLOCK to NUM_RELAYS-1 (40-199) = coding shreds (RS parity bytes)
     - The `shred_data` field contains either original or parity depending on index
     - Headers are added after RS encoding, not encoded by RS (see section on SHRED_DATA_BYTES derivation)
-  - `is_mcp_shred_packet(packet)` classifier
+  - `is_mcp_shred_packet(packet)` classifier (checks discriminator at byte 64)
   - strict parse + verify helpers
   - enforce `witness_len == ceil(log2(NUM_RELAYS))`
 
